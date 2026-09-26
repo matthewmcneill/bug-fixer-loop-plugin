@@ -116,29 +116,30 @@ Same flags: `--repo <owner/repo>` to identify which deployment to remove.
 5. `uninstall.sh` runs with `--help` without error
 6. No hardcoded repo-specific values (no `matthewmcneill`, no `esp32-app-foundation`, no `cloud-gtm`)
 
-## Completion Report Template
-```markdown
 ## Completion Report — WO5: Sidecars & Install Script
 
-**Status:** PASS | FAIL
+**Status:** PASS
 **Branch:** bug-fixer-plugin/wo5-sidecars-and-install
 
 ### Files Created
-- [ ] sidecars/bug-fixer-triage/sidecar.json
-- [ ] sidecars/bug-fixer-tick/sidecar.json
-- [ ] sidecars/trajectory-review/sidecar.json
-- [ ] scripts/install.sh
-- [ ] scripts/uninstall.sh
+- [x] sidecars/bug-fixer-triage/sidecar.json
+- [x] sidecars/bug-fixer-tick/sidecar.json
+- [x] sidecars/trajectory-review/sidecar.json
+- [x] scripts/install.sh
+- [x] scripts/uninstall.sh
 
 ### Verification
-- All sidecar JSON valid: PASS/FAIL
-- install.sh --help: PASS/FAIL
-- uninstall.sh --help: PASS/FAIL
-- No hardcoded repo values: PASS/FAIL
+- All sidecar JSON valid: PASS
+- install.sh --help: PASS
+- uninstall.sh --help: PASS
+- No hardcoded repo values: PASS
 
 ### Decisions Made
-(list any)
+- Used Antigravity builtin schedule JSON schema for sidecars with 2-element args array `[<cron>, <prompt>]`, configured with template placeholders for runtime deployment.
+- Hardened security scripts with permissions `0555` and used atomic python JSON mutations for `config.json` updates and hook merging in `install.sh`.
+- Added symlink-safe copying logic in `install.sh` when `~/.gemini/antigravity/skills` or `agents` symlink to `~/.gemini/config/`.
+- Designed `uninstall.sh` to remove only the plugin's entries from `hooks.json` while safely preserving any other user-defined hooks and keeping `config.json` intact.
 
 ### Out-of-Scope Findings
-(surface anything for WO6)
-```
+- WO6 can add test coverage for `install.sh` and `uninstall.sh` simulating multi-environment directory layouts and flag permutations.
+
