@@ -23,7 +23,20 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
 
 1. **Load Configuration:** Read `${STATE_DIR}/config.json`. Extract all fields (`target_repo`, `maintainer`, `trusted_users`, `spec_file_path`, `test_command`, `lint_command`, `max_concurrent_prs`, `pr_prefix`, `branch_prefix`, `active_milestone`, `milestone_priority_boost`).
 
-2. **Concurrency Guard:** Count issues the agent is actively developing:
+2. **Stale Claim Recovery:** Before checking concurrency, recover any orphaned claims from crashed sessions:
+   ```bash
+   gh issue list --repo <target_repo> --label "status:in-progress" --state open --json number,title
+   ```
+   For each in-progress issue, check when the label was applied:
+   ```bash
+   gh api repos/<target_repo>/issues/<number>/events --jq '[.[] | select(.event=="labeled" and .label.name=="status:in-progress")] | last | .created_at'
+   ```
+   If the label was applied **more than 60 minutes ago**, the claim is stale (agent likely crashed). Recover:
+   - Remove the `status:in-progress` label
+   - Post comment: `[BUG-FIXER] Reclaimed stale lock — previous agent session appears to have terminated. Issue is available for retry.`
+   - Clean up any partial branch for this issue: `git push origin --delete <branch_prefix>/<number>-* 2>/dev/null`
+
+3. **Concurrency Guard:** Count issues the agent is actively developing:
    ```bash
    gh issue list --repo <target_repo> --label "status:in-progress" --state open --json number,title
    ```
