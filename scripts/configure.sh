@@ -519,8 +519,34 @@ target_repo = sys.argv[2]
 spec_file = sys.argv[3]
 
 exclusion_labels = {"human-required", "hardware-required", "P1-blocker"}
-hardware_keywords = {"pin", "gpio", "sensor", "antenna", "roaming", "physical", "soldering", "oscilloscope", "multimeter", "hardware"}
+hardware_keywords = {"pin", "gpio", "sensor", "antenna", "soldering", "oscilloscope", "multimeter"}
 auto_labels = {"auto-fixable", "needs-approach-review", "input-needed", "project-candidate", "human-required"}
+
+# Effort labels — if present, use them as strong signals
+small_effort_labels = {"S", "S-effort", "P3-docs-dx", "P4-enhancement"}
+large_effort_labels = {"L", "L-effort", "XL", "XL-effort"}
+
+# Signals that distinguish "mentions a topic" from "changes that system"
+t4_multi_module_signals = [
+    "cross-cutting", "ci pipeline", "ci/cd", "rewrite from scratch",
+    "breaking change", "api redesign", "new module", "new framework",
+]
+t4_weak_signals = ["refactor", "migration", "architecture", "framework"]
+
+# T2 signals — must indicate actual behaviour change, not just documentation
+t2_behaviour_signals = [
+    "race condition", "use-after-free", "uaf", "toctou", "deadlock",
+    "boot loop", "kernel panic", "stack overflow", "heap corruption",
+]
+t2_weak_signals = ["security", "auth", "encryption", "certificate", "critical",
+                    "boot", "initializ"]
+
+# Small-scope indicators that should push toward T1 even if keywords match
+small_scope_signals = [
+    "rename", "typo", "comment", "document", "docstring", "doxygen",
+    "log message", "label", "placeholder", "link", "url", "badge",
+    "move", "reorder", "swap", "css", "style", "format", "indent",
+]
 
 results = []
 
@@ -542,30 +568,47 @@ for issue in issues:
         continue
 
     text = (title + " " + body).lower()
+    has_small_effort = bool(labels & small_effort_labels)
+    has_large_effort = bool(labels & large_effort_labels)
+    is_small_scope = any(sig in text for sig in small_scope_signals)
+    body_len = len(body.strip())
 
-    # T5: exclusion labels
+    # Count how many distinct files/modules are mentioned
+    import re
+    file_mentions = len(set(re.findall(r'\b\w+\.(cpp|h|py|js|css|html|ini|json|md)\b', text)))
+    module_mentions = len(set(re.findall(r'\b(?:module|manager|service|handler)\b', text)))
+
+    # T5: exclusion labels (highest priority)
     if labels & exclusion_labels:
         tier = "T5 human-required"
         reason = f"Has exclusion label: {labels & exclusion_labels}"
-    # T5: hardware-dependent
-    elif any(kw in text for kw in hardware_keywords):
+    # T5: hardware-dependent (strict keywords only, not "roaming" which is a feature)
+    elif any(kw in text for kw in hardware_keywords) and not is_small_scope:
         tier = "T5 human-required"
         reason = "Hardware-dependent (mentions physical components)"
     # T3: ambiguous / no clear criteria
-    elif len(body.strip()) < 30:
+    elif body_len < 30:
         tier = "T3 input-needed"
         reason = "Issue body too short / lacks clear acceptance criteria"
-    # T4: cross-module / large scope indicators
-    elif any(kw in text for kw in ["cross-cutting", "architecture", "refactor", "migration",
-                                     "ci pipeline", "ci/cd", "framework", "rewrite"]):
+    # Small effort label overrides keyword escalation
+    elif has_small_effort and is_small_scope:
+        tier = "T1 auto-fixable"
+        reason = "Small effort + small scope indicators"
+    # T4: requires STRONG multi-module signals (not just keyword presence)
+    elif any(kw in text for kw in t4_multi_module_signals):
         tier = "T4 project-candidate"
         reason = "Large scope / architectural work"
-    # T2: touches sensitive areas
-    elif any(kw in text for kw in ["initializ", "boot", "kernel", "security", "auth",
-                                     "encryption", "certificate", "critical"]):
+    elif any(kw in text for kw in t4_weak_signals) and not is_small_scope and (file_mentions > 3 or has_large_effort):
+        tier = "T4 project-candidate"
+        reason = f"Weak T4 signal + multi-file scope ({file_mentions} files mentioned)"
+    # T2: must indicate actual behaviour change in sensitive area
+    elif any(kw in text for kw in t2_behaviour_signals):
         tier = "T2 needs-approach-review"
-        reason = "Touches sensitive code — agent should confirm approach first"
-    # T1: everything else
+        reason = "Behaviour change in sensitive code path"
+    elif any(kw in text for kw in t2_weak_signals) and not is_small_scope and not has_small_effort:
+        tier = "T2 needs-approach-review"
+        reason = "Touches sensitive area — agent should confirm approach first"
+    # T1: everything else (including weak-signal matches that are small scope)
     else:
         tier = "T1 auto-fixable"
         reason = "Clear scope, single module, testable"
@@ -621,8 +664,19 @@ issues = json.loads(sys.argv[1])
 target_repo = sys.argv[2]
 
 exclusion_labels = {"human-required", "hardware-required", "P1-blocker"}
-hardware_keywords = {"pin", "gpio", "sensor", "antenna", "roaming", "physical", "soldering", "oscilloscope", "multimeter", "hardware"}
+hardware_keywords = {"pin", "gpio", "sensor", "antenna", "soldering", "oscilloscope", "multimeter"}
 auto_labels = {"auto-fixable", "needs-approach-review", "input-needed", "project-candidate", "human-required"}
+small_effort_labels = {"S", "S-effort", "P3-docs-dx", "P4-enhancement"}
+large_effort_labels = {"L", "L-effort", "XL", "XL-effort"}
+t4_multi_module_signals = ["cross-cutting", "ci pipeline", "ci/cd", "rewrite from scratch",
+                           "breaking change", "api redesign", "new module", "new framework"]
+t4_weak_signals = ["refactor", "migration", "architecture", "framework"]
+t2_behaviour_signals = ["race condition", "use-after-free", "uaf", "toctou", "deadlock",
+                        "boot loop", "kernel panic", "stack overflow", "heap corruption"]
+t2_weak_signals = ["security", "auth", "encryption", "certificate", "critical", "boot", "initializ"]
+small_scope_signals = ["rename", "typo", "comment", "document", "docstring", "doxygen",
+                       "log message", "label", "placeholder", "link", "url", "badge",
+                       "move", "reorder", "swap", "css", "style", "format", "indent"]
 
 for issue in issues:
     num = issue.get("number", "")
@@ -634,18 +688,29 @@ for issue in issues:
         continue  # already classified
 
     text = (title + " " + body).lower()
+    has_small_effort = bool(labels & small_effort_labels)
+    has_large_effort = bool(labels & large_effort_labels)
+    is_small_scope = any(sig in text for sig in small_scope_signals)
+    body_len = len(body.strip())
+
+    import re
+    file_mentions = len(set(re.findall(r'\b\w+\.(cpp|h|py|js|css|html|ini|json|md)\b', text)))
 
     if labels & exclusion_labels:
         label = "human-required"
-    elif any(kw in text for kw in hardware_keywords):
+    elif any(kw in text for kw in hardware_keywords) and not is_small_scope:
         label = "human-required"
-    elif len(body.strip()) < 30:
+    elif body_len < 30:
         label = "input-needed"
-    elif any(kw in text for kw in ["cross-cutting", "architecture", "refactor", "migration",
-                                     "ci pipeline", "ci/cd", "framework", "rewrite"]):
+    elif has_small_effort and is_small_scope:
+        label = "auto-fixable"
+    elif any(kw in text for kw in t4_multi_module_signals):
         label = "project-candidate"
-    elif any(kw in text for kw in ["initializ", "boot", "kernel", "security", "auth",
-                                     "encryption", "certificate", "critical"]):
+    elif any(kw in text for kw in t4_weak_signals) and not is_small_scope and (file_mentions > 3 or has_large_effort):
+        label = "project-candidate"
+    elif any(kw in text for kw in t2_behaviour_signals):
+        label = "needs-approach-review"
+    elif any(kw in text for kw in t2_weak_signals) and not is_small_scope and not has_small_effort:
         label = "needs-approach-review"
     else:
         label = "auto-fixable"
