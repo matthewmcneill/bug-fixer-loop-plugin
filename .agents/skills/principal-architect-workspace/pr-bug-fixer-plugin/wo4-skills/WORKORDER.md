@@ -279,3 +279,37 @@ Read `/Users/mcneillm/Documents/Projects/loop-eng/agents/github-leak-auditor.md`
 ### Out-of-Scope Findings
 (surface anything for later WOs)
 ```
+
+## Completion Report — WO4: Skills & Leak Auditor Agent
+
+**Status:** PASS
+**Branch:** bug-fixer-plugin/wo4-skills
+
+### Files Created
+- [x] skills/bug-fixer-triage/SKILL.md
+- [x] skills/bug-fixer-tick/SKILL.md
+- [x] skills/test-quality-audit/SKILL.md
+- [x] skills/trajectory-review/SKILL.md
+- [x] agents/leak-auditor.md
+
+### Line Counts
+- bug-fixer-triage: 46
+- bug-fixer-tick: 68
+- test-quality-audit: 34
+- trajectory-review: 36
+- leak-auditor: 35
+
+### Key Design Decisions
+- Adapted the reference skills into a simplified 3-loop architecture, completely removing `cloud-gtm`, `sparkforge`, and internal terms.
+- Refactored `safe_ingest.py` calls to be fully parameterised by `config.json`.
+- Enforced the `pre_tool_gate.py` dual-key security model for both leak auditing and testing.
+
+### Verification
+- All files exist: PASS
+- Valid YAML frontmatter: PASS
+- safe_ingest.py referenced (not raw gh): PASS
+- 6-point rubric complete: PASS
+- No Google terms: PASS
+
+### Out-of-Scope Findings
+- None surfaced at this time; ready for Sidecars & Install (WO5).
