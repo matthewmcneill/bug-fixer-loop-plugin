@@ -40,7 +40,7 @@
   "pr_prefix": "[BugFixer]",
   "branch_prefix": "fix",
   "triage_cron": "0 * * * *",
-  "tick_cron": "30 */2 * * *",
+  "tick_cron": "*/30 * * * *",
   "trajectory_review_cron": "0 18 * * *",
   "milestone_priority_boost": true,
   "active_milestone": "next-beta"
