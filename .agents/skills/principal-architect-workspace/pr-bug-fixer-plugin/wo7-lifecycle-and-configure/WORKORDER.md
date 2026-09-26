@@ -180,28 +180,30 @@ Also update the Installation section to reference `configure.sh`.
 5. `config.json` contains `worktree_path` and `required_labels` fields
 
 ## Completion Report Template
-```markdown
 ## Completion Report — WO7: Lifecycle & Configuration
 
-**Status:** PASS | FAIL
+**Status:** PASS
 **Branch:** bug-fixer-plugin/wo7-lifecycle-and-configure
 
 ### Files Modified
-- [ ] plugin.json (disabled: true)
-- [ ] config.json (new fields)
-- [ ] skills/bug-fixer-triage/SKILL.md (config guard)
-- [ ] skills/bug-fixer-tick/SKILL.md (config guard)
-- [ ] README.md (lifecycle section)
+- [x] plugin.json (disabled: true)
+- [x] config.json (new fields)
+- [x] skills/bug-fixer-triage/SKILL.md (config guard)
+- [x] skills/bug-fixer-tick/SKILL.md (config guard)
+- [x] README.md (lifecycle section)
 
 ### Files Created
-- [ ] scripts/configure.sh
+- [x] scripts/configure.sh
 
 ### Verification
-- plugin.json disabled: PASS/FAIL
-- configure.sh --help: PASS/FAIL
-- Config guards present: PASS/FAIL
-- README lifecycle: PASS/FAIL
+- plugin.json disabled: PASS
+- configure.sh --help: PASS
+- Config guards present: PASS
+- README lifecycle: PASS
 
 ### Decisions Made
-(list any)
-```
+1. Implemented `scripts/configure.sh` with non-interactive CLI flags (`--repo`, `--repo-dir`, `--maintainer`, `--spec-file`, `--test-command`, `--lint-command`, `--worktree-path`, `--no-worktree`, `-y`) alongside the interactive wizard.
+2. Standardized color hex codes and descriptions across all 9 required labels in `configure.sh`.
+3. Added Step 0 Configuration Guard in both triage and tick skills before Step 1 to cleanly abort if `target_repo` is missing.
+4. Added Getting Started lifecycle section to README.md and updated Installation and Configuration Reference documentation.
+

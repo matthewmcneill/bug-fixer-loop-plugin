@@ -165,24 +165,21 @@ Rewrite `skills/bug-fixer-triage/EVAL.md` with scenarios covering all 5 tiers pl
 5. EVAL.md has 10 scenarios covering all 5 tiers and milestones
 6. No references to the old binary classification (no "auto-fixable or human-required" as the only two options)
 
-## Completion Report Template
-```markdown
 ## Completion Report — WO8: Milestones & 5-Tier Routing
 
-**Status:** PASS | FAIL
+**Status:** PASS
 **Branch:** bug-fixer-plugin/wo8-milestones-and-routing
 
 ### Files Modified
-- [ ] skills/bug-fixer-triage/SKILL.md (5-tier + milestones)
-- [ ] skills/bug-fixer-triage/EVAL.md (10 scenarios)
-- [ ] config.json (milestone fields)
+- [x] skills/bug-fixer-triage/SKILL.md (5-tier + milestones)
+- [x] skills/bug-fixer-triage/EVAL.md (10 scenarios)
+- [x] config.json (milestone fields)
 
 ### Verification
-- 5 tiers present: PASS/FAIL
-- Milestone logic present: PASS/FAIL
-- Approach-review template: PASS/FAIL
-- 10 eval scenarios: PASS/FAIL
+- 5 tiers present: PASS
+- Milestone logic present: PASS
+- Approach-review template: PASS
+- 10 eval scenarios: PASS
 
 ### Decisions Made
-(list any)
-```
+- Replaced the binary logic with the 5 tier logic directly in the SKILL.md file, adding milestone prioritization correctly.
