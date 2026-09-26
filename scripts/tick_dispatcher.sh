@@ -177,21 +177,27 @@ echo "TICK_DISPATCH: ${ELIGIBLE_COUNT} eligible issue(s) found."
 
 # --- Step 4: Spawn fix conversations (up to available slots) ---
 SPAWNED=0
+
+# Write eligible issues to a temp file to avoid subshell variable scoping
+ISSUE_LIST_FILE=$(mktemp)
 echo "$ELIGIBLE" | python3 -c "
 import json, sys
 issues = json.load(sys.stdin)
 for i in issues:
     print(f'{i[\"number\"]}|{i[\"title\"]}')
-" | while IFS='|' read -r ISSUE_NUM ISSUE_TITLE; do
+" > "$ISSUE_LIST_FILE"
+
+while IFS='|' read -r ISSUE_NUM ISSUE_TITLE; do
   if [ "$SPAWNED" -ge "$AVAILABLE_SLOTS" ]; then
+    echo "TICK_DISPATCH: Slot cap reached (${SPAWNED}/${AVAILABLE_SLOTS}). Remaining issues will be picked up next tick."
     break
   fi
 
   # Claim the issue BEFORE spawning the conversation
-  echo "TICK_DISPATCH: Claiming issue #${ISSUE_NUM}: ${ISSUE_TITLE}"
+  echo "TICK_DISPATCH: Claiming issue #${ISSUE_NUM}: ${ISSUE_TITLE} (slot $((SPAWNED + 1))/${AVAILABLE_SLOTS})"
   gh issue edit "$ISSUE_NUM" --repo "$TARGET_REPO" --add-label "status:in-progress" 2>/dev/null
 
-  # Write lock file (PID will be updated by the spawned conversation)
+  # Write lock file
   mkdir -p "$CLAIMS_DIR"
   echo "{\"issue\": ${ISSUE_NUM}, \"pid\": $$, \"conversation_id\": \"pending\", \"claimed_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > "${CLAIMS_DIR}/${ISSUE_NUM}.lock"
 
@@ -211,7 +217,7 @@ The lock file is at: ${CLAIMS_DIR}/${ISSUE_NUM}.lock — update it with your con
 
 Start from Step 6 (Branch) in the skill — Steps 1-5 are already done by the dispatcher.
 After opening the PR, remove status:in-progress and delete the lock file.
-Then pick the next eligible issue if slots remain (Step 12: Loop)."
+This conversation handles ONE issue only. Do not pick up additional issues."
 
   RESULT=$(agentapi new-conversation --title "$CONV_TITLE" "$PROMPT" 2>&1)
   NEW_CONV_ID=$(echo "$RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('response',{}).get('newConversation',{}).get('conversationId',''))" 2>/dev/null || echo "")
@@ -227,6 +233,8 @@ Then pick the next eligible issue if slots remain (Step 12: Loop)."
     gh issue edit "$ISSUE_NUM" --repo "$TARGET_REPO" --remove-label "status:in-progress" 2>/dev/null || true
     rm -f "${CLAIMS_DIR}/${ISSUE_NUM}.lock"
   fi
-done
+done < "$ISSUE_LIST_FILE"
 
-echo "TICK_DISPATCH: Done. Spawned ${SPAWNED} fix conversation(s)."
+rm -f "$ISSUE_LIST_FILE"
+echo "TICK_DISPATCH: Done. Spawned ${SPAWNED} fix conversation(s), ${REATTACH_COUNT} reattached."
+
