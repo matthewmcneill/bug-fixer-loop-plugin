@@ -17,7 +17,7 @@ This skill executes one cycle of the autonomous bug fixer loop. It checks for re
 This skill is part of the `bug-fixer-loop` plugin. Resolve:
 ```bash
 PLUGIN_DIR="$(cd "$(dirname "<this_skill_file>")/../.." && pwd)"
-STATE_DIR="<workspace_root>/.agents/bug-fixer-loop"
+STATE_DIR="<workspace_root>/.agents/plugins/bug-fixer-loop-workspace"
 ```
 Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missing, output `CONFIG_INCOMPLETE: Plugin not configured. Run ${PLUGIN_DIR}/scripts/configure.sh first.` and exit immediately.
 
