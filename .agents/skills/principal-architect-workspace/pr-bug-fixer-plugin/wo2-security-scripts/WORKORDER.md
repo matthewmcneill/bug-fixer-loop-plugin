@@ -136,3 +136,46 @@ After creating the script:
 ### Out-of-Scope Findings
 (surface anything discovered that belongs in a later WO)
 ```
+
+## Completion Report — WO2: Security Scripts — Safe Ingest
+
+**Status:** PASS
+**Branch:** bug-fixer-plugin/wo2-security-scripts
+
+### Files Created
+- [x] scripts/safe_ingest.py
+- [x] scripts/__init__.py
+
+### Lines of Code
+- safe_ingest.py: 1560
+
+### Security Properties Retained
+- [x] Maintainer approval gate
+- [x] TOCTOU timestamp verification
+- [x] Content redaction for unapproved items
+- [x] GraphQL pagination fail-closed (100 nodes)
+- [x] Self-approval blocking
+- [x] Quarantine label enforcement
+- [x] Path traversal prevention (REPO_SLUG_REGEX)
+
+### Google-Specific Code Removed
+- [x] No hardcoded Priority field IDs
+- [x] No `cloud-gtm` references
+- [x] No `@google.com` patterns
+- [x] No `sparkforge` paths
+
+### Parameterisation Verified
+- [x] Config loading from file/env
+- [x] Trusted users from config
+- [x] Leak patterns from config
+- [x] Bot prefixes configurable
+
+### Decisions Made
+- Added hierarchical fallback for `config.json` discovery: `--config <path>` flag -> `BUG_FIXER_CONFIG` environment variable -> `scripts/config.json` -> plugin root `config.json` -> current working directory `config.json`.
+- In `resolve_trusted_users`, retained optional compatibility with CLI `--trusted-user` and `BUG_FIXER_TRUSTED_USERS` environment variable while prioritizing `maintainer` and `trusted_users` from `config.json`, falling back to `gh api user --jq .login`.
+- Implemented `compile_leak_patterns`, `redact_leaks_from_text`, and `redact_leaks_from_item` so configured regex patterns (e.g. cloud tokens, API keys, private keys) are scrubbed from ingested items (title, body, comments, reviews).
+- In `set_graphql_issue_priority`, dynamically queries organization `issueFields` to find the `Priority` singleSelect field ID and option IDs instead of relying on hardcoded IDs, raising a descriptive error if the field is not present.
+
+### Out-of-Scope Findings
+- `tests/test_gh_safe_ingest.py` from `loop-eng` contains 1,091 lines of comprehensive unit tests. An adapted test suite for `safe_ingest.py` belongs in WO6 (`wo6-tests-and-docs`) as planned.
+
