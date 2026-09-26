@@ -23,43 +23,75 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
 
 1. **Load Configuration:** Read `${STATE_DIR}/config.json`. Extract all fields (`target_repo`, `maintainer`, `trusted_users`, `spec_file_path`, `test_command`, `lint_command`, `max_concurrent_prs`, `pr_prefix`, `branch_prefix`, `active_milestone`, `milestone_priority_boost`).
 
-2. **Stale Claim Recovery:** Before checking concurrency, recover any orphaned claims from crashed sessions:
+### Step 2: Reconcile In-Progress Issues
+
+List all issues tagged `status:in-progress`:
+```bash
+gh issue list --repo <target_repo> --label "status:in-progress" --state open --json number,title
+```
+
+For each, read the lock file at `${STATE_DIR}/claims/<number>.lock`:
+```json
+{"issue": 231, "pid": 12345, "conversation_id": "abc-123", "claimed_at": "2026-09-26T17:20:00Z"}
+```
+
+**Determine liveness using three checks (in order):**
+
+1. **PID check (fastest):** Is the process still running?
    ```bash
-   gh issue list --repo <target_repo> --label "status:in-progress" --state open --json number,title
+   kill -0 <pid> 2>/dev/null && echo "ALIVE" || echo "DEAD"
    ```
-   For each in-progress issue, check if the agent session is still alive:
+   If alive → **SKIP**, agent is working. Move to next in-progress issue.
 
-   a. **Read the lock file:**
-      ```
-      ${STATE_DIR}/claims/<issue_number>.lock
-      ```
-      The lock file contains `{"issue": <n>, "conversation_id": "<id>", "claimed_at": "<iso>"}`.
-
-   b. **Check if the conversation is still active** by inspecting the transcript file's modification time:
-      ```bash
-      stat -f %m ~/.gemini/antigravity/brain/<conversation_id>/.system_generated/logs/transcript.jsonl
-      ```
-      If the file was last modified **more than 30 minutes ago**, the session is dead.
-
-   c. **No lock file at all** but `status:in-progress` is set? The label is orphaned (manual or pre-lock-file claim). Check label age via the events API — if > 2 hours, treat as stale.
-
-   A claim is **stale** if:
-   - Lock file exists but transcript mtime > 30 minutes ago (session crashed)
-   - No lock file and label age > 2 hours (orphaned label)
-
-   If stale, recover:
-   - Remove the `status:in-progress` label
-   - Delete the lock file if it exists
-   - Post comment: `[BUG-FIXER] Reclaimed stale lock — agent session <conversation_id> is no longer active. Issue is available for retry.`
-   - Clean up any partial branch: `git push origin --delete <branch_prefix>/<number>-* 2>/dev/null`
-
-3. **Concurrency Guard:** Count issues the agent is actively developing:
+2. **Transcript check (if PID is dead):** Was the session recently active?
    ```bash
-   gh issue list --repo <target_repo> --label "status:in-progress" --state open --json number,title
+   stat -f %m ~/.gemini/antigravity/brain/<conversation_id>/.system_generated/logs/transcript.jsonl
    ```
-   If this count is >= `max_concurrent_prs`, output `TICK_EXIT: Active development cap reached (<count>/<max>). Waiting for current fixes to complete.` and exit cleanly.
+   If mtime < 5 minutes ago → process may have just exited cleanly (PR opened). Check if a PR was opened for this issue — if yes, it's done, just clean up the lock file.
 
-   > **Note:** The cap limits issues *being actively coded*, not open PRs waiting for review. Once a PR is opened and `status:in-progress` is removed from the issue, the slot is freed immediately — the agent does not wait for the human to merge.
+3. **If both PID dead and transcript stale → ORPHANED. Reattach:**
+
+**Reattach to orphaned work (3 layers of recovery context):**
+
+a. **Read the previous agent's transcript** (richest context):
+   ```
+   ~/.gemini/antigravity/brain/<conversation_id>/.system_generated/logs/transcript.jsonl
+   ```
+   Scan the last 20 steps to understand:
+   - Which files were edited
+   - What approach was taken
+   - Where it stopped (error? timeout? crash?)
+   - Any test output or diagnostics
+
+b. **Check out the existing git branch** (durable code state):
+   ```bash
+   git ls-remote origin "<branch_prefix>/<number>-*" 2>/dev/null
+   ```
+   - **Branch exists:** `git fetch origin <branch> && git checkout <branch>`. Read the diff against main to see what's been done. Run tests to assess state.
+   - **No branch:** Previous agent crashed before any commits. Start fresh from Step 6.
+
+c. **Continue from the best available state:**
+   - Transcript + branch → full context, continue exactly where it left off
+   - Branch only (transcript gone) → read the diff, infer intent from the issue, continue
+   - Neither → treat as fresh issue, start from Step 6
+
+d. Update the lock file with THIS conversation's PID and conversation_id.
+
+e. Post comment: `[BUG-FIXER] Reattached to orphaned work from session <old_conversation_id>. Continuing fix.`
+
+**No lock file at all?** The label is orphaned (pre-lock-file or manual). Check if a branch exists — if yes, reattach. If no branch and label age > 2 hours (via events API), remove the label.
+
+### Step 3: Concurrency Guard
+
+After reconciliation, count issues tagged `status:in-progress` that are **owned by other active sessions** (PID alive, not this tick):
+```bash
+gh issue list --repo <target_repo> --label "status:in-progress" --state open --json number,title
+```
+Exclude any issues this tick just reattached to.
+
+If count >= `max_concurrent_prs`, output `TICK_EXIT: Active development cap reached (<count>/<max>).` and exit cleanly.
+
+> **Note:** The cap limits issues *being actively coded*, not open PRs waiting for review. Once a PR is opened and `status:in-progress` is removed, the slot is freed immediately.
 
 3. **Check for PR Feedback (Highest Priority):** For each open agent PR:
    - Query comments and reviews via: `python3 ${PLUGIN_DIR}/scripts/safe_ingest.py pr-comments <number>`
@@ -104,8 +136,9 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
    Write a lock file so stale recovery can verify this session is alive:
    ```bash
    mkdir -p ${STATE_DIR}/claims
-   echo '{"issue": <number>, "conversation_id": "<this_conversation_id>", "claimed_at": "<iso_now>"}' > ${STATE_DIR}/claims/<number>.lock
+   echo '{"issue": <number>, "pid": '$$', "conversation_id": "<this_conversation_id>", "claimed_at": "<iso_now>"}' > ${STATE_DIR}/claims/<number>.lock
    ```
+   The `pid` is the current process ID (`$$`). The `conversation_id` is this agent's conversation ID (available as context). Both are used by Step 2 to determine liveness.
 
 6. **Branch:** Check out a new branch from `origin/main`:
    ```bash
