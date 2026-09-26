@@ -15,6 +15,7 @@ LINT_COMMAND=""
 WORKTREE_PATH=""
 NO_WORKTREE=false
 ASSUME_YES=false
+TRIAGE_ONLY=false
 
 usage() {
   cat <<EOF
@@ -31,6 +32,7 @@ Options:
   --lint-command <cmd>          Lint command to run (optional)
   --worktree-path <path>        Path for isolated git worktree
   --no-worktree                 Skip creating git worktree
+  --triage-only                 Skip configuration, just run triage preview
   -y, --yes                     Non-interactive mode (accept defaults)
   -h, --help                    Show this help message
 EOF
@@ -49,6 +51,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-worktree)
       NO_WORKTREE=true
+      shift
+      ;;
+    --triage-only)
+      TRIAGE_ONLY=true
       shift
       ;;
     -r|--repo)
@@ -119,6 +125,28 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# --triage-only: Load existing config and jump straight to triage preview
+if [[ "${TRIAGE_ONLY}" == "true" ]]; then
+  if [[ ! -f "${CONFIG_FILE}" ]]; then
+    echo "Error: ${CONFIG_FILE} not found. Run ./scripts/configure.sh first." >&2
+    exit 1
+  fi
+  TARGET_REPO=$(python3 -c "import json; print(json.load(open('${CONFIG_FILE}')).get('target_repo',''))")
+  if [[ -z "${TARGET_REPO}" ]]; then
+    echo "Error: target_repo not set in config. Run ./scripts/configure.sh first." >&2
+    exit 1
+  fi
+  SPEC_FILE_PATH=$(python3 -c "import json; print(json.load(open('${CONFIG_FILE}')).get('spec_file_path','docs/design_specification.md'))")
+  echo "================================================================"
+  echo "  Bug Fixer Loop — Triage Preview (${TARGET_REPO})"
+  echo "================================================================"
+  # Fall through to Step 8 triage code below via a trick:
+  # We set a marker and skip to the triage section
+  ASSUME_YES=false
+  # Jump straight to triage — the Step 8 code is at the bottom of this script
+fi
+
+if [[ "${TRIAGE_ONLY}" == "false" ]]; then
 echo "================================================================"
 echo "  Bug Fixer Loop — Configuration Wizard"
 echo "================================================================"
@@ -445,11 +473,204 @@ config["required_labels"] = existing
 
 with open(config_path, "w") as f:
     json.dump(config, f, indent=2)
-    f.write("\n")
+     f.write("\n")
 EOF
 echo "    - Updated ${CONFIG_FILE}."
 
-# Step 8: Print Summary and Next Steps
+fi  # end of TRIAGE_ONLY == false block
+
+# Step 8: Dry-Run Triage — Classify all open issues for review
+echo ""
+echo "================================================================"
+echo "  Step 8: Issue Triage Preview (Dry Run)"
+echo "================================================================"
+echo ""
+
+DRY_RUN_SKIP=false
+if [[ "${ASSUME_YES}" == "true" ]]; then
+  echo "  Skipping interactive triage preview in non-interactive mode."
+  echo "  Run './scripts/configure.sh --triage-only' later to preview."
+  DRY_RUN_SKIP=true
+fi
+
+if [[ "${DRY_RUN_SKIP}" == "false" ]]; then
+  echo "  Fetching open issues from ${TARGET_REPO}..."
+  echo ""
+
+  # Fetch open issues via gh (safe_ingest may not be configured yet for first run)
+  ISSUES_JSON=$(gh issue list --repo "${TARGET_REPO}" --state open --limit 100 \
+    --json number,title,labels,milestone,body 2>/dev/null || echo "[]")
+
+  ISSUE_COUNT=$(echo "${ISSUES_JSON}" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+
+  if [[ "${ISSUE_COUNT}" == "0" ]]; then
+    echo "  No open issues found. Triage preview skipped."
+  else
+    echo "  Found ${ISSUE_COUNT} open issue(s). Classifying..."
+    echo ""
+
+    # Use Python to classify each issue into the 5 tiers
+    python3 - "${ISSUES_JSON}" "${TARGET_REPO}" "${SPEC_FILE_PATH}" <<'CLASSIFY_EOF'
+import sys
+import json
+
+issues = json.loads(sys.argv[1])
+target_repo = sys.argv[2]
+spec_file = sys.argv[3]
+
+exclusion_labels = {"human-required", "hardware-required", "P1-blocker"}
+hardware_keywords = {"pin", "gpio", "sensor", "antenna", "roaming", "physical", "soldering", "oscilloscope", "multimeter", "hardware"}
+auto_labels = {"auto-fixable", "needs-approach-review", "input-needed", "project-candidate", "human-required"}
+
+results = []
+
+for issue in issues:
+    num = issue.get("number", "?")
+    title = issue.get("title", "")
+    body = issue.get("body", "") or ""
+    labels = {l.get("name", "") for l in issue.get("labels", [])}
+    milestone = issue.get("milestone")
+    ms_title = milestone.get("title", "") if milestone else ""
+
+    # Skip already-classified issues
+    if labels & auto_labels:
+        existing = (labels & auto_labels).pop()
+        results.append({
+            "number": num, "title": title, "tier": f"(already: {existing})",
+            "reason": "Previously classified", "milestone": ms_title
+        })
+        continue
+
+    text = (title + " " + body).lower()
+
+    # T5: exclusion labels
+    if labels & exclusion_labels:
+        tier = "T5 human-required"
+        reason = f"Has exclusion label: {labels & exclusion_labels}"
+    # T5: hardware-dependent
+    elif any(kw in text for kw in hardware_keywords):
+        tier = "T5 human-required"
+        reason = "Hardware-dependent (mentions physical components)"
+    # T3: ambiguous / no clear criteria
+    elif len(body.strip()) < 30:
+        tier = "T3 input-needed"
+        reason = "Issue body too short / lacks clear acceptance criteria"
+    # T4: cross-module / large scope indicators
+    elif any(kw in text for kw in ["cross-cutting", "architecture", "refactor", "migration",
+                                     "ci pipeline", "ci/cd", "framework", "rewrite"]):
+        tier = "T4 project-candidate"
+        reason = "Large scope / architectural work"
+    # T2: touches sensitive areas
+    elif any(kw in text for kw in ["initializ", "boot", "kernel", "security", "auth",
+                                     "encryption", "certificate", "critical"]):
+        tier = "T2 needs-approach-review"
+        reason = "Touches sensitive code — agent should confirm approach first"
+    # T1: everything else
+    else:
+        tier = "T1 auto-fixable"
+        reason = "Clear scope, single module, testable"
+
+    results.append({
+        "number": num, "title": title[:60], "tier": tier,
+        "reason": reason, "milestone": ms_title
+    })
+
+# Print table
+print(f"  {'#':<6} {'Tier':<28} {'Milestone':<15} {'Title':<60}")
+print(f"  {'─'*6} {'─'*28} {'─'*15} {'─'*60}")
+for r in sorted(results, key=lambda x: x["tier"]):
+    ms = r["milestone"] or "—"
+    print(f"  {r['number']:<6} {r['tier']:<28} {ms:<15} {r['title']:<60}")
+
+print()
+
+# Summary counts
+from collections import Counter
+tier_counts = Counter(r["tier"] for r in results)
+print("  Summary:")
+for tier, count in sorted(tier_counts.items()):
+    print(f"    {tier}: {count} issue(s)")
+
+# Write results to a review file
+review_path = sys.argv[2].replace("/", "_") + "_triage_preview.json"
+with open(review_path, "w") as f:
+    json.dump(results, f, indent=2)
+
+CLASSIFY_EOF
+
+    echo ""
+    echo "  ─────────────────────────────────────────────────────────────"
+    echo ""
+    echo "  Review the classifications above."
+    echo "  The triage preview has been saved for reference."
+    echo ""
+
+    if [[ "${ASSUME_YES}" == "false" ]]; then
+      read -rp "  Apply these labels to GitHub issues now? [y/N]: " APPLY_LABELS
+      if [[ "${APPLY_LABELS}" =~ ^[Yy]$ ]]; then
+        echo ""
+        echo "  Applying labels..."
+
+        # Re-run classification and apply labels
+        python3 - "${ISSUES_JSON}" "${TARGET_REPO}" <<'APPLY_EOF'
+import sys
+import json
+import subprocess
+
+issues = json.loads(sys.argv[1])
+target_repo = sys.argv[2]
+
+exclusion_labels = {"human-required", "hardware-required", "P1-blocker"}
+hardware_keywords = {"pin", "gpio", "sensor", "antenna", "roaming", "physical", "soldering", "oscilloscope", "multimeter", "hardware"}
+auto_labels = {"auto-fixable", "needs-approach-review", "input-needed", "project-candidate", "human-required"}
+
+for issue in issues:
+    num = issue.get("number", "")
+    title = issue.get("title", "")
+    body = issue.get("body", "") or ""
+    labels = {l.get("name", "") for l in issue.get("labels", [])}
+
+    if labels & auto_labels:
+        continue  # already classified
+
+    text = (title + " " + body).lower()
+
+    if labels & exclusion_labels:
+        label = "human-required"
+    elif any(kw in text for kw in hardware_keywords):
+        label = "human-required"
+    elif len(body.strip()) < 30:
+        label = "input-needed"
+    elif any(kw in text for kw in ["cross-cutting", "architecture", "refactor", "migration",
+                                     "ci pipeline", "ci/cd", "framework", "rewrite"]):
+        label = "project-candidate"
+    elif any(kw in text for kw in ["initializ", "boot", "kernel", "security", "auth",
+                                     "encryption", "certificate", "critical"]):
+        label = "needs-approach-review"
+    else:
+        label = "auto-fixable"
+
+    subprocess.run(
+        ["gh", "issue", "edit", str(num), "--repo", target_repo, "--add-label", label],
+        capture_output=True, text=True
+    )
+    print(f"    #{num}: applied '{label}'")
+
+APPLY_EOF
+
+        echo ""
+        echo "  ✓ Labels applied. You can review and adjust on GitHub before enabling."
+      else
+        echo ""
+        echo "  Labels NOT applied. You can review the preview and apply them manually,"
+        echo "  or let the triage sidecar classify issues automatically when enabled."
+      fi
+    fi
+  fi
+fi
+
+# Step 9: Print Summary and Next Steps
+if [[ "${TRIAGE_ONLY}" == "false" ]]; then
 echo ""
 echo "================================================================"
 echo "  Configuration Summary"
@@ -475,4 +696,9 @@ echo "    agy plugin disable bug-fixer-loop"
 echo "  "
 echo "  To reconfigure:"
 echo "    ./scripts/configure.sh"
+echo "  "
+echo "  To re-run triage preview without reconfiguring:"
+echo "    ./scripts/configure.sh --triage-only"
 echo "================================================================"
+fi
+
