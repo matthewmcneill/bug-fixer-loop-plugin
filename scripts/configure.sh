@@ -473,7 +473,7 @@ config["required_labels"] = existing
 
 with open(config_path, "w") as f:
     json.dump(config, f, indent=2)
-     f.write("\n")
+    f.write("\n")
 EOF
 echo "    - Updated ${CONFIG_FILE}."
 

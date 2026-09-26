@@ -1,0 +1,233 @@
+[
+  {
+    "number": 241,
+    "title": "sample-app: _locationConfigured gate fails \u2014 weather fetch b",
+    "tier": "T2 needs-approach-review",
+    "reason": "Touches sensitive code \u2014 agent should confirm approach first",
+    "milestone": ""
+  },
+  {
+    "number": 238,
+    "title": "WifiManager: silent link loss undetected \u2014 device thinks it'",
+    "tier": "T5 human-required",
+    "reason": "Hardware-dependent (mentions physical components)",
+    "milestone": ""
+  },
+  {
+    "number": 234,
+    "title": "Move Bluetooth button after WiFi button in portal bottom bar",
+    "tier": "T1 auto-fixable",
+    "reason": "Clear scope, single module, testable",
+    "milestone": ""
+  },
+  {
+    "number": 233,
+    "title": "Review portal Precondition Health section \u2014 move to diagnost",
+    "tier": "T1 auto-fixable",
+    "reason": "Clear scope, single module, testable",
+    "milestone": ""
+  },
+  {
+    "number": 232,
+    "title": "Device name inconsistency \u2014 app name doesn't propagate to Wi",
+    "tier": "T4 project-candidate",
+    "reason": "Large scope / architectural work",
+    "milestone": "next-beta"
+  },
+  {
+    "number": 231,
+    "title": "Rename framework-design-system skill to framework-portal-des",
+    "tier": "T4 project-candidate",
+    "reason": "Large scope / architectural work",
+    "milestone": "backlog"
+  },
+  {
+    "number": 230,
+    "title": "RFC: OTA Memory Headroom \u2014 Temporary Module Unloading During",
+    "tier": "T5 human-required",
+    "reason": "Hardware-dependent (mentions physical components)",
+    "milestone": ""
+  },
+  {
+    "number": 229,
+    "title": "template-app: add IDataSource skeleton with WiFi connectivit",
+    "tier": "T4 project-candidate",
+    "reason": "Large scope / architectural work",
+    "milestone": ""
+  },
+  {
+    "number": 228,
+    "title": "feat(mcp): Add streaming serial log feed over WebSocket / SS",
+    "tier": "T5 human-required",
+    "reason": "Hardware-dependent (mentions physical components)",
+    "milestone": ""
+  },
+  {
+    "number": 227,
+    "title": "[EventBus] Payload-lifetime contract is wrong on target \u2014 as",
+    "tier": "T5 human-required",
+    "reason": "Hardware-dependent (mentions physical components)",
+    "milestone": "next-beta"
+  },
+  {
+    "number": 226,
+    "title": "[OTAUpdateManager] Option to defer OTA on boot \u2014 boot-time a",
+    "tier": "T4 project-candidate",
+    "reason": "Large scope / architectural work",
+    "milestone": "next-beta"
+  },
+  {
+    "number": 225,
+    "title": "[BLEManager] RFC: New managed BLE module with IBLEServicePro",
+    "tier": "T4 project-candidate",
+    "reason": "Large scope / architectural work",
+    "milestone": "backlog"
+  },
+  {
+    "number": 223,
+    "title": "Compile-check fenced C++ code samples in docs against real h",
+    "tier": "T1 auto-fixable",
+    "reason": "Clear scope, single module, testable",
+    "milestone": "backlog"
+  },
+  {
+    "number": 213,
+    "title": "Surface Redactor saturation through the precondition/health ",
+    "tier": "T1 auto-fixable",
+    "reason": "Clear scope, single module, testable",
+    "milestone": "backlog"
+  },
+  {
+    "number": 209,
+    "title": "Wire data source health events to LVGL Pro subjects",
+    "tier": "T4 project-candidate",
+    "reason": "Large scope / architectural work",
+    "milestone": "backlog"
+  },
+  {
+    "number": 204,
+    "title": "AuditModule: storage budget should be runtime-configurable v",
+    "tier": "T4 project-candidate",
+    "reason": "Large scope / architectural work",
+    "milestone": "backlog"
+  },
+  {
+    "number": 202,
+    "title": "Document Issue #102 OTA findings in discoverable location",
+    "tier": "T4 project-candidate",
+    "reason": "Large scope / architectural work",
+    "milestone": "backlog"
+  },
+  {
+    "number": 201,
+    "title": "Remove test_otaUpdateManager from test_ignore",
+    "tier": "T4 project-candidate",
+    "reason": "Large scope / architectural work",
+    "milestone": "backlog"
+  },
+  {
+    "number": 200,
+    "title": "Implement true 11k/v roaming for WifiManager (mesh testing)",
+    "tier": "T5 human-required",
+    "reason": "Hardware-dependent (mentions physical components)",
+    "milestone": "backlog"
+  },
+  {
+    "number": 193,
+    "title": "MCP tool handlers run on web-server task \u2014 no main-loop disp",
+    "tier": "T4 project-candidate",
+    "reason": "Large scope / architectural work",
+    "milestone": "backlog"
+  },
+  {
+    "number": 183,
+    "title": "[Audit F9] setInsecure() in OTAUpdateManager \u2014 justified but",
+    "tier": "T2 needs-approach-review",
+    "reason": "Touches sensitive code \u2014 agent should confirm approach first",
+    "milestone": "backlog"
+  },
+  {
+    "number": 180,
+    "title": "[Audit F5] WebServerManager::tick() polls WifiManager::isRea",
+    "tier": "T2 needs-approach-review",
+    "reason": "Touches sensitive code \u2014 agent should confirm approach first",
+    "milestone": "backlog"
+  },
+  {
+    "number": 144,
+    "title": "No CI: quality gates run only on a developer's machine, and ",
+    "tier": "T5 human-required",
+    "reason": "Hardware-dependent (mentions physical components)",
+    "milestone": "backlog"
+  },
+  {
+    "number": 141,
+    "title": "Portal: `.password-input-wrapper` / `.eye-btn` have zero con",
+    "tier": "T2 needs-approach-review",
+    "reason": "Touches sensitive code \u2014 agent should confirm approach first",
+    "milestone": "backlog"
+  },
+  {
+    "number": 140,
+    "title": "Portal: getTabIcon() doesn't document that the SVG wrapper s",
+    "tier": "T4 project-candidate",
+    "reason": "Large scope / architectural work",
+    "milestone": "backlog"
+  },
+  {
+    "number": 135,
+    "title": "Harden OTA\u2194screenshot mutual exclusion to bidirectional (clo",
+    "tier": "T1 auto-fixable",
+    "reason": "Clear scope, single module, testable",
+    "milestone": "next-beta"
+  },
+  {
+    "number": 133,
+    "title": "DeepStackExecutor: measure PNG-worker stack high-water mark ",
+    "tier": "T5 human-required",
+    "reason": "Hardware-dependent (mentions physical components)",
+    "milestone": "backlog"
+  },
+  {
+    "number": 105,
+    "title": "Link portal version number to release notes",
+    "tier": "T1 auto-fixable",
+    "reason": "Clear scope, single module, testable",
+    "milestone": "backlog"
+  },
+  {
+    "number": 104,
+    "title": "Test OTA builds moving between channels",
+    "tier": "T5 human-required",
+    "reason": "Hardware-dependent (mentions physical components)",
+    "milestone": "backlog"
+  },
+  {
+    "number": 103,
+    "title": "Deploy beta and stable channel releases to the new releases ",
+    "tier": "T1 auto-fixable",
+    "reason": "Clear scope, single module, testable",
+    "milestone": "backlog"
+  },
+  {
+    "number": 97,
+    "title": "Inconsistent SLS screen naming convention in reference proje",
+    "tier": "T4 project-candidate",
+    "reason": "Large scope / architectural work",
+    "milestone": "next-beta"
+  },
+  {
+    "number": 80,
+    "title": "Portal branding FOUC: app CSS and title apply after initial ",
+    "tier": "T5 human-required",
+    "reason": "Hardware-dependent (mentions physical components)",
+    "milestone": "backlog"
+  },
+  {
+    "number": 55,
+    "title": "Roadmap: Future framework input types (analogue, onboard tou",
+    "tier": "T5 human-required",
+    "reason": "Hardware-dependent (mentions physical components)",
+    "milestone": "backlog"
+  }
+]

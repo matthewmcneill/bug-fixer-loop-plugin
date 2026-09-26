@@ -1,9 +1,9 @@
 {
   "$schema": "bug-fixer-loop-config-v1",
-  "target_repo": "",
-  "repo_dir": "",
-  "worktree_path": "",
-  "maintainer": "",
+  "target_repo": "matthewmcneill/esp32-app-foundation",
+  "repo_dir": "/Users/mcneillm/Documents/Projects/esp32-app-foundation",
+  "worktree_path": "/Users/mcneillm/Documents/Projects/esp32-app-foundation-bug-fixer-worktree",
+  "maintainer": "matthewmcneill",
   "trusted_users": [],
   "spec_file_path": "docs/design_specification.md",
   "protected_files": [
