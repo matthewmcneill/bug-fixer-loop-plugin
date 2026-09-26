@@ -1,7 +1,7 @@
 {
   "builtin": "schedule",
   "args": [
-    "0 * * * *",
+    "*/10 * * * *",
     "Run the bug-fixer-tick skill for repository <owner/repo>. Read the skill at <plugin_dir>/skills/bug-fixer-tick/SKILL.md. Use <plugin_dir>/scripts/safe_ingest.py for all GitHub reads. Use <plugin_dir>/config.json for all parameters. Run in <repo_dir> as its workspace."
   ],
   "restart_policy": "always",
