@@ -2,7 +2,7 @@
   "builtin": "schedule",
   "args": [
     "*/10 * * * *",
-    "<plugin_dir>/scripts/tick_dispatcher.sh"
+    "<plugin_dir>/scripts/tick_dispatcher.py"
   ],
   "restart_policy": "always",
   "display_name": "Bug Fixer Tick (<owner/repo>)",
