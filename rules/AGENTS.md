@@ -69,3 +69,19 @@ You MUST only fix issues labelled `auto-fixable` (T1). You MUST NOT fix issues
 labelled `needs-approach-review`, `input-needed`, `project-candidate`, or
 `human-required` unless they have been explicitly reclassified to `auto-fixable`
 by the triage skill.
+
+## 16. PlatformIO MCP Lock Discipline
+You MUST NOT run `pio test`, `pio run`, or any PlatformIO CLI command directly.
+Always use the PlatformIO MCP server tools (`run_tests`, `build_project`).
+You MUST NOT call `reset_server_state` unless the user has explicitly granted
+permission in the current session. You MUST NOT call `release_lock` on a session
+ID that is not yours unless the user has explicitly granted permission.
+
+**Before every build or test:**
+1. Call `get_lock_status`. If locked by another session, **wait and retry** —
+   poll every 30 seconds for up to 10 minutes. Do NOT force-break the lock.
+   If still held after 10 minutes, exit cleanly and let the next tick retry.
+2. Call `acquire_lock` with your conversation ID as `sessionId`.
+3. Run the build/test via MCP tools.
+4. Call `release_lock` **immediately** after completion (pass or fail).
+   The lock MUST be released even if the test errors out.

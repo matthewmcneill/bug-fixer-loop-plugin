@@ -154,39 +154,10 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
    - Add or update tests to cover the fix.
    - Ensure changes remain within the module boundary — do NOT make cross-cutting changes.
 
-9. **Verify (MCP Lock-Aware):**
-
-   > **CRITICAL — PlatformIO MCP Lock Protocol:**
-   > Multiple bug-fixer agents share the same PlatformIO MCP server. You MUST
-   > follow this protocol to avoid build contention:
-   >
-   > - **NEVER** run `pio test`, `pio run`, or any PlatformIO CLI command directly.
-   >   Always use the MCP server tools (`run_tests`, `build_project`).
-   > - **NEVER** call `reset_server_state` — only the human maintainer may break
-   >   a lock in an interactive session.
-   > - **NEVER** call `release_lock` on a session ID that is not yours.
-
-   **Lock-acquire-test-release flow:**
-
-   a. **Check lock:** Call `get_lock_status`. If `isLocked` is `true` and the
-      `sessionId` is not yours, **wait and retry**. Poll every 30 seconds for up
-      to 10 minutes. If the lock is still held after 10 minutes, log a warning
-      and skip the test step — do NOT force-break the lock. Leave the issue
-      claimed and exit; the next tick will retry.
-
-   b. **Acquire lock:** Call `acquire_lock` with your conversation ID as the
-      `sessionId` and reason `"bug-fixer: testing #<issue_number>"`.
-
-   c. **Run tests:** Call the `run_tests` MCP tool with
-      `projectDir` set to the workspace and `environment` set to `native`.
-      Use `background: true` and poll with `check_task_status`.
-
-   d. **Release lock:** Call `release_lock` with your `sessionId` **immediately**
-      after the test completes (pass or fail). Release in a try/finally — the
-      lock MUST be released even if the test errors out.
-
-   e. Run `<lint_command>` if configured (no lock needed — lint is read-only).
-   f. Run `python3 ${PLUGIN_DIR}/scripts/pre_tool_gate.py --scan-only .` for leak check.
+9. **Verify:**
+   - Run `<test_command>` and capture the full output. Respect any project-level rules about build/test tooling (e.g., MCP lock protocols, shared resource contention). If the project rules mandate using MCP server tools instead of CLI commands, follow them.
+   - Run `<lint_command>` if configured.
+   - Run `python3 ${PLUGIN_DIR}/scripts/pre_tool_gate.py --scan-only .` for leak check.
    - All checks must pass. If any fails, debug and retry up to 2 times. If tests or lint still fail after 3 total attempts, unclaim the issue (`--remove-label status:in-progress`), add the `human-required` label, comment `[BUG-FIXER] Attempted fix but tests/lint failed after 3 attempts. Needs human attention.`, and exit.
 
 10. **Self-Review Against Spec:** Read the `spec_file_path` sections relevant to the modified modules. Verify the fix does not contradict any specification or ADR. If it does, unclaim the issue, label it `spec-change-request,input-needed`, comment explaining the conflict, and exit.

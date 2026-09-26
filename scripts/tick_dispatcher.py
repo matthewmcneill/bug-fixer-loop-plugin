@@ -35,6 +35,11 @@ def gh(*args) -> subprocess.CompletedProcess:
     return run(["gh", *args])
 
 
+if not os.environ.get("ANTIGRAVITY_PROJECT_ID"):
+    log("WARNING: ANTIGRAVITY_PROJECT_ID not set — agentapi may fail. "
+        "Ensure the sidecar's env field includes it.")
+
+
 def pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -312,7 +317,7 @@ This conversation handles ONE issue only. Do not pick up additional issues."""
         result = json.loads(r.stdout)
         new_conv_id = result["response"]["newConversation"]["conversationId"]
     except (json.JSONDecodeError, KeyError):
-        log(f"Failed to spawn for #{issue_num}: {r.stderr}")
+        log(f"Failed to spawn for #{issue_num}: {r.stderr or r.stdout}")
         gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
            "--remove-label", "status:in-progress")
         lock_path.unlink(missing_ok=True)
