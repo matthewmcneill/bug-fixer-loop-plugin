@@ -13,13 +13,18 @@ This skill classifies open issues into 5 tiers of complexity, handles approach r
 ## Workflow
 
 ## Step 0: Configuration Guard
-Read `config.json` from the plugin directory. If `target_repo` is empty or the file is missing, output `CONFIG_INCOMPLETE: Plugin not configured. Run scripts/configure.sh first.` and exit immediately. Do not proceed with any GitHub operations.
+This skill is part of the `bug-fixer-loop` plugin. Resolve:
+```bash
+PLUGIN_DIR="$(cd "$(dirname "<this_skill_file>")/../.." && pwd)"
+STATE_DIR="<workspace_root>/.agents/bug-fixer-loop"
+```
+Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missing, output `CONFIG_INCOMPLETE: Plugin not configured. Run ${PLUGIN_DIR}/scripts/configure.sh first.` and exit immediately.
 
-1. **Load Configuration:** Read `config.json` from the plugin directory. Extract `target_repo`, `maintainer`, `exclusion_labels`, `milestone_priority_boost`, and `active_milestone`.
+1. **Load Configuration:** Read `${STATE_DIR}/config.json`. Extract `target_repo`, `maintainer`, `exclusion_labels`, `milestone_priority_boost`, and `active_milestone`.
 
 2. **Query Open Issues:** Run the safe ingest proxy to list all open issues:
    ```bash
-   python3 <plugin_dir>/scripts/safe_ingest.py issue-list --repo <target_repo> --state open --json number,title,labels,body,milestone,author,assignees,comments
+   python3 ${PLUGIN_DIR}/scripts/safe_ingest.py issue-list --repo <target_repo> --state open --json number,title,labels,body,milestone,author,assignees,comments
    ```
 
 3. **Query Maintainer's Active PRs:** Find the maintainer's open PRs and their changed files to build the **exclusion file set**:

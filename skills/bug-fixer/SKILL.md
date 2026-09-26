@@ -16,9 +16,23 @@ what's pending, and where your input is needed.
 ## Workflow
 
 ### Step 0: Load Configuration
-Read `config.json` from the plugin directory. Extract `target_repo`, `maintainer`,
-`max_concurrent_prs`, `active_milestone`. If `target_repo` is empty, output
-`CONFIG_INCOMPLETE: Plugin not configured. Run scripts/configure.sh first.` and exit.
+This skill is part of the `bug-fixer-loop` plugin. Resolve two directories:
+
+**Plugin directory** (scripts, rules — global/shared):
+```bash
+PLUGIN_DIR="$(cd "$(dirname "<this_skill_file>")/../.." && pwd)"
+```
+
+**State directory** (repo-specific config — in the workspace):
+```bash
+STATE_DIR="<workspace_root>/.agents/bug-fixer-loop"
+```
+
+Read `${STATE_DIR}/config.json`. Extract `target_repo`, `maintainer`,
+`max_concurrent_prs`, `active_milestone`. If the file is missing or `target_repo`
+is empty, output `CONFIG_INCOMPLETE: Plugin not configured. Run ${PLUGIN_DIR}/scripts/configure.sh first.` and exit.
+
+Use `${PLUGIN_DIR}` for scripts and `${STATE_DIR}` for config and local state.
 
 ### Step 1: Issues Awaiting Your Input
 

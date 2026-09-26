@@ -14,9 +14,14 @@ This skill executes one cycle of the autonomous bug fixer loop. It checks for re
 ## Workflow
 
 ## Step 0: Configuration Guard
-Read `config.json` from the plugin directory. If `target_repo` is empty or the file is missing, output `CONFIG_INCOMPLETE: Plugin not configured. Run scripts/configure.sh first.` and exit immediately. Do not proceed with any GitHub operations.
+This skill is part of the `bug-fixer-loop` plugin. Resolve:
+```bash
+PLUGIN_DIR="$(cd "$(dirname "<this_skill_file>")/../.." && pwd)"
+STATE_DIR="<workspace_root>/.agents/bug-fixer-loop"
+```
+Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missing, output `CONFIG_INCOMPLETE: Plugin not configured. Run ${PLUGIN_DIR}/scripts/configure.sh first.` and exit immediately.
 
-1. **Load Configuration:** Read `config.json` from the plugin directory. Extract all fields (`target_repo`, `maintainer`, `trusted_users`, `spec_file_path`, `test_command`, `lint_command`, `max_concurrent_prs`, `pr_prefix`, `branch_prefix`, `active_milestone`, `milestone_priority_boost`).
+1. **Load Configuration:** Read `${STATE_DIR}/config.json`. Extract all fields (`target_repo`, `maintainer`, `trusted_users`, `spec_file_path`, `test_command`, `lint_command`, `max_concurrent_prs`, `pr_prefix`, `branch_prefix`, `active_milestone`, `milestone_priority_boost`).
 
 2. **Concurrency Guard:** Query open PRs authored by the agent:
    ```bash
@@ -25,14 +30,14 @@ Read `config.json` from the plugin directory. If `target_repo` is empty or the f
    Count the PRs that have `pr_prefix` in the title. If this count is >= `max_concurrent_prs`, output `TICK_EXIT: PR cap reached (<count>/<max>). Waiting for merge.` and exit cleanly.
 
 3. **Check for PR Feedback (Highest Priority):** For each open agent PR:
-   - Query comments and reviews via: `python3 <plugin_dir>/scripts/safe_ingest.py pr-comments <number>`
+   - Query comments and reviews via: `python3 ${PLUGIN_DIR}/scripts/safe_ingest.py pr-comments <number>`
    - Look for any unaddressed maintainer comments (comments from `maintainer` or `trusted_users` that do not have a subsequent `[BUG-FIXER]` reply).
    - If found: check out the PR branch, implement the requested changes, run tests, push the changes, reply with `[BUG-FIXER] Addressed review feedback in <sha>`, and exit this tick.
 
 ### Step 3.5: Check for Approved Approaches
 Query issues with the `needs-approach-review` label:
 ```bash
-python3 <plugin_dir>/scripts/safe_ingest.py issue-list --repo <target_repo> --label needs-approach-review --state open --json number,title,labels,comments
+python3 ${PLUGIN_DIR}/scripts/safe_ingest.py issue-list --repo <target_repo> --label needs-approach-review --state open --json number,title,labels,comments
 ```
 For each issue, check if the maintainer has posted an approval comment (contains `approved` or `/approve` from a trusted user). If found:
 - Remove `needs-approach-review` label
@@ -45,7 +50,7 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
    - **Only T1 issues are eligible for immediate fixing.** The tick skill MUST NOT pick up `needs-approach-review`, `input-needed`, `project-candidate`, or `human-required` issues. Only `auto-fixable` issues are eligible.
    - Query open, auto-fixable issues:
      ```bash
-     python3 <plugin_dir>/scripts/safe_ingest.py issue-list --repo <target_repo> --label auto-fixable --state open --json number,title,labels,body,milestone,priority,priorityRank
+     python3 ${PLUGIN_DIR}/scripts/safe_ingest.py issue-list --repo <target_repo> --label auto-fixable --state open --json number,title,labels,body,milestone,priority,priorityRank
      ```
    - Query milestones when selecting:
      ```bash
@@ -82,7 +87,7 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
 9. **Verify:**
    - Run `<test_command>` and capture the full output.
    - Run `<lint_command>` if configured.
-   - Run `python3 <plugin_dir>/scripts/pre_tool_gate.py --scan-only .` for leak check.
+   - Run `python3 ${PLUGIN_DIR}/scripts/pre_tool_gate.py --scan-only .` for leak check.
    - All three commands must pass. If any fails, debug and retry up to 2 times. If tests or lint still fail after 3 total attempts, unclaim the issue (`--remove-label status:in-progress`), add the `human-required` label, comment `[BUG-FIXER] Attempted fix but tests/lint failed after 3 attempts. Needs human attention.`, and exit.
 
 10. **Self-Review Against Spec:** Read the `spec_file_path` sections relevant to the modified modules. Verify the fix does not contradict any specification or ADR. If it does, unclaim the issue, label it `spec-change-request,input-needed`, comment explaining the conflict, and exit.
