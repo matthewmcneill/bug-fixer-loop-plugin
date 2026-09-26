@@ -43,6 +43,11 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
 SCRIPT_DIR = Path(__file__).resolve().parent
 PLUGIN_DIR = SCRIPT_DIR.parent
 
+# Ensure agentapi is on PATH — sidecar scheduler may not inherit user's shell PATH
+AGENTAPI_DIR = Path.home() / ".gemini" / "antigravity" / "bin"
+if AGENTAPI_DIR.is_dir():
+    os.environ["PATH"] = str(AGENTAPI_DIR) + os.pathsep + os.environ.get("PATH", "")
+
 WORKSPACE_CONFIG = PLUGIN_DIR / "../../.agents/plugins/bug-fixer-loop-workspace/config.json"
 PLUGIN_CONFIG = PLUGIN_DIR / "config.json"
 
@@ -78,11 +83,17 @@ except json.JSONDecodeError:
     log(f"Failed to parse issue list: {r.stderr}")
     sys.exit(0)
 
-# Find issues missing ALL classification labels
+# Issues with any of these labels are already handled — skip them
+SKIP_LABELS = CLASSIFICATION_LABELS | {
+    "status:in-progress",
+    "status:awaiting-review",
+}
+
+# Find issues missing ALL classification/status labels
 untriaged = []
 for issue in issues:
     label_names = {l.get("name", "") for l in issue.get("labels", [])}
-    if not label_names & CLASSIFICATION_LABELS:
+    if not label_names & SKIP_LABELS:
         untriaged.append(issue)
 
 if not untriaged:

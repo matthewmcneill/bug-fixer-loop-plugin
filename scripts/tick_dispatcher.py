@@ -57,6 +57,11 @@ def file_mtime_age_seconds(path: Path) -> int | None:
 SCRIPT_DIR = Path(__file__).resolve().parent
 PLUGIN_DIR = SCRIPT_DIR.parent
 
+# Ensure agentapi is on PATH — sidecar scheduler may not inherit user's shell PATH
+AGENTAPI_DIR = Path.home() / ".gemini" / "antigravity" / "bin"
+if AGENTAPI_DIR.is_dir():
+    os.environ["PATH"] = str(AGENTAPI_DIR) + os.pathsep + os.environ.get("PATH", "")
+
 # Try workspace config first, fall back to plugin config
 WORKSPACE_CONFIG = PLUGIN_DIR / "../../.agents/plugins/bug-fixer-loop-workspace/config.json"
 PLUGIN_CONFIG = PLUGIN_DIR / "config.json"
@@ -177,7 +182,7 @@ The issue is already claimed (status:in-progress label applied).
 Update the lock file at: {CLAIMS_DIR}/{issue_num}.lock with your conversation_id and PID.
 
 Continue from the best available state — DO NOT start over if there is existing progress.
-After opening the PR, remove status:in-progress and delete the lock file.
+After opening the PR (with 'Closes #N' in the body), transition the issue to status:awaiting-review and delete the lock file.
 This conversation handles ONE issue only."""
 
         title = f"Fix #{issue_num}: {issue_title} (reattach)"
@@ -297,7 +302,7 @@ The issue is already claimed (status:in-progress label applied).
 The lock file is at: {lock_path} — update it with your conversation_id and PID.
 
 Start from Step 6 (Branch) in the skill — Steps 1-5 are already done by the dispatcher.
-After opening the PR, remove status:in-progress and delete the lock file.
+After opening the PR (with 'Closes #N' in the body), transition the issue to status:awaiting-review and delete the lock file.
 This conversation handles ONE issue only. Do not pick up additional issues."""
 
     title = f"Fix #{issue_num}: {issue_title}"

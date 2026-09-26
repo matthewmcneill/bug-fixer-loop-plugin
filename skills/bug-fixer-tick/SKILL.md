@@ -91,7 +91,7 @@ Exclude any issues this tick just reattached to.
 
 If count >= `max_concurrent_prs`, output `TICK_EXIT: Active development cap reached (<count>/<max>).` and exit cleanly.
 
-> **Note:** The cap limits issues *being actively coded*, not open PRs waiting for review. Once a PR is opened and `status:in-progress` is removed, the slot is freed immediately.
+> **Note:** The cap limits issues *being actively coded* (`status:in-progress`), not PRs waiting for review (`status:awaiting-review`). Once a PR is opened and the issue transitions to `awaiting-review`, the slot is freed immediately.
 
 3. **Check for PR Feedback (Highest Priority):** For each open agent PR:
    - Query comments and reviews via: `python3 ${PLUGIN_DIR}/scripts/safe_ingest.py pr-comments <number>`
@@ -154,11 +154,40 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
    - Add or update tests to cover the fix.
    - Ensure changes remain within the module boundary — do NOT make cross-cutting changes.
 
-9. **Verify:**
-   - Run `<test_command>` and capture the full output.
-   - Run `<lint_command>` if configured.
-   - Run `python3 ${PLUGIN_DIR}/scripts/pre_tool_gate.py --scan-only .` for leak check.
-   - All three commands must pass. If any fails, debug and retry up to 2 times. If tests or lint still fail after 3 total attempts, unclaim the issue (`--remove-label status:in-progress`), add the `human-required` label, comment `[BUG-FIXER] Attempted fix but tests/lint failed after 3 attempts. Needs human attention.`, and exit.
+9. **Verify (MCP Lock-Aware):**
+
+   > **CRITICAL — PlatformIO MCP Lock Protocol:**
+   > Multiple bug-fixer agents share the same PlatformIO MCP server. You MUST
+   > follow this protocol to avoid build contention:
+   >
+   > - **NEVER** run `pio test`, `pio run`, or any PlatformIO CLI command directly.
+   >   Always use the MCP server tools (`run_tests`, `build_project`).
+   > - **NEVER** call `reset_server_state` — only the human maintainer may break
+   >   a lock in an interactive session.
+   > - **NEVER** call `release_lock` on a session ID that is not yours.
+
+   **Lock-acquire-test-release flow:**
+
+   a. **Check lock:** Call `get_lock_status`. If `isLocked` is `true` and the
+      `sessionId` is not yours, **wait and retry**. Poll every 30 seconds for up
+      to 10 minutes. If the lock is still held after 10 minutes, log a warning
+      and skip the test step — do NOT force-break the lock. Leave the issue
+      claimed and exit; the next tick will retry.
+
+   b. **Acquire lock:** Call `acquire_lock` with your conversation ID as the
+      `sessionId` and reason `"bug-fixer: testing #<issue_number>"`.
+
+   c. **Run tests:** Call the `run_tests` MCP tool with
+      `projectDir` set to the workspace and `environment` set to `native`.
+      Use `background: true` and poll with `check_task_status`.
+
+   d. **Release lock:** Call `release_lock` with your `sessionId` **immediately**
+      after the test completes (pass or fail). Release in a try/finally — the
+      lock MUST be released even if the test errors out.
+
+   e. Run `<lint_command>` if configured (no lock needed — lint is read-only).
+   f. Run `python3 ${PLUGIN_DIR}/scripts/pre_tool_gate.py --scan-only .` for leak check.
+   - All checks must pass. If any fails, debug and retry up to 2 times. If tests or lint still fail after 3 total attempts, unclaim the issue (`--remove-label status:in-progress`), add the `human-required` label, comment `[BUG-FIXER] Attempted fix but tests/lint failed after 3 attempts. Needs human attention.`, and exit.
 
 10. **Self-Review Against Spec:** Read the `spec_file_path` sections relevant to the modified modules. Verify the fix does not contradict any specification or ADR. If it does, unclaim the issue, label it `spec-change-request,input-needed`, comment explaining the conflict, and exit.
 
@@ -177,7 +206,7 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
       gh pr create --repo <target_repo> --base main --title "<pr_prefix> Fix #<number>: <title>" --body "<body>"
       ```
       The PR body must include:
-      - Link to the issue: `Resolves #<number>`
+      - **Closing keyword:** `Closes #<number>` — this auto-closes the issue when the PR merges
       - Issue tier: `**Classification:** T1 (auto-fixable)` or `T2 (approach approved by @maintainer)`
       - Milestone: `**Milestone:** <name>` if applicable
       - The `bug-fixer` label must be listed (e.g., `**Labels:** bug-fixer`)
@@ -192,11 +221,12 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
       ```bash
       gh pr edit <pr_number> --repo <target_repo> --milestone "<milestone_title>"
       ```
-    - Remove the `status:in-progress` label from the issue and delete the lock file:
+    - Transition the issue from `in-progress` to `awaiting-review` and delete the lock file:
       ```bash
-      gh issue edit <number> --repo <target_repo> --remove-label status:in-progress
+      gh issue edit <number> --repo <target_repo> --remove-label status:in-progress --add-label status:awaiting-review
       rm -f ${STATE_DIR}/claims/<number>.lock
       ```
+      > **Why `status:awaiting-review`?** The issue is no longer being actively coded (frees a concurrency slot), but not done — the PR needs human review. Keeps it off the triage queue and easy to find.
 
 ### Step 12: Loop or Exit
 
