@@ -14,7 +14,7 @@
     "AKIA[0-9A-Z]{16}",
     "-----BEGIN (RSA |EC )?PRIVATE KEY-----"
   ],
-  "max_concurrent_prs": 1,
+  "max_concurrent_prs": 4,
   "exclusion_labels": [
     "human-required",
     "P1-blocker",
@@ -43,5 +43,5 @@
   "tick_cron": "30 */2 * * *",
   "trajectory_review_cron": "0 18 * * *",
   "milestone_priority_boost": true,
-  "active_milestone": ""
+  "active_milestone": "next-beta"
 }

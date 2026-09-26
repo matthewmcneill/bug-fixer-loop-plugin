@@ -1,6 +1,6 @@
 {
   "name": "bug-fixer-loop",
   "version": "0.1.0",
-  "disabled": true,
+  "disabled": false,
   "description": "Autonomous bug fixer loop — a 3-loop background agent that triages, fixes, and PRs small bugs and TODOs while you focus on major feature work."
 }
