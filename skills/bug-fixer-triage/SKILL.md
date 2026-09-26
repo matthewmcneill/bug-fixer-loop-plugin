@@ -41,15 +41,25 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
    b. **Check exclusion zone (PR overlap):** Read the issue and estimate which files/modules would need modification. If any overlap with the exclusion file set, classify as `human-required` (T5) and post this comment:
    `[BUG-FIXER] Skipped: overlaps with active PR #<number> (<branch>). Will re-evaluate when PR merges.`
 
-   c. **Hardware dependency:** If the issue mentions hardware specifics (pins, sensors, physical devices, WiFi roaming), classify as `human-required` (T5) and skip.
+   c. **Hardware dependency:** If the issue requires physical hardware access (pins, sensors, oscilloscope, soldering, antenna measurement), classify as `human-required` (T5). Note: mentioning hardware *concepts* (e.g. "WiFi roaming behaviour") is NOT the same as requiring hardware access.
 
    d. **Ambiguity check:** If the bug report is ambiguous, lacks repro steps, or has conflicting information, classify as `input-needed` (T3). Post this comment and skip:
    `[BUG-FIXER] Clarification needed: <ask specific questions based on ambiguity>.`
 
-   e. **Size / Scope check:** If the fix is cross-module, requires new architecture, needs design decisions, is estimated > 500 lines, or is a multi-step feature, classify as `project-candidate` (T4). Post this comment and skip:
-   `[BUG-FIXER] This issue is too large for autonomous fixing. Consider decomposing with /principal-architect.`
+   e. **Small-scope override (CHECK THIS BEFORE T4/T2):** If the issue is about renaming, adding comments/docs, fixing typos, updating URLs, CSS changes, log message changes, or moving files — it is `auto-fixable` (T1) regardless of what domain it touches. A comment about security code is still just a comment. A rename of an architecture folder is still just a rename.
 
-   f. **Complexity check:** If the fix is single-module but touches sensitive code, has ambiguous acceptance criteria, or is estimated > 200 lines, classify as `needs-approach-review` (T2). Post a proposed approach comment and apply the label.
+   f. **Size / Scope check:** Classify as `project-candidate` (T4) ONLY if ALL of these are true:
+      - Spans 3+ modules/files
+      - Requires architectural or design decisions
+      - Estimated > 500 lines changed or multi-day effort
+      Example T4: "Add CI/CD pipeline", "Rewrite BLE stack", "New module for mesh networking"
+      Example NOT T4: "Refactor getTabIcon() docs" (single file), "Rename skill folder" (trivial)
+
+   g. **Complexity check:** Classify as `needs-approach-review` (T2) ONLY if:
+      - The fix changes runtime *behaviour* in sensitive code (security, boot, OTA, crypto, memory safety)
+      - OR has multiple valid implementation approaches that need human judgment
+      Example T2: "Fix race condition in EventBus", "Change OTA reboot logic"
+      Example NOT T2: "Document why setInsecure() is used" (just adding a comment)
    Comment Template:
    ```
    [BUG-FIXER] Proposed approach for #<number>:
