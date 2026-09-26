@@ -618,12 +618,124 @@ for issue in issues:
         "reason": reason, "milestone": ms_title
     })
 
+# ── LLM Refinement Pass ────────────────────────────────────────────────
+# Send issues to Gemini for smarter classification. Falls back to
+# heuristics silently if the SDK or API key is unavailable.
+llm_used = False
+try:
+    import google.generativeai as genai
+    import os
+
+    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("No API key")
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-2.0-flash")
+
+    # Build batch prompt — only for heuristic-classified issues (not already-labelled)
+    to_refine = [r for r in results if not r["tier"].startswith("(already")]
+    if to_refine:
+        issue_block = ""
+        for r in to_refine:
+            # Find the original issue body
+            orig = next((i for i in issues if i.get("number") == r["number"]), {})
+            body_preview = (orig.get("body", "") or "")[:600]
+            issue_block += f"\n### #{r['number']}: {r['title']}\n{body_preview}\n"
+
+        prompt = f"""You are a triage classifier for an ESP32 C++ firmware project.
+Classify each GitHub issue into exactly ONE tier:
+
+- **T1 auto-fixable**: Small, well-defined fix an AI coding agent can do autonomously.
+  Examples: rename a file/folder, add a code comment, fix a typo, update a URL,
+  reorder UI elements, add Doxygen docs, simple CSS fix, log message change,
+  remove a file from an ignore list, write a short doc.
+  Rule of thumb: < 2 hours, touches 1-2 files, no architectural decisions.
+
+- **T2 needs-approach-review**: Fix is clear but touches sensitive code (security,
+  boot sequence, crypto, OTA, memory safety) OR has multiple valid implementation
+  approaches. Agent should propose a plan and wait for human approval.
+  Examples: fix a race condition, change auth flow, modify OTA logic.
+
+- **T3 input-needed**: Issue is too vague to act on. Needs clarification from reporter.
+
+- **T4 project-candidate**: Large scope spanning 3+ modules, requires architectural
+  decisions, or would take multiple days. Needs human-managed PR planning.
+  Examples: add a new module, CI/CD pipeline, major refactor across codebase.
+
+- **T5 human-required**: Requires physical hardware access, infrastructure credentials,
+  or decisions only a human can make (design choices, vendor selection, etc).
+
+For EACH issue respond with a JSON line:
+{{"number": <num>, "tier": "T1"|"T2"|"T3"|"T4"|"T5", "reason": "<15 word reason>"}}
+
+Respond ONLY with JSON lines, no other text.
+
+Issues to classify:
+{issue_block}"""
+
+        response = model.generate_content(prompt)
+        response_text = response.text.strip()
+
+        # Parse LLM results
+        llm_results = {}
+        for line in response_text.split("\n"):
+            line = line.strip().strip(",").strip("```").strip("json").strip()
+            if not line or not line.startswith("{"):
+                continue
+            try:
+                parsed = json.loads(line)
+                num = parsed.get("number")
+                tier_raw = parsed.get("tier", "")
+                reason = parsed.get("reason", "")
+                # Normalise tier format
+                tier_map = {
+                    "T1": "T1 auto-fixable", "T2": "T2 needs-approach-review",
+                    "T3": "T3 input-needed", "T4": "T4 project-candidate",
+                    "T5": "T5 human-required",
+                }
+                tier_norm = tier_map.get(tier_raw, "")
+                if num and tier_norm:
+                    llm_results[num] = {"tier": tier_norm, "reason": reason}
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+        # Merge: LLM overrides heuristic, mark disagreements
+        overrides = 0
+        for r in results:
+            if r["tier"].startswith("(already"):
+                continue
+            llm = llm_results.get(r["number"])
+            if llm and llm["tier"] != r["tier"]:
+                r["heuristic_tier"] = r["tier"]
+                r["tier"] = llm["tier"]
+                r["reason"] = f"[LLM] {llm['reason']}"
+                overrides += 1
+            elif llm:
+                r["reason"] = f"[LLM+H] {llm['reason']}"
+
+        llm_used = True
+        if overrides:
+            print(f"  ℹ  LLM refined {overrides} classification(s) vs heuristics")
+        else:
+            print(f"  ℹ  LLM confirmed all heuristic classifications")
+        print()
+
+except Exception as e:
+    # Silently fall back to heuristics
+    if "No API key" not in str(e):
+        print(f"  ℹ  LLM refinement unavailable ({type(e).__name__}), using heuristics only")
+        print()
+
+# ── Output ──────────────────────────────────────────────────────────────
+
 # Print table
 print(f"  {'#':<6} {'Tier':<28} {'Milestone':<15} {'Title':<60}")
 print(f"  {'─'*6} {'─'*28} {'─'*15} {'─'*60}")
 for r in sorted(results, key=lambda x: x["tier"]):
     ms = r["milestone"] or "—"
-    print(f"  {r['number']:<6} {r['tier']:<28} {ms:<15} {r['title']:<60}")
+    marker = " ◀" if r.get("heuristic_tier") else ""
+    print(f"  {r['number']:<6} {r['tier']:<28} {ms:<15} {r['title']:<60}{marker}")
 
 print()
 
@@ -633,6 +745,14 @@ tier_counts = Counter(r["tier"] for r in results)
 print("  Summary:")
 for tier, count in sorted(tier_counts.items()):
     print(f"    {tier}: {count} issue(s)")
+
+if llm_used:
+    overridden = [r for r in results if r.get("heuristic_tier")]
+    if overridden:
+        print()
+        print("  ◀ = LLM overrode heuristic:")
+        for r in overridden:
+            print(f"    #{r['number']}: {r['heuristic_tier']} → {r['tier']}  ({r['reason']})")
 
 # Write results to a review file
 review_path = sys.argv[2].replace("/", "_") + "_triage_preview.json"
