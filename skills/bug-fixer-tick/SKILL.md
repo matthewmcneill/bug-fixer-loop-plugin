@@ -126,4 +126,14 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
       ```
     - Remove the `status:in-progress` label from the issue.
 
-12. **Fast Exit:** If Step 4 finds no eligible issues, output `TICK_EXIT: NO_ELIGIBLE_WORK` and exit cleanly. Never invent work, create issues, or expand scope.
+### Step 12: Loop or Exit
+
+After successfully opening a PR, **loop back to Step 4** and pick the next eligible issue. Keep fixing issues until one of these conditions is met:
+
+- **No eligible issues remain** → output `TICK_EXIT: NO_ELIGIBLE_WORK — opened <count> PR(s) this tick.` and exit.
+- **Concurrency cap reached** → re-check `status:in-progress` count. If >= `max_concurrent_prs`, output `TICK_EXIT: Active development cap reached — opened <count> PR(s) this tick.` and exit.
+- **A fix attempt fails** (tests fail after 3 retries) → unclaim that issue, then continue to the next eligible issue rather than exiting entirely.
+
+> **Important:** Each fix must start from a fresh branch off `origin/main` (Step 6). Pull latest main before each iteration to pick up any changes merged since the tick started.
+
+Never invent work, create issues, or expand scope.
