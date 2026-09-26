@@ -1,12 +1,15 @@
 {
   "builtin": "schedule",
   "args": [
-    "<triage_cron>",
+    "0 * * * *",
+    "agentapi",
+    "new-conversation",
+    "--title=Bug Fixer Triage",
     "Run the bug-fixer-triage skill for repository <owner/repo>. Read the skill at <plugin_dir>/skills/bug-fixer-triage/SKILL.md. Use <plugin_dir>/scripts/safe_ingest.py for all GitHub reads. Configuration is at <plugin_dir>/config.json."
   ],
   "restart_policy": "always",
   "display_name": "Bug Fixer Triage (<owner/repo>)",
-  "description": "Hourly triage of open GitHub issues — classifies as auto-fixable or human-required.",
+  "description": "Hourly triage of open GitHub issues \u2014 classifies as auto-fixable or human-required.",
   "env": {},
   "agent_permissions": {
     "workspace_uris": [

@@ -2,11 +2,14 @@
   "builtin": "schedule",
   "args": [
     "*/10 * * * *",
+    "agentapi",
+    "new-conversation",
+    "--title=Bug Fixer Tick",
     "Run the bug-fixer-tick skill for repository <owner/repo>. Read the skill at <plugin_dir>/skills/bug-fixer-tick/SKILL.md. Use <plugin_dir>/scripts/safe_ingest.py for all GitHub reads. Use <plugin_dir>/config.json for all parameters. Run in <repo_dir> as its workspace."
   ],
   "restart_policy": "always",
   "display_name": "Bug Fixer Tick (<owner/repo>)",
-  "description": "Autonomous bug fixer loop tick for <owner/repo> \u2014 picks highest-priority auto-fixable issue, implements fix, runs tests, and opens PR.",
+  "description": "Autonomous bug fixer loop tick \u2014 picks highest-priority auto-fixable issue, implements fix, runs tests, and opens PR.",
   "env": {},
   "agent_permissions": {
     "workspace_uris": [
