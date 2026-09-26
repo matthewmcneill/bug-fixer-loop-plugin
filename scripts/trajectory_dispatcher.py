@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""
+trajectory_dispatcher.py — Lightweight pre-check for the trajectory review sidecar.
+
+Runs daily at 18:00. Checks if there are any bug-fixer transcripts
+from the last 24 hours. Only spawns an LLM review conversation if
+there's activity to review.
+
+No-op conditions (exit silently):
+  - No config found
+  - No bug-fixer transcripts in the last 24 hours
+"""
+
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+
+
+def log(msg: str):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"TRAJECTORY_DISPATCH: {ts} — {msg}", flush=True)
+
+
+def run(cmd: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PLUGIN_DIR = SCRIPT_DIR.parent
+
+WORKSPACE_CONFIG = PLUGIN_DIR / "../../.agents/plugins/bug-fixer-loop-workspace/config.json"
+PLUGIN_CONFIG = PLUGIN_DIR / "config.json"
+
+if WORKSPACE_CONFIG.exists():
+    CONFIG_FILE = WORKSPACE_CONFIG.resolve()
+elif PLUGIN_CONFIG.exists():
+    CONFIG_FILE = PLUGIN_CONFIG.resolve()
+else:
+    log("No config.json found. Exiting.")
+    sys.exit(0)
+
+with open(CONFIG_FILE) as f:
+    config = json.load(f)
+
+TARGET_REPO = config["target_repo"]
+SKILL_PATH = PLUGIN_DIR / "skills/trajectory-review/SKILL.md"
+SAFE_INGEST = PLUGIN_DIR / "scripts/safe_ingest.py"
+
+log(f"Checking for recent bug-fixer activity in {TARGET_REPO}")
+
+
+# ---------------------------------------------------------------------------
+# Check for recent transcripts
+# ---------------------------------------------------------------------------
+
+brain_dir = Path.home() / ".gemini/antigravity/brain"
+cutoff = datetime.now().timestamp() - 86400  # 24 hours ago
+
+recent_transcripts = []
+if brain_dir.exists():
+    for conv_dir in brain_dir.iterdir():
+        if not conv_dir.is_dir():
+            continue
+        transcript = conv_dir / ".system_generated/logs/transcript.jsonl"
+        if not transcript.exists():
+            continue
+        if transcript.stat().st_mtime < cutoff:
+            continue
+
+        # Check if this is a bug-fixer conversation (check first few lines)
+        try:
+            with open(transcript) as f:
+                head = f.read(2000)
+            if any(kw in head for kw in [
+                "bug-fixer-tick", "bug-fixer-triage",
+                "Fix #", "Triage:", "auto-fixable",
+                "tick_dispatcher", "triage_dispatcher",
+            ]):
+                recent_transcripts.append(str(transcript))
+        except OSError:
+            continue
+
+# Also check the sidecar logs
+sidecar_log_dir = Path.home() / ".gemini/antigravity/sidecar_data"
+recent_sidecar_logs = []
+for sidecar_name in ["bug-fixer-tick", "bug-fixer-triage"]:
+    log_file = sidecar_log_dir / sidecar_name / "logs/sidecar.log"
+    if log_file.exists() and log_file.stat().st_mtime > cutoff:
+        recent_sidecar_logs.append(str(log_file))
+
+total_activity = len(recent_transcripts) + len(recent_sidecar_logs)
+
+if total_activity == 0:
+    log("No bug-fixer activity in last 24h. Exiting.")
+    sys.exit(0)
+
+log(f"Found {len(recent_transcripts)} transcript(s) and {len(recent_sidecar_logs)} sidecar log(s) from last 24h.")
+
+
+# ---------------------------------------------------------------------------
+# Check for obvious problems worth reviewing
+# ---------------------------------------------------------------------------
+
+# Quick check: any stale in-progress issues?
+r = run(["gh", "issue", "list", "--repo", TARGET_REPO,
+         "--label", "status:in-progress", "--state", "open",
+         "--json", "number,title", "--jq", "length"])
+in_progress_count = int(r.stdout.strip() or "0")
+
+# Quick check: any recent PRs from the bug-fixer?
+r = run(["gh", "pr", "list", "--repo", TARGET_REPO,
+         "--label", "bug-fixer", "--state", "all",
+         "--json", "number", "--jq", "length"])
+recent_prs = int(r.stdout.strip() or "0")
+
+# Build context summary for the LLM
+context_lines = [
+    f"- {len(recent_transcripts)} bug-fixer conversation(s) in last 24h",
+    f"- {in_progress_count} issue(s) currently in-progress",
+    f"- {recent_prs} bug-fixer PR(s) total",
+]
+context_summary = "\n".join(context_lines)
+
+
+# ---------------------------------------------------------------------------
+# Spawn trajectory review conversation
+# ---------------------------------------------------------------------------
+
+title = "Trajectory Review: daily check-in"
+prompt = f"""Run the trajectory-review skill for repository {TARGET_REPO}.
+
+Read the skill at: {SKILL_PATH}
+Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.
+Configuration is at: {CONFIG_FILE}
+
+Activity summary for the last 24 hours:
+{context_summary}
+
+Recent bug-fixer transcripts to analyze:
+{chr(10).join(recent_transcripts[:20])}
+
+Sidecar logs:
+{chr(10).join(recent_sidecar_logs)}
+
+Review these for recurring failure patterns, stale claims, and quality trends."""
+
+r = run(["agentapi", "new-conversation", f"--title={title}", prompt])
+
+try:
+    result = json.loads(r.stdout)
+    conv_id = result["response"]["newConversation"]["conversationId"]
+    log(f"Spawned trajectory review conversation {conv_id}")
+except (json.JSONDecodeError, KeyError):
+    log(f"Failed to spawn trajectory review: {r.stderr or r.stdout}")
+    sys.exit(1)

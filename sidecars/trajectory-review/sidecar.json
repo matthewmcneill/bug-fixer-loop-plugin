@@ -2,21 +2,9 @@
   "builtin": "schedule",
   "args": [
     "0 18 * * *",
-    "agentapi",
-    "new-conversation",
-    "--title=Bug Fixer Trajectory Review",
-    "Run the trajectory-review skill for repository <owner/repo>. Read the skill at <plugin_dir>/skills/trajectory-review/SKILL.md. Use <plugin_dir>/scripts/safe_ingest.py for all GitHub reads. Configuration is at <plugin_dir>/config.json. Review recent transcripts from the last 24 hours for recurring failure patterns, stale claims, and quality trends."
+    "<plugin_dir>/scripts/trajectory_dispatcher.py"
   ],
   "restart_policy": "always",
   "display_name": "Bug Fixer Trajectory Review (<owner/repo>)",
-  "description": "Daily review of bug-fixer loop transcripts \u2014 identifies recurring failure patterns, stale claims, and quality trends.",
-  "env": {},
-  "agent_permissions": {
-    "workspace_uris": [
-      "file://<repo_dir>"
-    ],
-    "access_grants": [
-      "command(*)"
-    ]
-  }
+  "description": "Checks for recent bug-fixer activity daily. Only spawns a review conversation if there is activity to review."
 }
