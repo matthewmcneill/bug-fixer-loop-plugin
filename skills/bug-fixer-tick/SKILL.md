@@ -27,14 +27,31 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
    ```bash
    gh issue list --repo <target_repo> --label "status:in-progress" --state open --json number,title
    ```
-   For each in-progress issue, check when the label was applied:
-   ```bash
-   gh api repos/<target_repo>/issues/<number>/events --jq '[.[] | select(.event=="labeled" and .label.name=="status:in-progress")] | last | .created_at'
-   ```
-   If the label was applied **more than 60 minutes ago**, the claim is stale (agent likely crashed). Recover:
+   For each in-progress issue, check if the agent session is still alive:
+
+   a. **Read the lock file:**
+      ```
+      ${STATE_DIR}/claims/<issue_number>.lock
+      ```
+      The lock file contains `{"issue": <n>, "conversation_id": "<id>", "claimed_at": "<iso>"}`.
+
+   b. **Check if the conversation is still active** by inspecting the transcript file's modification time:
+      ```bash
+      stat -f %m ~/.gemini/antigravity/brain/<conversation_id>/.system_generated/logs/transcript.jsonl
+      ```
+      If the file was last modified **more than 30 minutes ago**, the session is dead.
+
+   c. **No lock file at all** but `status:in-progress` is set? The label is orphaned (manual or pre-lock-file claim). Check label age via the events API — if > 2 hours, treat as stale.
+
+   A claim is **stale** if:
+   - Lock file exists but transcript mtime > 30 minutes ago (session crashed)
+   - No lock file and label age > 2 hours (orphaned label)
+
+   If stale, recover:
    - Remove the `status:in-progress` label
-   - Post comment: `[BUG-FIXER] Reclaimed stale lock — previous agent session appears to have terminated. Issue is available for retry.`
-   - Clean up any partial branch for this issue: `git push origin --delete <branch_prefix>/<number>-* 2>/dev/null`
+   - Delete the lock file if it exists
+   - Post comment: `[BUG-FIXER] Reclaimed stale lock — agent session <conversation_id> is no longer active. Issue is available for retry.`
+   - Clean up any partial branch: `git push origin --delete <branch_prefix>/<number>-* 2>/dev/null`
 
 3. **Concurrency Guard:** Count issues the agent is actively developing:
    ```bash
@@ -83,6 +100,11 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
 5. **Claim Issue:** Act as a lease to prevent other agents from picking up the same work:
    ```bash
    gh issue edit <number> --repo <target_repo> --add-label status:in-progress
+   ```
+   Write a lock file so stale recovery can verify this session is alive:
+   ```bash
+   mkdir -p ${STATE_DIR}/claims
+   echo '{"issue": <number>, "conversation_id": "<this_conversation_id>", "claimed_at": "<iso_now>"}' > ${STATE_DIR}/claims/<number>.lock
    ```
 
 6. **Branch:** Check out a new branch from `origin/main`:
@@ -137,7 +159,11 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
       ```bash
       gh pr edit <pr_number> --repo <target_repo> --milestone "<milestone_title>"
       ```
-    - Remove the `status:in-progress` label from the issue.
+    - Remove the `status:in-progress` label from the issue and delete the lock file:
+      ```bash
+      gh issue edit <number> --repo <target_repo> --remove-label status:in-progress
+      rm -f ${STATE_DIR}/claims/<number>.lock
+      ```
 
 ### Step 12: Loop or Exit
 
