@@ -2,6 +2,7 @@
   "$schema": "bug-fixer-loop-config-v1",
   "target_repo": "",
   "repo_dir": "",
+  "worktree_path": "",
   "maintainer": "",
   "trusted_users": [],
   "spec_file_path": "docs/design_specification.md",
@@ -21,6 +22,17 @@
   ],
   "auto_fixable_labels": [
     "auto-fixable"
+  ],
+  "required_labels": [
+    "auto-fixable",
+    "human-required",
+    "needs-approach-review",
+    "project-candidate",
+    "input-needed",
+    "status:in-progress",
+    "bug-fixer",
+    "bug-fixer-health",
+    "spec-change-request"
   ],
   "auto_fixable_max_priority": "P3-docs-dx",
   "test_command": "pio test -e native",

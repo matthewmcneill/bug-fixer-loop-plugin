@@ -12,6 +12,9 @@ This skill executes one cycle of the autonomous bug fixer loop. It picks the hig
 
 ## Workflow
 
+## Step 0: Configuration Guard
+Read `config.json` from the plugin directory. If `target_repo` is empty or the file is missing, output `CONFIG_INCOMPLETE: Plugin not configured. Run scripts/configure.sh first.` and exit immediately. Do not proceed with any GitHub operations.
+
 1. **Load Configuration:** Read `config.json` from the plugin directory. Extract all fields.
 
 2. **Concurrency Guard:** Query open PRs authored by the agent:

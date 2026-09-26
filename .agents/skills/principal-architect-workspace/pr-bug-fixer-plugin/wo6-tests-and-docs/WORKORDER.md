@@ -202,3 +202,33 @@ Create evaluation scenarios:
 ### Out-of-Scope Findings
 (surface anything)
 ```
+
+## Completion Report — WO6: Tests, Documentation & Evals
+
+**Status:** PASS
+**Branch:** bug-fixer-plugin/wo6-tests-and-docs
+
+### Files Created
+- [x] tests/test_safe_ingest.py
+- [x] tests/test_pre_tool_gate.py
+- [x] README.md
+- [x] skills/bug-fixer-triage/EVAL.md
+- [x] skills/bug-fixer-tick/EVAL.md
+
+### Test Results
+- test_safe_ingest.py: 25 tests, PASS
+- test_pre_tool_gate.py: 19 tests, PASS
+
+### Documentation
+- README.md line count: 242
+- Mermaid diagram: YES
+- Config reference table: YES
+
+### Decisions Made
+- Standardised test execution on `unittest` (`python3 -m unittest discover -s tests -v`) matching native standard library support without external pytest dependencies.
+- Subprocess invocation used in `test_pre_tool_gate.py` to faithfully replicate Antigravity PreToolUse hook execution over stdin.
+- Parameterised leak scan tests in `test_pre_tool_gate.py` using temporary git repositories to validate both failure on secret detection and clean pass behavior.
+
+### Out-of-Scope Findings
+None.
+

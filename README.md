@@ -19,6 +19,34 @@ Modern software development often suffers from an accumulation of small bugs, DX
 
 ---
 
+## Getting Started
+
+### 1. Install
+```bash
+./scripts/install.sh
+```
+The plugin ships **disabled** by default. No sidecars will run until you configure and enable it.
+
+### 2. Configure
+```bash
+./scripts/configure.sh --repo <owner/repo> --repo-dir <path>
+```
+The wizard validates connectivity, creates labels, and optionally sets up an isolated worktree.
+
+### 3. Enable
+```bash
+agy plugin enable bug-fixer-loop
+```
+The 3 background sidecars will now run on their configured schedules.
+
+### 4. Pause / Resume
+```bash
+agy plugin disable bug-fixer-loop   # pause
+agy plugin enable bug-fixer-loop    # resume
+```
+
+---
+
 ## Architecture
 
 The plugin implements a deterministic 3-loop engineering cycle:
@@ -112,9 +140,27 @@ The security architecture provides three layers of defense against prompt inject
 
 ## Installation
 
-The plugin includes an installation script (`scripts/install.sh`) that provisions configuration, symlinks components into Antigravity directories, and registers sidecars.
+The plugin includes an installation script (`scripts/install.sh`) to link skills, agents, rules, and sidecars, followed by an interactive configuration wizard (`scripts/configure.sh`) that validates connectivity, creates GitHub labels, sets up a worktree, and configures the plugin.
 
-### Flags & Options
+The plugin ships **disabled** by default. After installation and configuration, enable the plugin using `agy plugin enable bug-fixer-loop`.
+
+### Installation Steps
+
+```bash
+# 1. Install plugin components
+./scripts/install.sh \
+  --repo matthewmcneill/esp32-app-foundation \
+  --repo-dir /Users/mcneillm/Documents/Projects/esp32-app-foundation \
+  --maintainer matthewmcneill
+
+# 2. Run the configuration wizard (validates connectivity, labels, worktree)
+./scripts/configure.sh --repo matthewmcneill/esp32-app-foundation --repo-dir /Users/mcneillm/Documents/Projects/esp32-app-foundation
+
+# 3. Enable the plugin
+agy plugin enable bug-fixer-loop
+```
+
+### Install Flags & Options
 
 ```
 Usage: ./scripts/install.sh [OPTIONS]
@@ -127,19 +173,22 @@ Options:
   -h, --help                    Show this help message
 ```
 
-### Examples
+### Configuration Wizard Flags & Options
 
-```bash
-# Full installation for target repository
-./scripts/install.sh \
-  --repo matthewmcneill/esp32-app-foundation \
-  --repo-dir /Users/mcneillm/Documents/Projects/esp32-app-foundation \
-  --maintainer matthewmcneill
+```
+Usage: ./scripts/configure.sh [OPTIONS]
 
-# Skills and security hooks only (no background cron sidecars)
-./scripts/install.sh \
-  --repo matthewmcneill/esp32-app-foundation \
-  --skills-only
+Options:
+  -r, --repo <owner/repo>       Target GitHub repository (e.g. owner/repo)
+  -d, --repo-dir <path>         Local checkout path of target repository
+  -m, --maintainer <login>      Trusted maintainer GitHub login
+  --spec-file <path>            Path to design specification file (default: docs/design_specification.md)
+  --test-command <cmd>          Test command to run (default: pio test -e native)
+  --lint-command <cmd>          Lint command to run (optional)
+  --worktree-path <path>        Path for isolated git worktree
+  --no-worktree                 Skip creating git worktree
+  -y, --yes                     Non-interactive mode (accept defaults)
+  -h, --help                    Show this help message
 ```
 
 ---
@@ -153,6 +202,7 @@ Configuration is managed in `config.json` at the root of the plugin or target re
 | `$schema` | `string` | Configuration schema version identifier | `"bug-fixer-loop-config-v1"` |
 | `target_repo` | `string` | Target repository slug (`owner/repo`) | `""` |
 | `repo_dir` | `string` | Local checkout path of target repository | `""` |
+| `worktree_path` | `string` | Isolated git worktree directory for autonomous agent execution | `""` |
 | `maintainer` | `string` | Primary trusted GitHub maintainer username | `""` |
 | `trusted_users` | `array[string]` | Additional trusted GitHub logins allowed to approve issues | `[]` |
 | `spec_file_path` | `string` | Project specification file protected from agent mutation | `"docs/design_specification.md"` |
@@ -161,6 +211,7 @@ Configuration is managed in `config.json` at the root of the plugin or target re
 | `max_concurrent_prs` | `integer` | Maximum concurrent open agent PRs allowed | `1` |
 | `exclusion_labels` | `array[string]` | Issue labels that immediately disqualify from auto-fix | `["human-required", "P1-blocker", "hardware-required"]` |
 | `auto_fixable_labels` | `array[string]` | Labels identifying issues triaged for autonomous fixing | `["auto-fixable"]` |
+| `required_labels` | `array[string]` | Standard label taxonomy maintained in target repository | `["auto-fixable", "human-required", "needs-approach-review", "project-candidate", "input-needed", "status:in-progress", "bug-fixer", "bug-fixer-health", "spec-change-request"]` |
 | `auto_fixable_max_priority` | `string` | Priority ceiling for automated fixes | `"P3-docs-dx"` |
 | `test_command` | `string` | Test command that must pass before any PR is opened | `"pio test -e native"` |
 | `lint_command` | `string` | Optional linter command to run before PR | `""` |

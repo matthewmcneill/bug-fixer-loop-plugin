@@ -12,6 +12,9 @@ This skill classifies open issues as `auto-fixable` or `human-required` and enfo
 
 ## Workflow
 
+## Step 0: Configuration Guard
+Read `config.json` from the plugin directory. If `target_repo` is empty or the file is missing, output `CONFIG_INCOMPLETE: Plugin not configured. Run scripts/configure.sh first.` and exit immediately. Do not proceed with any GitHub operations.
+
 1. **Load Configuration:** Read `config.json` from the plugin directory. Extract `target_repo`, `maintainer`, `exclusion_labels`, `auto_fixable_labels`, `spec_file_path`.
 
 2. **Query Open Issues:** Run the safe ingest proxy to list all open issues:
