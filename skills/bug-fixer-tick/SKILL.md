@@ -2,20 +2,21 @@
 name: bug-fixer-tick
 description: >-
   Execute one cycle of the autonomous bug fixer loop. Picks the highest-priority
-  auto-fixable issue, implements the fix, runs tests, and opens a PR. Triggered
-  by the tick sidecar every 2 hours, or manually with "fix bugs" or "run bug fixer".
+  auto-fixable issue respecting milestone order, implements the fix, runs tests,
+  and opens a PR with the bug-fixer label. Triggered by the tick sidecar every 2
+  hours, or manually with "fix bugs" or "run bug fixer".
 ---
 
 # Bug Fixer Tick (Execution Engine)
 
-This skill executes one cycle of the autonomous bug fixer loop. It picks the highest-priority eligible issue, implements a fix, tests it, and opens a pull request.
+This skill executes one cycle of the autonomous bug fixer loop. It checks for review feedback and approved approaches, selects the highest-priority eligible auto-fixable issue (with milestone awareness), implements a fix, tests it, and opens a pull request.
 
 ## Workflow
 
 ## Step 0: Configuration Guard
 Read `config.json` from the plugin directory. If `target_repo` is empty or the file is missing, output `CONFIG_INCOMPLETE: Plugin not configured. Run scripts/configure.sh first.` and exit immediately. Do not proceed with any GitHub operations.
 
-1. **Load Configuration:** Read `config.json` from the plugin directory. Extract all fields.
+1. **Load Configuration:** Read `config.json` from the plugin directory. Extract all fields (`target_repo`, `maintainer`, `trusted_users`, `spec_file_path`, `test_command`, `lint_command`, `max_concurrent_prs`, `pr_prefix`, `branch_prefix`, `active_milestone`, `milestone_priority_boost`).
 
 2. **Concurrency Guard:** Query open PRs authored by the agent:
    ```bash
@@ -28,11 +29,36 @@ Read `config.json` from the plugin directory. If `target_repo` is empty or the f
    - Look for any unaddressed maintainer comments (comments from `maintainer` or `trusted_users` that do not have a subsequent `[BUG-FIXER]` reply).
    - If found: check out the PR branch, implement the requested changes, run tests, push the changes, reply with `[BUG-FIXER] Addressed review feedback in <sha>`, and exit this tick.
 
-4. **Select Issue:** Query open, auto-fixable issues:
-   ```bash
-   python3 <plugin_dir>/scripts/safe_ingest.py issue-list --repo <target_repo> --label auto-fixable --state open --json number,title,labels,body,priority,priorityRank
-   ```
-   Pick the first issue sorted by priority rank (ascending), then by issue number (ascending, FIFO).
+### Step 3.5: Check for Approved Approaches
+Query issues with the `needs-approach-review` label:
+```bash
+python3 <plugin_dir>/scripts/safe_ingest.py issue-list --repo <target_repo> --label needs-approach-review --state open --json number,title,labels,comments
+```
+For each issue, check if the maintainer has posted an approval comment (contains `approved` or `/approve` from a trusted user). If found:
+- Remove `needs-approach-review` label
+- Add `auto-fixable` label
+- Log: `[BUG-FIXER] Approach approved for #<number>, now eligible for fixing.`
+
+This ensures previously-reviewed issues enter the auto-fixable queue.
+
+4. **Select Issue:**
+   - **Only T1 issues are eligible for immediate fixing.** The tick skill MUST NOT pick up `needs-approach-review`, `input-needed`, `project-candidate`, or `human-required` issues. Only `auto-fixable` issues are eligible.
+   - Query open, auto-fixable issues:
+     ```bash
+     python3 <plugin_dir>/scripts/safe_ingest.py issue-list --repo <target_repo> --label auto-fixable --state open --json number,title,labels,body,milestone,priority,priorityRank
+     ```
+   - Query milestones when selecting:
+     ```bash
+     gh api repos/<target_repo>/milestones --jq '.[] | {number, title, due_on}'
+     ```
+     and cross-reference with the issue's milestone field.
+   - Exclude issues with `status:in-progress` label.
+   - **Milestone-aware priority ordering:**
+     1. First: `auto-fixable` issues in the `active_milestone` (from config), sorted by priority label then issue number
+     2. Then: `auto-fixable` issues in other milestones with due dates, sorted by due date ascending
+     3. Finally: `auto-fixable` issues with no milestone, sorted by priority label then issue number
+   - Pick the first issue from this sorted list.
+   - Note if the issue was converted from T2 (`needs-approach-review` with maintainer approval) to accurately classify it in the PR body.
 
 5. **Claim Issue:** Act as a lease to prevent other agents from picking up the same work:
    ```bash
@@ -75,7 +101,22 @@ Read `config.json` from the plugin directory. If `target_repo` is empty or the f
       ```bash
       gh pr create --repo <target_repo> --base main --title "<pr_prefix> Fix #<number>: <title>" --body "<body>"
       ```
-      The PR body must include: a link to the issue, what was changed, why it was changed, full test output, and the leak scan result.
+      The PR body must include:
+      - Link to the issue: `Resolves #<number>`
+      - Issue tier: `**Classification:** T1 (auto-fixable)` or `T2 (approach approved by @maintainer)`
+      - Milestone: `**Milestone:** <name>` if applicable
+      - The `bug-fixer` label must be listed (e.g., `**Labels:** bug-fixer`)
+      - What was changed and why it was changed
+      - Full test output
+      - Leak scan result
+    - Apply `bug-fixer` label to the PR:
+      ```bash
+      gh pr edit <pr_number> --repo <target_repo> --add-label bug-fixer
+      ```
+    - Carry over milestone: If the resolved issue belongs to a milestone, set the same milestone on the PR:
+      ```bash
+      gh pr edit <pr_number> --repo <target_repo> --milestone "<milestone_title>"
+      ```
     - Remove the `status:in-progress` label from the issue.
 
 12. **Fast Exit:** If Step 4 finds no eligible issues, output `TICK_EXIT: NO_ELIGIBLE_WORK` and exit cleanly. Never invent work, create issues, or expand scope.

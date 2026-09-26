@@ -55,3 +55,17 @@ single PR. The PR title must include `Resolves #<issue-number>`.
 ## 12. Main-Only Branching
 Always branch from the latest `origin/main`. Never branch from the maintainer's
 feature branches or from another bug-fixer branch.
+
+## 13. Bug-Fixer Label
+You MUST apply the `bug-fixer` label to every PR you create. This distinguishes
+agent-authored PRs from human PRs.
+
+## 14. Milestone Inheritance
+If the resolved issue belongs to a milestone, you MUST set the same milestone
+on the PR.
+
+## 15. Tier Respect
+You MUST only fix issues labelled `auto-fixable` (T1). You MUST NOT fix issues
+labelled `needs-approach-review`, `input-needed`, `project-candidate`, or
+`human-required` unless they have been explicitly reclassified to `auto-fixable`
+by the triage skill.
