@@ -23,11 +23,13 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
 
 1. **Load Configuration:** Read `${STATE_DIR}/config.json`. Extract all fields (`target_repo`, `maintainer`, `trusted_users`, `spec_file_path`, `test_command`, `lint_command`, `max_concurrent_prs`, `pr_prefix`, `branch_prefix`, `active_milestone`, `milestone_priority_boost`).
 
-2. **Concurrency Guard:** Query open PRs authored by the agent:
+2. **Concurrency Guard:** Count issues the agent is actively developing:
    ```bash
-   gh pr list --repo <target_repo> --author @me --state open --json number,title,labels
+   gh issue list --repo <target_repo> --label "status:in-progress" --state open --json number,title
    ```
-   Count the PRs that have `pr_prefix` in the title. If this count is >= `max_concurrent_prs`, output `TICK_EXIT: PR cap reached (<count>/<max>). Waiting for merge.` and exit cleanly.
+   If this count is >= `max_concurrent_prs`, output `TICK_EXIT: Active development cap reached (<count>/<max>). Waiting for current fixes to complete.` and exit cleanly.
+
+   > **Note:** The cap limits issues *being actively coded*, not open PRs waiting for review. Once a PR is opened and `status:in-progress` is removed from the issue, the slot is freed immediately — the agent does not wait for the human to merge.
 
 3. **Check for PR Feedback (Highest Priority):** For each open agent PR:
    - Query comments and reviews via: `python3 ${PLUGIN_DIR}/scripts/safe_ingest.py pr-comments <number>`
