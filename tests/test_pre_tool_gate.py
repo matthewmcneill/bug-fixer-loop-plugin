@@ -22,6 +22,17 @@ from scripts.pre_tool_gate import (
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 GATE_SCRIPT = PLUGIN_ROOT / "scripts" / "pre_tool_gate.py"
 
+# Test config (config.json no longer lives in plugin root — it's in the consumer workspace)
+TEST_CONFIG = {
+    "spec_file_path": "docs/design_specification.md",
+    "protected_files": ["docs/design_specification.md"],
+    "leak_patterns": [
+        "ya29\\.[A-Za-z0-9_-]+",
+        "AKIA[0-9A-Z]{16}",
+        "-----BEGIN (RSA |EC )?PRIVATE KEY-----",
+    ],
+}
+
 
 class TestPreToolGate(unittest.TestCase):
     def _run_gate_stdin(self, payload: dict[str, Any], config_path: str | None = None) -> dict[str, Any]:
@@ -274,13 +285,17 @@ class TestPreToolGate(unittest.TestCase):
             leak_file.write_text("aws_key = AKIAIOSFODNN7EXAMPLE\n")
             subprocess.run(["git", "add", "credentials.txt"], cwd=temp_dir, check=True, capture_output=True)
 
+            # Create temp config with leak patterns
+            cfg_file = Path(temp_dir) / "test_config.json"
+            cfg_file.write_text(json.dumps(TEST_CONFIG))
+
             cmd = [
                 sys.executable,
                 str(GATE_SCRIPT),
                 "--scan-only",
                 temp_dir,
                 "--config",
-                str(PLUGIN_ROOT / "config.json"),
+                str(cfg_file),
             ]
             proc = subprocess.run(cmd, capture_output=True, text=True)
             self.assertEqual(proc.returncode, 1)
@@ -294,13 +309,17 @@ class TestPreToolGate(unittest.TestCase):
             clean_file.write_text("#include <iostream>\nint main() { return 0; }\n")
             subprocess.run(["git", "add", "hello.cpp"], cwd=temp_dir, check=True, capture_output=True)
 
+            # Create temp config with leak patterns
+            cfg_file = Path(temp_dir) / "test_config.json"
+            cfg_file.write_text(json.dumps(TEST_CONFIG))
+
             cmd = [
                 sys.executable,
                 str(GATE_SCRIPT),
                 "--scan-only",
                 temp_dir,
                 "--config",
-                str(PLUGIN_ROOT / "config.json"),
+                str(cfg_file),
             ]
             proc = subprocess.run(cmd, capture_output=True, text=True)
             self.assertEqual(proc.returncode, 0)

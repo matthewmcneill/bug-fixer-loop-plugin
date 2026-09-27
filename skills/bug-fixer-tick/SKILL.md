@@ -21,7 +21,7 @@ STATE_DIR="<workspace_root>/.agents/plugins/bug-fixer-loop-workspace"
 ```
 Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missing, output `CONFIG_INCOMPLETE: Plugin not configured. Run ${PLUGIN_DIR}/scripts/configure.sh first.` and exit immediately.
 
-1. **Load Configuration:** Read `${STATE_DIR}/config.json`. Extract all fields (`target_repo`, `maintainer`, `trusted_users`, `spec_file_path`, `test_command`, `lint_command`, `max_concurrent_prs`, `pr_prefix`, `branch_prefix`, `active_milestone`, `milestone_priority_boost`).
+1. **Load Configuration:** Read `${STATE_DIR}/config.json`. Extract all fields (`target_repo`, `maintainer`, `trusted_users`, `spec_file_path`, `additional_design_docs`, `test_command`, `lint_command`, `max_concurrent_prs`, `pr_prefix`, `branch_prefix`, `active_milestone`, `milestone_priority_boost`).
 
 ### Step 2: Reconcile In-Progress Issues
 
@@ -148,6 +148,81 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
 
 7. **Understand the Issue:** Read the issue body and any `[ISSUE-REVIEW]` execution contract comments. Read the project's spec file (`spec_file_path`) for relevant sections. Identify the exact files to modify.
 
+### Step 7.5: Architectural Design Review
+
+Before implementing the fix, review the design context for the affected module(s).
+This step discovers available design sources dynamically — not all repos have the
+same documentation structure.
+
+**7.5.1 — Read the spec.** Read `spec_file_path` (from config) and extract sections
+relevant to the affected module(s). This is the primary design reference and is
+always available.
+
+**7.5.2 — Read additional design documents.** If `additional_design_docs` is set in
+config, read each listed path from the target repo's working tree. These are
+maintainer-curated references (e.g. ADR directories, architecture decision logs,
+`docs/architecture/` files) that contain design rationale beyond the spec.
+
+**7.5.3 — Probe for Principal Architect memory.** Check whether the target repo has
+a PA memory system installed:
+```bash
+PA_MEMORY=".agents/skills/principal-architect-workspace/memory"
+if [ -f "${PA_MEMORY}/MEMORY.md" ]; then
+    echo "PA_MEMORY_PRESENT"
+fi
+```
+
+If present:
+1. Read `${PA_MEMORY}/MODULE_INDEX.md`. Find entries for the affected module(s).
+2. For the most recent 2-3 projects listed against each module, read the linked
+   `PROJECT.md` file. Scan for:
+   - **Explicit design decisions** ("Do NOT use X", "Y is acceptable here")
+   - **Rejected approaches** (graveyard entries, `rejected-approaches.md`)
+   - **ADR references** that constrain the module's implementation
+3. If any linked context files (e.g. `context_bridge.md`, ADR docs) are referenced
+   from the PROJECT.md for the relevant work orders, read those too.
+
+If NOT present: skip this sub-step entirely. Do not fail or warn — many repos
+have no PA history and that's fine. The spec file, additional design docs, and
+in-code rationale (7.5.4) are the only design sources.
+
+**7.5.4 — Check for in-code rationale.** Search the affected source files for comments
+containing rationale markers:
+- `// ADR`, `// DELIBERATE`, `// PA:`, `// WO:`, `// Design:`
+- Block comments with `@rationale` or `DESIGN NOTE`
+
+These indicate intentional patterns that should not be casually reversed.
+
+**7.5.5 — Evaluate compatibility.** If the proposed fix would contradict any discovered
+design decision, ADR, rejected approach, or in-code rationale:
+- **DO NOT implement the fix.**
+- Unclaim the issue (`--remove-label status:in-progress`).
+- Reclassify as `needs-approach-review` (T2).
+- Post a comment:
+  ```
+  [BUG-FIXER] Architectural conflict detected for #<number>:
+
+  **Proposed change:** <what the fix would do>
+
+  **Conflicts with:** <source — PROJECT.md / ADR / in-code comment>
+  - <quote the relevant design decision>
+
+  **Risk:** <what could break>
+
+  Reclassifying as T2 for maintainer review.
+  ```
+- Exit this issue and continue to the next eligible issue.
+
+**7.5.6 — If no conflicts found:** Proceed to Step 8 with the additional context.
+Include a note in the PR body (Step 11):
+```
+**Design review:** Checked <sources consulted> for <module>. No conflicting decisions found.
+```
+Where `<sources consulted>` is one of:
+- `spec` (spec file only, no PA memory present)
+- `spec + PA MODULE_INDEX (N projects traced)` (PA memory was present and used)
+- `spec + additional design docs` (if additional_design_docs was consulted)
+
 8. **Implement the Fix:**
    - Make the minimal code changes necessary to resolve the issue.
    - Follow the project's coding style (check existing files in the same module).
@@ -160,7 +235,7 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
    - Run `python3 ${PLUGIN_DIR}/scripts/pre_tool_gate.py --scan-only .` for leak check.
    - All checks must pass. If any fails, debug and retry up to 2 times. If tests or lint still fail after 3 total attempts, unclaim the issue (`--remove-label status:in-progress`), add the `human-required` label, comment `[BUG-FIXER] Attempted fix but tests/lint failed after 3 attempts. Needs human attention.`, and exit.
 
-10. **Self-Review Against Spec:** Read the `spec_file_path` sections relevant to the modified modules. Verify the fix does not contradict any specification or ADR. If it does, unclaim the issue, label it `spec-change-request,input-needed`, comment explaining the conflict, and exit.
+10. **Self-Review Against Design Sources:** Re-read `spec_file_path` and any PA design history or additional design documents discovered in Step 7.5. Verify the completed fix does not contradict any specification, ADR, or documented design decision. If it does, unclaim the issue, label it `spec-change-request,input-needed`, comment explaining the conflict, and exit.
 
 11. **Open PR:**
     - Stage and commit changes:
@@ -182,6 +257,8 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
       - Milestone: `**Milestone:** <name>` if applicable
       - The `bug-fixer` label must be listed (e.g., `**Labels:** bug-fixer`)
       - What was changed and why it was changed
+      - **Design review note** from Step 7.5.6
+      - **Platform-gap warning** (if applicable): If the fix moves work between execution contexts (e.g. main loop ↔ event callback, timer, ISR, or background task), include: `⚠️ This fix changes execution context. Native tests cannot validate stack limits or async dispatch timing. Hardware testing recommended.`
       - Full test output
       - Leak scan result
     - Apply `bug-fixer` label to the PR:

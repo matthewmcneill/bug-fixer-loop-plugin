@@ -58,9 +58,27 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
    g. **Complexity check:** Classify as `needs-approach-review` (T2) ONLY if:
       - The fix changes runtime *behaviour* in sensitive code (security, boot, OTA, crypto, memory safety)
       - OR has multiple valid implementation approaches that need human judgment
-      Example T2: "Fix race condition in EventBus", "Change OTA reboot logic"
+      - OR the fix **moves work between execution contexts**: main loop / `tick()` ↔ event-bus callback, timer callback, ISR, background task, or async handler. Also: the fix changes startup, shutdown, or restart sequencing.
+      - OR the issue is an **audit or code-quality finding that asks to restructure behaviour that already works** (e.g. "polls X — should use events", "blocking loop — make non-blocking", "replace polling with interrupts"). The existing design may be deliberate, and its rationale may live outside the spec.
+      Example T2: "Fix race condition in EventBus", "Change OTA reboot logic",
+                  "Module::tick() polls SiblingModule::isReady() — should use EventBus"
       Example NOT T2: "Document why setInsecure() is used" (just adding a comment)
-   Comment Template:
+
+   g.1. **PA memory-assisted triage (conditional).** If the issue reached this step
+      (i.e. it is NOT a small-scope override from step 4e), and you are considering
+      classifying it as T1, first check whether the target repo has Principal Architect
+      memory installed:
+      ```
+      .agents/skills/principal-architect-workspace/memory/MODULE_INDEX.md
+      ```
+      If present, look up the affected module(s) in MODULE_INDEX. If the module has
+      recorded design history (linked PROJECT.md files), scan the most recent 2-3
+      entries for explicit design decisions or rejected approaches related to the
+      issue. If any are found that the proposed fix might contradict, escalate to T2.
+      If MODULE_INDEX is not present, skip this sub-step — the heuristic triggers
+      above are the primary safety net.
+
+   For T2 issues, post the approach review comment:
    ```
    [BUG-FIXER] Proposed approach for #<number>:
    
@@ -79,7 +97,7 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
    Reply with `approved` to proceed, or provide alternative direction.
    ```
 
-   g. **Otherwise:** Classify as `auto-fixable` (T1). Single module, clear acceptance criteria, testable with host tests, no architectural decisions, <200 lines, no spec conflicts. Apply the label.
+   h. **Otherwise:** Classify as `auto-fixable` (T1). Single module, clear acceptance criteria, testable with host tests, no architectural decisions, <200 lines, no spec conflicts. Apply the label.
 
 5. **Handle Approach Reviews (T2 Re-evaluation):**
    For issues already labeled `needs-approach-review`:

@@ -35,16 +35,14 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
 SCRIPT_DIR = Path(__file__).resolve().parent
 PLUGIN_DIR = SCRIPT_DIR.parent
 
-WORKSPACE_CONFIG = PLUGIN_DIR / "../../.agents/plugins/bug-fixer-loop-workspace/config.json"
-PLUGIN_CONFIG = PLUGIN_DIR / "config.json"
+# Workspace config — the ONLY config location (plugin root is immutable)
+WORKSPACE_CONFIG = PLUGIN_DIR / "../../bug-fixer-loop-workspace/config.json"
 
-if WORKSPACE_CONFIG.exists():
-    CONFIG_FILE = WORKSPACE_CONFIG.resolve()
-elif PLUGIN_CONFIG.exists():
-    CONFIG_FILE = PLUGIN_CONFIG.resolve()
-else:
-    log("No config.json found. Exiting.")
+if not WORKSPACE_CONFIG.exists():
+    log("No workspace config found. Run install.sh first. Exiting.")
     sys.exit(0)
+
+CONFIG_FILE = WORKSPACE_CONFIG.resolve()
 
 with open(CONFIG_FILE) as f:
     config = json.load(f)

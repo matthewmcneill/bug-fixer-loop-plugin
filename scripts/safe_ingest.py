@@ -155,14 +155,14 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
             raise FileNotFoundError(f"Configuration file not found at BUG_FIXER_CONFIG path: {env_path}")
         target_path = env_path
     else:
-        # Search candidate locations:
-        # 1. Directory containing this script
-        # 2. Parent directory of this script (plugin root)
-        # 3. Current working directory
+        # Search candidate locations (standard layout):
+        # 1. Workspace config (sibling of plugin dir in .agents/plugins/)
+        # 2. Current working directory (for direct CLI usage)
+        script_dir = Path(__file__).resolve().parent
+        plugin_dir = script_dir.parent
         candidates = [
-            Path(__file__).resolve().parent / "config.json",
-            Path(__file__).resolve().parent.parent / "config.json",
-            Path.cwd() / "config.json",
+            plugin_dir.parent / "bug-fixer-loop-workspace" / "config.json",
+            Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace" / "config.json",
         ]
         for cand in candidates:
             if cand.is_file():

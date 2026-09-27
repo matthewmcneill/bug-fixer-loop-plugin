@@ -63,11 +63,20 @@ class TestSafeIngest(unittest.TestCase):
             os.unlink(temp_path)
 
     def test_load_config_default_resolution(self):
-        # Default resolution discovers the root config.json of this repo
-        cfg = load_config()
-        self.assertIsInstance(cfg, dict)
-        self.assertIn("spec_file_path", cfg)
-        self.assertIn("leak_patterns", cfg)
+        # Config is no longer in plugin root; test via BUG_FIXER_CONFIG env var
+        import tempfile
+        test_cfg = {"spec_file_path": "docs/design_specification.md", "leak_patterns": []}
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+            json.dump(test_cfg, tf)
+            temp_path = tf.name
+        try:
+            with patch.dict(os.environ, {"BUG_FIXER_CONFIG": temp_path}):
+                cfg = load_config()
+                self.assertIsInstance(cfg, dict)
+                self.assertIn("spec_file_path", cfg)
+                self.assertIn("leak_patterns", cfg)
+        finally:
+            os.unlink(temp_path)
 
     def test_load_config_error_handling(self):
         with self.assertRaises(FileNotFoundError):

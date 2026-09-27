@@ -1,10 +1,19 @@
 {
   "builtin": "schedule",
   "args": [
-    "*/10 * * * *",
+    "<tick_cron>",
     "<plugin_dir>/scripts/tick_dispatcher.py"
   ],
   "restart_policy": "always",
   "display_name": "Bug Fixer Tick (<owner/repo>)",
-  "description": "Checks for eligible issues every 10 min. Only spawns an LLM conversation when there is actual work to do."
+  "description": "Checks for eligible issues every 10 min. Only spawns an LLM conversation when there's actual work to do.",
+  "agent_permissions": {
+    "workspace_uris": [
+      "file://<repo_dir>"
+    ]
+  },
+  "env": {
+    "PATH": "<path>",
+    "BUG_FIXER_CONFIG": "<config_path>"
+  }
 }

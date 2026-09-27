@@ -18,6 +18,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -67,17 +68,14 @@ AGENTAPI_DIR = Path.home() / ".gemini" / "antigravity" / "bin"
 if AGENTAPI_DIR.is_dir():
     os.environ["PATH"] = str(AGENTAPI_DIR) + os.pathsep + os.environ.get("PATH", "")
 
-# Try workspace config first, fall back to plugin config
-WORKSPACE_CONFIG = PLUGIN_DIR / "../../.agents/plugins/bug-fixer-loop-workspace/config.json"
-PLUGIN_CONFIG = PLUGIN_DIR / "config.json"
+# Workspace config — the ONLY config location (plugin root is immutable)
+WORKSPACE_CONFIG = PLUGIN_DIR / "../../bug-fixer-loop-workspace/config.json"
 
-if WORKSPACE_CONFIG.exists():
-    CONFIG_FILE = WORKSPACE_CONFIG.resolve()
-elif PLUGIN_CONFIG.exists():
-    CONFIG_FILE = PLUGIN_CONFIG.resolve()
-else:
-    log("No config.json found. Exiting.")
+if not WORKSPACE_CONFIG.exists():
+    log("No workspace config found. Run install.sh first. Exiting.")
     sys.exit(0)
+
+CONFIG_FILE = WORKSPACE_CONFIG.resolve()
 
 with open(CONFIG_FILE) as f:
     config = json.load(f)
@@ -88,14 +86,30 @@ BRANCH_PREFIX = config.get("branch_prefix", "bugfix")
 SKILL_PATH = PLUGIN_DIR / "skills/bug-fixer-tick/SKILL.md"
 SAFE_INGEST = PLUGIN_DIR / "scripts/safe_ingest.py"
 
-# Derive repo dir from workspace config location
-if WORKSPACE_CONFIG.exists():
-    REPO_DIR = WORKSPACE_CONFIG.resolve().parent.parent.parent
-else:
-    REPO_DIR = Path.cwd()
-
-STATE_DIR = REPO_DIR / ".agents/plugins/bug-fixer-loop-workspace"
+# Derive all paths from config file location (standard layout)
+# <repo>/.agents/plugins/bug-fixer-loop-workspace/config.json
+STATE_DIR = CONFIG_FILE.parent
+REPO_DIR = STATE_DIR.parent.parent.parent
 CLAIMS_DIR = STATE_DIR / "claims"
+
+COOLDOWN_FILE = STATE_DIR / "cooldown.json"
+FAILURE_COUNT_FILE = STATE_DIR / "failure_count"
+MAX_CONSECUTIVE_FAILURES = 3
+COOLDOWN_SECONDS = 3600  # 1 hour
+
+# Circuit breaker: check cooldown before doing any work
+if COOLDOWN_FILE.exists():
+    try:
+        cooldown = json.loads(COOLDOWN_FILE.read_text())
+        if time.time() < cooldown.get("expires_at", 0):
+            log(f"TICK_EXIT: Cooling down until {cooldown.get('expires_at_iso', 'unknown')} — "
+                f"reason: {cooldown.get('reason', 'unknown')}")
+            sys.exit(0)
+        # Cooldown expired, clean up
+        COOLDOWN_FILE.unlink(missing_ok=True)
+        FAILURE_COUNT_FILE.unlink(missing_ok=True)
+    except (json.JSONDecodeError, OSError):
+        COOLDOWN_FILE.unlink(missing_ok=True)
 
 log(f"Checking {TARGET_REPO} (max_concurrent={MAX_CONCURRENT})")
 
@@ -334,3 +348,24 @@ This conversation handles ONE issue only. Do not pick up additional issues."""
     spawned += 1
 
 log(f"Done. Spawned {spawned} fix conversation(s), {reattach_count} reattached.")
+
+# Circuit breaker: track consecutive spawn failures
+if spawned == 0 and len(eligible) > 0:
+    try:
+        count = int(FAILURE_COUNT_FILE.read_text().strip()) + 1 if FAILURE_COUNT_FILE.exists() else 1
+    except (ValueError, OSError):
+        count = 1
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    FAILURE_COUNT_FILE.write_text(str(count))
+    if count >= MAX_CONSECUTIVE_FAILURES:
+        expires = time.time() + COOLDOWN_SECONDS
+        COOLDOWN_FILE.write_text(json.dumps({
+            "reason": f"{count} consecutive spawn failures",
+            "entered_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at": expires,
+            "expires_at_iso": datetime.fromtimestamp(expires, timezone.utc).isoformat(),
+        }))
+        log(f"Circuit breaker tripped after {count} consecutive failures. "
+            f"Cooling down for {COOLDOWN_SECONDS}s.")
+else:
+    FAILURE_COUNT_FILE.unlink(missing_ok=True)

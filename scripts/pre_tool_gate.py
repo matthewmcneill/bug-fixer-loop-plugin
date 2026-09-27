@@ -101,10 +101,11 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
             raise FileNotFoundError(f"Configuration file not found at BUG_FIXER_CONFIG: {env_path}")
         target_path = env_path
     else:
+        script_dir = Path(__file__).resolve().parent
+        plugin_dir = script_dir.parent
         for cand in [
-            Path(__file__).resolve().parent / "config.json",
-            Path(__file__).resolve().parent.parent / "config.json",
-            Path.cwd() / "config.json",
+            plugin_dir.parent / "bug-fixer-loop-workspace" / "config.json",
+            Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace" / "config.json",
         ]:
             if cand.is_file():
                 target_path = cand
@@ -435,7 +436,18 @@ def main() -> int:
             "leak_patterns": [],
         }
 
-    repo_dir = args.repo or config.get("repo_dir") or os.getcwd()
+    # Derive repo_dir: explicit arg > config field > config file location > cwd
+    repo_dir = args.repo or config.get("repo_dir", "")
+    if not repo_dir:
+        # Try deriving from config file location (standard layout)
+        try:
+            cfg_path = Path(args.config or os.environ.get("BUG_FIXER_CONFIG", "")).resolve()
+            if cfg_path.is_file() and "bug-fixer-loop-workspace" in str(cfg_path):
+                repo_dir = str(cfg_path.parent.parent.parent.parent)
+        except Exception:
+            pass
+    if not repo_dir:
+        repo_dir = os.getcwd()
     if not os.path.isabs(repo_dir):
         repo_dir = os.path.abspath(repo_dir)
 
