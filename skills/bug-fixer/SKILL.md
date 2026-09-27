@@ -4,7 +4,13 @@ description: >-
   The bug fixer agent — show status, triage summary, pending actions, and
   where human input is needed. Triggered by "bug fixer", "bug fixer status",
   "what's the bug fixer doing", "show me the triage", "what needs my attention",
-  "morning briefing", "fix bugs", or "run bug fixer".
+  "morning briefing", "fix bugs", or "run bug fixer". Also covers filing issues
+  against the plugin itself, reporting plugin bugs, contributing improvements,
+  proposing new capabilities, or understanding the contribution process.
+  Triggered by "file a plugin issue", "report a bug-fixer bug", "bug-fixer
+  defect", "contribute to the plugin", "improve the bug fixer", "plugin
+  enhancement", "propose a feature", "submit a fix", "contribution protocol",
+  "how do I file an issue", "plugin issue template".
 ---
 
 # Bug Fixer Status Dashboard
@@ -12,6 +18,16 @@ description: >-
 This skill provides a human-friendly summary of the bug-fixer-loop plugin's
 current state. Run it when you sit down at the bench to see what's happened,
 what's pending, and where your input is needed.
+
+## Detailed References
+
+This skill uses a progressive disclosure model. Based on your query, load and
+read the corresponding reference file:
+
+| Topic | Read |
+|---|---|
+| **Filing and triaging plugin issues** | `references/issue-management.md` |
+| **Contributing changes or proposing new capabilities** | `references/contribution-protocol.md` |
 
 ## Workflow
 
@@ -182,3 +198,33 @@ Combine all sections into a single dashboard:
   Run 'bug fixer status' anytime for this dashboard.
 ═══════════════════════════════════════════════════════════════
 ```
+
+## Trigger Reference
+
+> The `description` frontmatter is intentionally lean — it is loaded into every
+> session and is what selects this skill. This section is the exhaustive
+> vocabulary catalogue; it is read only *after* the skill is invoked, so it
+> carries no per-session cost and is never truncated. Use it to confirm scope
+> and to recognise the full range of phrasings this skill covers.
+
+- **Status / dashboard**: "bug fixer", "bug fixer status", "what's the bug
+  fixer doing", "show me the triage", "what needs my attention", "morning
+  briefing", "fix bugs", "run bug fixer", "what PRs are open", "stale claims",
+  "health check", "milestone progress".
+
+- **Issue management**: "file a plugin issue", "report a bug-fixer bug",
+  "bug-fixer defect", "plugin bug", "raise a plugin issue", "file a GitHub
+  issue against the plugin", "misclassification", "false positive",
+  "safe_ingest bug", "pre_tool_gate bug", "triage bug", "tick crash",
+  "orphaned claim", "sidecar didn't fire", "issue template",
+  "P1-blocker", "P2-correctness", "P3-docs-dx", "found-in:", "backfill",
+  "component:triage", "component:tick", "component:safe-ingest".
+  → Read `references/issue-management.md` for the full process.
+
+- **Contributing & proposals**: "contribute to the plugin", "improve the bug
+  fixer", "submit a fix", "open a pull request", "propose a feature", "plugin
+  enhancement", "suggest an improvement", "new skill", "new sidecar",
+  "contribution protocol", "how do I contribute", "PR mechanics",
+  "branch naming", "test requirements", "co-update duty", "protected files",
+  "skill co-update".
+  → Read `references/contribution-protocol.md` for the full process.
