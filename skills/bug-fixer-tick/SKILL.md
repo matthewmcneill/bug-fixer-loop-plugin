@@ -146,13 +146,29 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
    ```
    *(where `<slug>` is a kebab-case version of the issue title, max 40 chars)*
 
-7. **Understand the Issue:** Read the issue body and any `[ISSUE-REVIEW]` execution contract comments. Read the project's spec file (`spec_file_path`) for relevant sections. Identify the exact files to modify.
+7. **Understand the Issue:** Read the issue body and all comments. Look for:
+   - **`[BUG-FIXER-TRIAGE]` analysis comments** — the triager posts these with its
+     classification rationale, scope estimate, files likely affected, and checks
+     already performed (exclusion zone, PA memory, design docs). Use these findings
+     as a head start: adopt the file list as your starting point and note which
+     design sources were already consulted.
+   - **`[ISSUE-REVIEW]` execution contract comments** — additional context from
+     issue reviewers.
+   - Read the project's spec file (`spec_file_path`) for relevant sections.
+   - Identify the exact files to modify (refine the triager's estimate if needed).
 
 ### Step 7.5: Architectural Design Review
 
 Before implementing the fix, review the design context for the affected module(s).
 This step discovers available design sources dynamically — not all repos have the
 same documentation structure.
+
+> **Triage acceleration:** If a `[BUG-FIXER-TRIAGE]` comment exists on this issue,
+> check its **Checks performed** section. Where the triager reports a source was
+> already consulted with no conflicts found, you may do a verification pass (confirm
+> the finding) rather than a full deep read. This saves significant tokens on issues
+> where the triager already did thorough analysis. You MUST still read the spec
+> (7.5.1) in full — the spec is the primary reference and is always authoritative.
 
 **7.5.1 — Read the spec.** Read `spec_file_path` (from config) and extract sections
 relevant to the affected module(s). This is the primary design reference and is

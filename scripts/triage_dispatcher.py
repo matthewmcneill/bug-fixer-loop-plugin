@@ -101,6 +101,7 @@ log(f"Checking {TARGET_REPO} for untriaged issues")
 
 r = run([sys.executable, str(SAFE_INGEST), "issue-list",
          "--repo", TARGET_REPO, "--state", "open",
+         "--limit", "200",
          "--json", "number,title,labels"])
 
 try:
@@ -112,15 +113,20 @@ except json.JSONDecodeError:
 # Issues with any of these labels are already handled — skip them
 SKIP_LABELS = CLASSIFICATION_LABELS | {
     "status:in-progress",
-    "status:awaiting-review",
 }
 
 # Find issues missing ALL classification/status labels
 untriaged = []
 for issue in issues:
     label_names = {l.get("name", "") for l in issue.get("labels", [])}
-    if not label_names & SKIP_LABELS:
-        untriaged.append(issue)
+    # Always skip if a classification label or status:in-progress is present
+    if label_names & SKIP_LABELS:
+        continue
+    # Skip status:awaiting-review ONLY if a classification label is also present
+    # (if classification label was removed, re-triage is needed)
+    if "status:awaiting-review" in label_names and label_names & CLASSIFICATION_LABELS:
+        continue
+    untriaged.append(issue)
 
 if not untriaged:
     log("No untriaged issues. Exiting.")
