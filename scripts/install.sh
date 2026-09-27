@@ -221,7 +221,7 @@ python3 - <<EOF
 import json
 from pathlib import Path
 
-plugin_hooks_file = Path("${PLUGIN_DIR}/hooks.json")
+plugin_hooks_file = Path("${PLUGIN_DIR}/hooks.json.template")
 plugin_dir = "${PLUGIN_DIR}"
 
 with open(plugin_hooks_file) as f:
@@ -338,6 +338,27 @@ GITIGNORE_EOF
 else
   echo "    - Already exists: ${GITIGNORE}"
 fi
+
+
+# ---------------------------------------------------------------------------
+# Step 6: Enable the plugin
+# ---------------------------------------------------------------------------
+# The submodule ships with "disabled": true in plugin.json to prevent
+# Antigravity from auto-loading unresolved templates before install.sh runs.
+# Write a workspace-scoped plugin.json override that enables it.
+echo ""
+echo "--> Step 6: Enabling plugin..."
+
+PLUGIN_OVERRIDE="${WORKSPACE_DIR}/plugin.json"
+cat > "${PLUGIN_OVERRIDE}" <<PLUGINJSON
+{
+  "name": "bug-fixer-loop",
+  "version": "0.1.0",
+  "disabled": false,
+  "description": "Autonomous bug fixer loop — installed and configured for ${TARGET_REPO}."
+}
+PLUGINJSON
+echo "    - Written: ${PLUGIN_OVERRIDE}"
 
 
 # ---------------------------------------------------------------------------
