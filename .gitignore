@@ -7,3 +7,8 @@ __pycache__/
 dist/
 build/
 .env
+
+# Runtime / instance-specific files (never commit to the plugin repo)
+*_triage_preview.json
+*_tick_preview.json
+*.workspace.json
