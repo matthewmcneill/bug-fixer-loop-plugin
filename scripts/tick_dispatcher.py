@@ -68,10 +68,17 @@ AGENTAPI_DIR = Path.home() / ".gemini" / "antigravity" / "bin"
 if AGENTAPI_DIR.is_dir():
     os.environ["PATH"] = str(AGENTAPI_DIR) + os.pathsep + os.environ.get("PATH", "")
 
-# Workspace config — the ONLY config location (plugin root is immutable)
-WORKSPACE_CONFIG = PLUGIN_DIR / "../../bug-fixer-loop-workspace/config.json"
+# Workspace config resolution:
+# 1. BUG_FIXER_CONFIG env var (set by sidecar stubs — absolute, most reliable)
+# 2. Relative path from plugin dir: ../bug-fixer-loop-workspace/config.json
+_config_env = os.environ.get("BUG_FIXER_CONFIG", "")
+_config_relative = PLUGIN_DIR / "../bug-fixer-loop-workspace/config.json"
 
-if not WORKSPACE_CONFIG.exists():
+if _config_env and Path(_config_env).exists():
+    WORKSPACE_CONFIG = Path(_config_env)
+elif _config_relative.exists():
+    WORKSPACE_CONFIG = _config_relative
+else:
     log("No workspace config found. Run install.sh first. Exiting.")
     sys.exit(0)
 
