@@ -57,6 +57,14 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
 
       **The test:** Can each individual change be described as "apply pattern X to occurrence Y" without weighing alternatives? If yes → T1.
 
+      > **⚠️ Depth check — read the body, not just the title.** This override applies to the **actual change required**, not the issue title. Before applying this override, read the full issue body and comments to verify the change is genuinely mechanical. Common false matches:
+      > - Title says "remove X from config" but the config entry existed for a reason that needs investigation (e.g. a test was ignored because it fails — un-ignoring means fixing the test)
+      > - Title says "add skeleton/template" but the body reveals design decisions about scope, API shape, or what to include
+      > - Title says "rename X" but the body reveals cross-project or cross-module scope with dependency implications
+      > - Title says "make X configurable" but the body reveals new runtime behaviour (rotation logic, preflight checks, fallback strategies)
+      >
+      > If the body reveals complexity beyond the surface description, **do not apply this override** — continue to steps 4f/4g for proper classification.
+
    f. **Size / Scope check:** Classify as `project-candidate` (T4) ONLY if ALL of these are true:
       - Spans 3+ modules/files
       - Requires architectural or design decisions
@@ -77,7 +85,7 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
                   "Module::tick() polls SiblingModule::isReady() — should use EventBus"
       Example NOT T2: "Document why setInsecure() is used" (just adding a comment)
 
-      > **Public API is not an automatic T2 trigger.** A change to a public API signature is T2 ONLY if it changes the **semantic contract** — behaviour, error handling, thread safety, or ownership semantics. Mechanical signature changes that preserve semantics (type substitution like `std::function` → typed callback, adding `noexcept`, `const` qualification) are T1 via step 4e, even if they touch public headers. The question is "does the *meaning* change?", not "is the symbol public?".
+      > **Public API changes in a library/framework ARE T2.** If the target repo is consumed by downstream projects, any change to a public API signature — even a mechanically simple one (e.g. `std::function` → typed callback, parameter type changes) — is T2 because downstream callers compile against those headers and will break. The small-scope override (step 4e) applies only to changes that are **internal** to the repo: implementation files, private methods, build scripts, docs, config. If it's in a public header that downstream code `#include`s, it needs approach review.
 
    g.1. **PA memory-assisted triage (conditional).** If the issue reached this step
       (i.e. it is NOT a small-scope override from step 4e), and you are considering
