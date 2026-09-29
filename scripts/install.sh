@@ -284,6 +284,17 @@ else
 
   CURRENT_PATH="${PATH}"
 
+  # Capture the project ID — required by agentapi when workspace_uris are set.
+  # The sidecar's workspace_uris cause Antigravity to create a project_env_config,
+  # which requires a project_id or the API returns:
+  #   "project_id is required when providing project_env_config"
+  CURRENT_PROJECT_ID="${ANTIGRAVITY_PROJECT_ID:-}"
+  if [[ -z "${CURRENT_PROJECT_ID}" ]]; then
+    echo "    ⚠  ANTIGRAVITY_PROJECT_ID not set — sidecar stubs will need manual update."
+    echo "       Re-run install.sh from within an Antigravity session to capture the project ID."
+    CURRENT_PROJECT_ID="MISSING_RUN_INSTALL_FROM_ANTIGRAVITY"
+  fi
+
   # Derive repo slug for sidecar directory namespacing (e.g. "esp32-app-foundation")
   REPO_SLUG="${REPO_NAME}"
 
@@ -307,6 +318,7 @@ else
           -e "s|<trajectory_review_cron>|${TRAJECTORY_CRON}|g" \
           -e "s|<path>|${CURRENT_PATH}|g" \
           -e "s|<config_path>|${WORKSPACE_CONFIG}|g" \
+          -e "s|<project_id>|${CURRENT_PROJECT_ID}|g" \
           "${sidecar_dir}/sidecar.json" > "${dest_dir}/sidecar.json"
 
       echo "      -> ${dest_dir}/sidecar.json"

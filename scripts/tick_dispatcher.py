@@ -37,8 +37,10 @@ def gh(*args) -> subprocess.CompletedProcess:
 
 
 if not os.environ.get("ANTIGRAVITY_PROJECT_ID"):
-    log("WARNING: ANTIGRAVITY_PROJECT_ID not set — agentapi may fail. "
-        "Ensure the sidecar's env field includes it.")
+    log("FATAL: ANTIGRAVITY_PROJECT_ID not set — agentapi will fail with "
+        "'project_id is required when providing project_env_config'. "
+        "Re-run install.sh from within an Antigravity session.")
+    sys.exit(1)
 
 
 def pid_alive(pid: int) -> bool:
@@ -158,7 +160,7 @@ if CLAIMS_DIR.exists():
             log(f"Issue #{issue_num} — PID dead but transcript active {age}s ago.")
             # Check if PR was already opened (clean exit)
             r = gh("pr", "list", "--repo", TARGET_REPO,
-                   "--search", f"Resolves #{issue_num}",
+                   "--search", f"#{issue_num}",
                    "--json", "number", "--jq", "length")
             if r.stdout.strip() not in ("", "0"):
                 log(f"Issue #{issue_num} — PR exists, cleaning up lock.")
@@ -271,10 +273,10 @@ except json.JSONDecodeError:
     log(f"Failed to parse issue list: {r.stderr}")
     sys.exit(0)
 
-# Filter out issues already in-progress
+# Filter out issues already in-progress or awaiting review
 eligible = [
     i for i in issues
-    if not any(l.get("name") == "status:in-progress" for l in i.get("labels", []))
+    if not any(l.get("name") in ("status:in-progress", "status:awaiting-review") for l in i.get("labels", []))
 ]
 
 if not eligible:

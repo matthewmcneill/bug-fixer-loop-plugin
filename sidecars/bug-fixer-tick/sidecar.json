@@ -14,6 +14,7 @@
   },
   "env": {
     "PATH": "<path>",
-    "BUG_FIXER_CONFIG": "<config_path>"
+    "BUG_FIXER_CONFIG": "<config_path>",
+    "ANTIGRAVITY_PROJECT_ID": "<project_id>"
   }
 }

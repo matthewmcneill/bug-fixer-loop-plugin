@@ -35,6 +35,17 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
 SCRIPT_DIR = Path(__file__).resolve().parent
 PLUGIN_DIR = SCRIPT_DIR.parent
 
+# Ensure agentapi is on PATH — sidecar scheduler may not inherit user's shell PATH
+AGENTAPI_DIR = Path.home() / ".gemini" / "antigravity" / "bin"
+if AGENTAPI_DIR.is_dir():
+    os.environ["PATH"] = str(AGENTAPI_DIR) + os.pathsep + os.environ.get("PATH", "")
+
+if not os.environ.get("ANTIGRAVITY_PROJECT_ID"):
+    log("FATAL: ANTIGRAVITY_PROJECT_ID not set — agentapi will fail with "
+        "'project_id is required when providing project_env_config'. "
+        "Re-run install.sh from within an Antigravity session.")
+    sys.exit(1)
+
 # Workspace config resolution:
 # 1. BUG_FIXER_CONFIG env var (set by sidecar stubs — absolute, most reliable)
 # 2. Relative path from plugin dir: ../bug-fixer-loop-workspace/config.json
