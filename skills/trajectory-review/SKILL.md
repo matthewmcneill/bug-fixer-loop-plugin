@@ -34,3 +34,7 @@ This skill performs a daily review of the bug-fixer's performance to catch recur
 
 4. **Output Diagnostic Report:** 
    Output a diagnostic report as a structured summary. If critical patterns are detected (e.g., >3 consecutive failures, stale claims), create a GitHub issue with the label `bug-fixer-health` describing the pattern so the maintainer is alerted.
+
+## Workspace
+
+- **Temporary files**: Use the workspace tmp directory path provided by the dispatcher for all scratch files and intermediate output. Stale files (>12h) are purged automatically on each daily run.

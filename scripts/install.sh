@@ -345,6 +345,7 @@ cooldown.json
 failure_count
 triage_cooldown.json
 triage_failure_count
+tmp/
 GITIGNORE_EOF
   echo "    - Created: ${GITIGNORE}"
 else

@@ -69,6 +69,27 @@ TARGET_REPO = config["target_repo"]
 SKILL_PATH = PLUGIN_DIR / "skills/trajectory-review/SKILL.md"
 SAFE_INGEST = PLUGIN_DIR / "scripts/safe_ingest.py"
 
+# Workspace tmp directory — scratch space for spawned review conversations
+WORKSPACE_TMP_DIR = CONFIG_FILE.parent / "tmp"
+WORKSPACE_TMP_DIR.mkdir(parents=True, exist_ok=True)
+
+# Purge stale tmp files (>12h old)
+_tmp_cutoff = datetime.now().timestamp() - 43200  # 12 hours
+_purged = 0
+for _f in WORKSPACE_TMP_DIR.iterdir():
+    try:
+        if _f.stat().st_mtime < _tmp_cutoff:
+            if _f.is_file():
+                _f.unlink()
+            elif _f.is_dir():
+                import shutil
+                shutil.rmtree(_f, ignore_errors=True)
+            _purged += 1
+    except OSError:
+        continue
+if _purged:
+    log(f"Purged {_purged} stale tmp file(s) older than 12h.")
+
 log(f"Checking for recent bug-fixer activity in {TARGET_REPO}")
 
 
@@ -155,6 +176,7 @@ prompt = f"""Run the trajectory-review skill for repository {TARGET_REPO}.
 Read the skill at: {SKILL_PATH}
 Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.
 Configuration is at: {CONFIG_FILE}
+Workspace tmp directory for scratch files: {WORKSPACE_TMP_DIR}
 
 Activity summary for the last 24 hours:
 {context_summary}
