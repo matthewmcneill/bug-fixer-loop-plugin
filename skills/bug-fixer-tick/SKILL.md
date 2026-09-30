@@ -265,7 +265,7 @@ Where `<sources consulted>` is one of:
       ```
     - Create the PR:
       ```bash
-      gh pr create --repo <target_repo> --base main --title "<pr_prefix> Fix #<number>: <title>" --body "<body>"
+      gh pr create --draft --repo <target_repo> --base main --title "<pr_prefix> Fix #<number>: <title>" --body "<body>"
       ```
       The PR body must include:
       - **Closing keyword:** `Closes #<number>` — this auto-closes the issue when the PR merges
@@ -277,6 +277,7 @@ Where `<sources consulted>` is one of:
       - **Platform-gap warning** (if applicable): If the fix moves work between execution contexts (e.g. main loop ↔ event callback, timer, ISR, or background task), include: `⚠️ This fix changes execution context. Native tests cannot validate stack limits or async dispatch timing. Hardware testing recommended.`
       - Full test output
       - Leak scan result
+      - The agent MUST include the following HTML comment at the very end of the body: `<!-- agy_dev_conv_id: <this_conversation_id> -->`. Note: `<this_conversation_id>` must be replaced by its actual Conversation ID.
     - Apply `bug-fixer` label to the PR:
       ```bash
       gh pr edit <pr_number> --repo <target_repo> --add-label bug-fixer

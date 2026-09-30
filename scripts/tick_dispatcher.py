@@ -14,6 +14,7 @@ Architecture:
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -257,6 +258,89 @@ if active_others >= MAX_CONCURRENT:
 available_slots = MAX_CONCURRENT - active_others
 log(f"{available_slots} slot(s) available ({active_others} active, {reattach_count} reattached).")
 
+
+# ---------------------------------------------------------------------------
+# Step 2.5: Handle needs-iteration PRs
+# ---------------------------------------------------------------------------
+
+r_prs = gh("pr", "list", "--repo", TARGET_REPO,
+           "--label", "bug-fixer,needs-iteration", "--state", "open",
+           "--json", "number,body,url")
+
+if r_prs.returncode == 0:
+    try:
+        needs_iteration_prs = json.loads(r_prs.stdout)
+    except json.JSONDecodeError:
+        log(f"Failed to parse needs-iteration PRs: {r_prs.stderr}")
+        needs_iteration_prs = []
+
+    for pr in needs_iteration_prs:
+        pr_num = pr["number"]
+        pr_body = pr.get("body", "")
+        
+        # Fetch the latest architect review comments
+        r_comments = gh("pr", "view", str(pr_num), "--repo", TARGET_REPO, "--comments", "--json", "comments")
+        comments_text = ""
+        if r_comments.returncode == 0:
+            try:
+                comments_data = json.loads(r_comments.stdout)
+                if comments_data.get("comments"):
+                    comments_text = comments_data["comments"][-1].get("body", "")
+            except Exception as e:
+                log(f"Failed to parse comments for PR #{pr_num}: {e}")
+
+        # Fetch the PR diff for context (needed if we must spawn fresh)
+        diff_r = gh("pr", "diff", str(pr_num), "--repo", TARGET_REPO)
+        pr_diff = diff_r.stdout if diff_r.returncode == 0 else "(diff unavailable)"
+
+        prompt = (f"The Architect has reviewed your PR #{pr_num} in repository {TARGET_REPO} "
+                  f"and requested changes. Please fix the issues and push to the same PR branch.\n\n"
+                  f"Read the full tick skill instructions at: {SKILL_PATH}\n"
+                  f"Read config from: {CONFIG_FILE}\n"
+                  f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
+                  f"Work in: {REPO_DIR}\n\n"
+                  f"Architect comments:\n{comments_text}")
+
+        # Try to resume the existing developer conversation
+        dev_conv_id_match = re.search(r"<!-- agy_dev_conv_id:\s*([a-zA-Z0-9-]+)\s*-->", pr_body)
+        resumed = False
+
+        if dev_conv_id_match:
+            dev_conv_id = dev_conv_id_match.group(1)
+            log(f"Resuming developer conversation {dev_conv_id} for PR #{pr_num} iteration.")
+            msg_r = run(["agentapi", "message", "--conversation-id", dev_conv_id, prompt])
+            if msg_r.returncode == 0:
+                resumed = True
+            else:
+                log(f"Failed to resume conversation {dev_conv_id} (expired/deleted?). "
+                    f"Falling back to new conversation. Error: {msg_r.stderr or msg_r.stdout}")
+        else:
+            log(f"PR #{pr_num} has needs-iteration but no agy_dev_conv_id. Spawning fresh developer.")
+
+        # Fallback: spawn a fresh developer agent with full context
+        if not resumed:
+            fresh_prompt = (f"You are the bug-fixer agent. The Architect has reviewed PR #{pr_num} "
+                           f"in repository {TARGET_REPO} and requested changes.\n\n"
+                           f"Read the full tick skill instructions at: {SKILL_PATH}\n"
+                           f"Read config from: {CONFIG_FILE}\n"
+                           f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
+                           f"Work in: {REPO_DIR}\n\n"
+                           f"Check out the PR branch, apply the fixes requested below, run tests, "
+                           f"and push to the same branch.\n\n"
+                           f"Architect comments:\n{comments_text}\n\n"
+                           f"Current PR diff for context:\n```diff\n{pr_diff}\n```")
+            title = f"Fix PR #{pr_num} iteration (architect feedback)"
+            new_r = run(["agentapi", "new-conversation", f"--title={title}", fresh_prompt])
+            if new_r.returncode == 0:
+                resumed = True
+                log(f"Spawned fresh developer conversation for PR #{pr_num} iteration.")
+            else:
+                log(f"Failed to spawn fresh conversation for PR #{pr_num}: {new_r.stderr or new_r.stdout}")
+
+        if resumed:
+            gh("pr", "edit", str(pr_num), "--repo", TARGET_REPO, "--remove-label", "needs-iteration")
+            active_others += 1  # Occupies a slot since the developer is running
+            available_slots = MAX_CONCURRENT - active_others
 
 # ---------------------------------------------------------------------------
 # Step 3: Find eligible issues
