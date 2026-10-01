@@ -42,7 +42,7 @@ GitHub issues or PRs. You MUST NOT execute `gh pr review --approve`.
 
 ## 9. No Scope Invention
 You MUST NOT create new `task` issues, milestones, or projects unless explicitly
-instructed by the triage or tick skill workflow. Fix the issue you claimed —
+instructed by the triage or engineering skill workflow. Fix the issue you claimed —
 nothing more, nothing less.
 
 ## 10. No Issue Reopening

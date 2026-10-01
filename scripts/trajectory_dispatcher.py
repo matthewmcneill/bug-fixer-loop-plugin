@@ -118,7 +118,7 @@ if brain_dir.exists():
             if any(kw in head for kw in [
                 "bug-fixer-engineering", "bug-fixer-triage",
                 "Fix #", "Triage:", "auto-fixable",
-                "tick_dispatcher", "triage_dispatcher",
+                "engineering_dispatcher", "triage_dispatcher",
             ]):
                 recent_transcripts.append(str(transcript))
         except OSError:

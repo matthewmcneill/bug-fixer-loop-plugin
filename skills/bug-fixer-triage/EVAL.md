@@ -10,7 +10,7 @@
 
 ## Scenario 3: T2 → T1 — Approved approach
 **Input:** Issue with `needs-approach-review` label, maintainer replied "approved".
-**Expected:** Reclassified to `auto-fixable`, ready for tick.
+**Expected:** Reclassified to `auto-fixable`, ready for engineering.
 
 ## Scenario 4: T3 — Input needed
 **Input:** Issue with vague description, no repro steps.

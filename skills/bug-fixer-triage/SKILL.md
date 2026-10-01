@@ -125,7 +125,7 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
    i. **Post triage analysis comment:** For every issue classified in this run,
       post a structured `[BUG-FIXER-TRIAGE]` comment capturing the reasoning
       and findings. This preserves the triager's analysis for downstream
-      consumers (the tick skill, the status dashboard, and the maintainer) and
+      consumers (the engineering skill, the status dashboard, and the maintainer) and
       creates an audit trail for the classification decision.
 
       **T2 and T3 already post structured comments above — skip them here.**
@@ -214,8 +214,8 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
    - If the issue belongs to a milestone, note it in the classification summary: `Milestone: <name> (due: <date>)`.
    - If the issue has no milestone but clearly relates to an open milestone's theme, suggest the milestone in the classification comment.
 
-7. **Priority Ordering for Tick (Documented in Output):**
-   When summarizing the output for the tick skill, output the issues in this priority order (assuming `milestone_priority_boost` is true):
+7. **Priority Ordering for Engineering (Documented in Output):**
+   When summarizing the output for the engineering skill, output the issues in this priority order (assuming `milestone_priority_boost` is true):
    1. Issues in `active_milestone` (by priority label, then issue number)
    2. Issues in other milestones with due dates (by due date ascending, then priority)
    3. Issues without milestones (by priority label, then issue number)
@@ -227,7 +227,7 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
 ### Step 9.5: Bundle Affinity Grouping
 
 After all issues are classified, group related T1 issues into **batches** so
-the tick skill can implement them as single PRs. This reduces review overhead
+the engineering skill can implement them as single PRs. This reduces review overhead
 when an audit or sweep produces many small, thematically related issues.
 
 **When to bundle:** Only group issues that meet ALL of these criteria:

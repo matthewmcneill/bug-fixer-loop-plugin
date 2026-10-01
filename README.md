@@ -64,22 +64,25 @@ flowchart TD
         PreToolGate["pre_tool_gate.py\n(PreToolUse Invariant Enforcement)"]
     end
 
-    subgraph Loops ["Bug Fixer 3-Loop Engine"]
-        TriageSidecar["Loop 1: Triage Sidecar\n(Hourly cron: 0 * * * *)\nClassifies auto-fixable vs human-required"]
-        TickSidecar["Loop 2: Tick / Fixer Sidecar\n(Every 2h: 30 */2 * * *)\nClaims issue, branches, fixes, tests, PRs"]
-        ReviewSidecar["Loop 3: Trajectory Review Sidecar\n(Daily: 0 18 * * *)\nAudits test quality & trajectory health"]
+    subgraph Loops ["Bug Fixer 4-Loop Engine"]
+        TriageSidecar["Triage Loop\n(Hourly cron: 0 * * * *)\nClassifies auto-fixable vs human-required"]
+        EngineeringSidecar["Engineering Loop\n(Every 10 min: */10 * * * *)\nClaims issue, branches, fixes, tests, PRs"]
+        PRReviewSidecar["PR Review Loop\n(Every 15 min)\nAdversarial architect review of draft PRs"]
+        TrajectoryReviewSidecar["Trajectory Review Loop\n(Daily: 0 18 * * *)\nAudits test quality & trajectory health"]
     end
 
     Issues --> SafeIngest
     SafeIngest --> TriageSidecar
     TriageSidecar -- "Labels auto-fixable" --> Issues
     TriageSidecar -- "Labels human-required (e.g. overlap)" --> Issues
-    SafeIngest --> TickSidecar
-    TickSidecar --> PreToolGate
+    SafeIngest --> EngineeringSidecar
+    EngineeringSidecar --> PreToolGate
     PreToolGate -- "Verified Clean & Tested" --> PRs
+    PRs --> PRReviewSidecar
+    PRReviewSidecar -- "Approves or requests iteration" --> EngineeringSidecar
     PRs --> HumanReview
     HumanReview -- "Merges PR" --> GitHub
-    ReviewSidecar -. "Audits fix quality" .-> TickSidecar
+    TrajectoryReviewSidecar -. "Audits fix quality" .-> EngineeringSidecar
 ```
 
 ---
@@ -226,7 +229,7 @@ Configuration is managed in `config.json` at the root of the plugin or target re
 | `pr_prefix` | `string` | Title prefix for created pull requests | `"[BugFixer]"` |
 | `branch_prefix` | `string` | Git branch name prefix for fix branches | `"fix"` |
 | `triage_cron` | `string` | Cron schedule expression for triage sidecar | `"0 * * * *"` |
-| `tick_cron` | `string` | Cron schedule expression for tick fixer sidecar | `"30 */2 * * *"` |
+| `engineering_cron` | `string` | Cron schedule expression for engineering fixer sidecar | `"30 */2 * * *"` |
 | `trajectory_review_cron` | `string` | Cron schedule expression for review sidecar | `"0 18 * * *"` |
 
 ---
@@ -255,7 +258,7 @@ Autonomous agents running this plugin must strictly adhere to the 12 invariants 
 To prevent conflicts between autonomous background agent loops and human developers:
 
 - **Active PR Exclusion Zone:** Triage actively inspects the maintainer's open PRs via GitHub API. If an issue requires modifying files touched by an active maintainer PR, the issue is skipped or labeled `human-required`.
-- **Dedicated Worktree Operation:** The tick fixer agent operates within a dedicated git worktree, ensuring the maintainer's active working tree, index, and untracked files are untouched.
+- **Dedicated Worktree Operation:** The engineering agent operates within a dedicated git worktree, ensuring the maintainer's active working tree, index, and untracked files are untouched.
 
 ---
 

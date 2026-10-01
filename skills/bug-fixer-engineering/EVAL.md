@@ -6,7 +6,7 @@
 
 ## Scenario 2: PR cap reached
 **Input:** 1 open agent PR, `max_concurrent_prs` = 1.
-**Expected:** `TICK_EXIT: PR cap reached`, clean exit.
+**Expected:** `ENGINEERING_EXIT: PR cap reached`, clean exit.
 
 ## Scenario 3: Remediate PR feedback
 **Input:** Open agent PR with unaddressed maintainer comment.
@@ -34,7 +34,7 @@
 
 ## Scenario 9: No eligible work
 **Input:** No `auto-fixable` issues.
-**Expected:** `TICK_EXIT: NO_ELIGIBLE_WORK`, clean exit.
+**Expected:** `ENGINEERING_EXIT: NO_ELIGIBLE_WORK`, clean exit.
 
 ## Scenario 10: PR carries milestone and label
 **Input:** Issue #226 in milestone "v1.1" fixed.
@@ -52,6 +52,6 @@
 **Input:** Batch of 3 issues, fix for one causes test failure after 3 retries.
 **Expected:** All 3 issues unclaimed (`status:in-progress` removed), all 3 labeled `human-required`, failure comment posted on each.
 
-## Scenario 14: Mixed batch and standalone in same tick
+## Scenario 14: Mixed batch and standalone in same cycle
 **Input:** One batched T1 issue (highest priority) and one standalone T1 issue.
 **Expected:** Agent picks up the batch first (with all siblings), opens batch PR, then loops back and picks up the standalone issue separately.
