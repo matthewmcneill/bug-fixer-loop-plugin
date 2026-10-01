@@ -129,7 +129,7 @@ for r_item in recovered:
 # Polling Logic
 # ---------------------------------------------------------------------------
 
-r = gh("pr", "list", "--repo", TARGET_REPO, "--label", "bug-fixer",
+r = gh("pr", "list", "--repo", TARGET_REPO, "--label", "bug-fixer:engineer:pr",
        "--state", "open", "--draft",
        "--json", "number,title,labels,body")
 
@@ -162,7 +162,7 @@ spawned = 0
 
 for pr in prs:
     labels = [label["name"] for label in pr.get("labels", [])]
-    if "needs-iteration" in labels or "architect-approved" in labels:
+    if "bug-fixer:engineer:needs-iteration" in labels or "bug-fixer:architect:approved" in labels:
         continue
 
     number = pr["number"]
@@ -190,9 +190,9 @@ for pr in prs:
 
     if review_count >= MAX_REVIEW_ROUNDS:
         log(f"PR #{number} has reached {review_count} architect review rounds "
-            f"(max {MAX_REVIEW_ROUNDS}). Adding needs-human-intervention label.")
+            f"(max {MAX_REVIEW_ROUNDS}). Adding bug-fixer:human:needs-intervention label.")
         gh("pr", "edit", str(number), "--repo", TARGET_REPO,
-           "--add-label", "needs-human-intervention")
+           "--add-label", "bug-fixer:human:needs-intervention")
         continue
 
     log(f"Processing PR #{number}: {title} (review round {review_count + 1}/{MAX_REVIEW_ROUNDS})")

@@ -20,11 +20,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 CLASSIFICATION_LABELS = {
-    "auto-fixable",
-    "needs-approach-review",
-    "input-needed",
-    "project-candidate",
-    "human-required",
+    "bug-fixer:engineer:needs-fix",
+    "bug-fixer:human:needs-approach-review",
+    "bug-fixer:human:input-needed",
+    "bug-fixer:human:project-candidate",
+    "bug-fixer:human:required",
 }
 
 
@@ -118,19 +118,19 @@ except json.JSONDecodeError:
 
 # Issues with any of these labels are already handled — skip them
 SKIP_LABELS = CLASSIFICATION_LABELS | {
-    "status:in-progress",
+    "bug-fixer:engineer:in-progress",
 }
 
 # Find issues missing ALL classification/status labels
 untriaged = []
 for issue in issues:
     label_names = {l.get("name", "") for l in issue.get("labels", [])}
-    # Always skip if a classification label or status:in-progress is present
+    # Always skip if a classification label or bug-fixer:engineer:in-progress is present
     if label_names & SKIP_LABELS:
         continue
-    # Skip status:awaiting-review ONLY if a classification label is also present
+    # Skip bug-fixer:architect:awaiting-review ONLY if a classification label is also present
     # (if classification label was removed, re-triage is needed)
-    if "status:awaiting-review" in label_names and label_names & CLASSIFICATION_LABELS:
+    if "bug-fixer:architect:awaiting-review" in label_names and label_names & CLASSIFICATION_LABELS:
         continue
     untriaged.append(issue)
 

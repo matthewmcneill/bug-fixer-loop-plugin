@@ -350,17 +350,17 @@ def _check_success(dispatch: dict, target_repo: str) -> bool:
         # Check if issue transitioned to awaiting-review
         r = _gh("issue", "view", str(issue_num), "--repo", target_repo,
                 "--json", "labels", "--jq",
-                '[.labels[].name] | any(. == "status:awaiting-review")')
+                '[.labels[].name] | any(. == "bug-fixer:architect:awaiting-review")')
         return r.stdout.strip() == "true"
 
     elif dtype == "pr_iteration":
         pr_num = dispatch.get("pr_number")
         if not pr_num:
             return False
-        # Check if needs-iteration label is gone (agent removed it after pushing)
+        # Check if bug-fixer:engineer:needs-iteration label is gone (agent removed it after pushing)
         r = _gh("pr", "view", str(pr_num), "--repo", target_repo,
                 "--json", "labels", "--jq",
-                '[.labels[].name] | any(. == "needs-iteration")')
+                '[.labels[].name] | any(. == "bug-fixer:engineer:needs-iteration")')
         return r.stdout.strip() == "false"
 
     elif dtype == "architect_review":
@@ -450,7 +450,7 @@ def _recover(dispatch: dict, dispatches_dir: Path, target_repo: str,
                             conv_id, context, dispatch, log_fn)
             # Clean up: unclaim the issue
             _gh("issue", "edit", str(issue_num), "--repo", target_repo,
-                "--remove-label", "status:in-progress")
+                "--remove-label", "bug-fixer:engineer:in-progress")
             # Delete lock file
             if claims_dir:
                 lock = claims_dir / f"{issue_num}.lock"
@@ -462,10 +462,10 @@ def _recover(dispatch: dict, dispatches_dir: Path, target_repo: str,
         if pr_num:
             post_state_dump(target_repo, "pr", pr_num,
                             conv_id, context, dispatch, log_fn)
-            # needs-iteration label stays — it was never removed
+            # bug-fixer:engineer:needs-iteration label stays — it was never removed
             # This means the next tick will re-dispatch (with the state dump
             # visible in the PR comments for context)
-            summary["action"] = f"state dumped to PR #{pr_num}, needs-iteration preserved"
+            summary["action"] = f"state dumped to PR #{pr_num}, bug-fixer:engineer:needs-iteration preserved"
 
     elif dtype == "architect_review":
         pr_num = dispatch.get("pr_number")
