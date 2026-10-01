@@ -1,11 +1,15 @@
 """Unit tests for dispatcher model tier selection and configuration."""
 
-import ast
-import json
-import os
 import re
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from scripts.engineering_dispatcher import (
+    COMPLEXITY_MODEL_MAP,
+    get_default_engineering_model,
+    get_model_for_issue,
+)
 
 
 class TestDispatcherModels(unittest.TestCase):
@@ -58,71 +62,56 @@ class TestDispatcherModels(unittest.TestCase):
                 )
 
     def test_engineering_dispatcher_get_model_for_issue_mapping(self):
-        """Test complexity mapping and fallback in engineering_dispatcher."""
-        # Read engineering_dispatcher.py and extract COMPLEXITY_MODEL_MAP and get_model_for_issue
-        script_path = self.scripts_dir / "engineering_dispatcher.py"
-        tree = ast.parse(script_path.read_text())
+        """Test complexity mapping and fallback in engineering_dispatcher using unittest.mock."""
+        self.assertEqual(COMPLEXITY_MODEL_MAP.get("mechanical"), "flash_lite")
+        self.assertEqual(COMPLEXITY_MODEL_MAP.get("standard"), "flash")
+        self.assertEqual(COMPLEXITY_MODEL_MAP.get("architect"), "pro")
 
-        # Extract COMPLEXITY_MODEL_MAP constant
-        complexity_map = None
-        for node in tree.body:
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id == "COMPLEXITY_MODEL_MAP":
-                        complexity_map = ast.literal_eval(node.value)
-        self.assertIsNotNone(complexity_map)
-        self.assertEqual(complexity_map.get("mechanical"), "flash_lite")
-        self.assertEqual(complexity_map.get("standard"), "flash")
-        self.assertEqual(complexity_map.get("architect"), "pro")
-
-        # Compile and execute get_model_for_issue in a controlled namespace
-        def make_resolver(config_dict):
-            ns = {
-                "COMPLEXITY_MODEL_MAP": complexity_map,
-                "config": config_dict,
-            }
-            func_code = None
-            for node in tree.body:
-                if isinstance(node, ast.FunctionDef) and node.name == "get_model_for_issue":
-                    func_code = compile(ast.Module(body=[node], type_ignores=[]), "<ast>", "exec")
-                    break
-            self.assertIsNotNone(func_code)
-            exec(func_code, ns)
-            return ns["get_model_for_issue"]
-
-        # Default config
-        resolver = make_resolver({})
+        # Test complexity label mappings
         self.assertEqual(
-            resolver({"labels": [{"name": "complexity:mechanical"}]}),
+            get_model_for_issue({"labels": [{"name": "complexity:mechanical"}]}),
             "flash_lite",
         )
         self.assertEqual(
-            resolver({"labels": [{"name": "complexity:standard"}]}),
+            get_model_for_issue({"labels": [{"name": "complexity:standard"}]}),
             "flash",
         )
         self.assertEqual(
-            resolver({"labels": [{"name": "complexity:architect"}]}),
+            get_model_for_issue({"labels": [{"name": "complexity:architect"}]}),
             "pro",
         )
-        # No complexity label falls back to default 'pro'
-        self.assertEqual(
-            resolver({"labels": [{"name": "bug"}]}),
-            "pro",
-        )
+
+        # Default fallback (no complexity label, empty config -> 'pro')
+        with patch.dict("scripts.engineering_dispatcher.config", {}, clear=True):
+            self.assertEqual(
+                get_model_for_issue({"labels": [{"name": "bug"}]}),
+                "pro",
+            )
+            self.assertEqual(get_default_engineering_model(), "pro")
 
         # Config with engineering_model override
-        custom_resolver = make_resolver({"engineering_model": "flash_lite"})
-        self.assertEqual(
-            custom_resolver({"labels": [{"name": "bug"}]}),
-            "flash_lite",
-        )
+        with patch.dict(
+            "scripts.engineering_dispatcher.config",
+            {"engineering_model": "flash_lite"},
+            clear=True,
+        ):
+            self.assertEqual(
+                get_model_for_issue({"labels": [{"name": "bug"}]}),
+                "flash_lite",
+            )
+            self.assertEqual(get_default_engineering_model(), "flash_lite")
 
         # Config with legacy tick_model fallback
-        legacy_resolver = make_resolver({"tick_model": "flash"})
-        self.assertEqual(
-            legacy_resolver({"labels": [{"name": "bug"}]}),
-            "flash",
-        )
+        with patch.dict(
+            "scripts.engineering_dispatcher.config",
+            {"tick_model": "flash"},
+            clear=True,
+        ):
+            self.assertEqual(
+                get_model_for_issue({"labels": [{"name": "bug"}]}),
+                "flash",
+            )
+            self.assertEqual(get_default_engineering_model(), "flash")
 
 
 if __name__ == "__main__":

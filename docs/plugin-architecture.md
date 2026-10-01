@@ -500,7 +500,7 @@ Cron fires → Dispatcher runs  → 2 eligible issues  → Spawn 2 conversations
     a. Write claim file to STATE_DIR/claims/<issue_number>.json (atomic lock)
     b. Add "status:in-progress" label to the GitHub issue
     c. Build the skill prompt (read SKILL.md, inject config values)
-    d. Spawn LLM conversation via: agentapi new-conversation --system-prompt <skill> --user-prompt <issue>
+    d. Spawn LLM conversation via: agentapi new-conversation --model=<tier> --title=<title> <prompt>
     e. Capture conversation_id from agentapi stdout
     f. Update claim file with conversation_id
     g. If spawn fails: remove claim file, remove label, log error
