@@ -182,6 +182,10 @@ DEFAULTS = {
     "engineering_cron": "*/10 * * * *",
     "architect_cron": "*/15 * * * *",
     "trajectory_review_cron": "0 18 * * *",
+    "triage_model": "flash",
+    "engineering_model": "pro",
+    "architect_model": "pro",
+    "trajectory_model": "flash",
     "milestone_priority_boost": True,
     "active_milestone": "",
     "additional_design_docs": []

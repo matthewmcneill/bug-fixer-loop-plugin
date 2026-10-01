@@ -35,6 +35,40 @@ def gh(*args) -> subprocess.CompletedProcess:
     return run(["gh", *args])
 
 
+def inject_conv_tag(pr_number: int, tag_name: str, conv_id: str) -> bool:
+    """Inject or update an HTML conversation-ID tag in a PR body.
+
+    Ensures the PR body always has the correct tag, regardless of whether
+    the LLM agent remembered to write it.  Idempotent — safe to call on
+    every dispatch cycle.
+    """
+    try:
+        r = gh("pr", "view", str(pr_number), "--repo", TARGET_REPO,
+               "--json", "body", "--jq", ".body")
+        if r.returncode != 0:
+            log(f"inject_conv_tag: failed to read PR #{pr_number} body: {r.stderr}")
+            return False
+
+        body = r.stdout.rstrip()
+
+        # Remove any existing tag with this name
+        new_body = re.sub(
+            rf'<!--\s*{re.escape(tag_name)}:\s*[a-zA-Z0-9-]+\s*-->\s*',
+            '', body
+        ).rstrip()
+
+        # Append the tag
+        new_body += f"\n<!-- {tag_name}: {conv_id} -->"
+
+        gh("pr", "edit", str(pr_number), "--repo", TARGET_REPO,
+           "--body", new_body)
+        log(f"inject_conv_tag: wrote {tag_name}={conv_id[:8]}... to PR #{pr_number}")
+        return True
+    except Exception as e:
+        log(f"inject_conv_tag: error updating PR #{pr_number}: {e}")
+        return False
+
+
 if not os.environ.get("ANTIGRAVITY_PROJECT_ID"):
     log("FATAL: ANTIGRAVITY_PROJECT_ID not set — agentapi will fail. "
         "Re-run install.sh from within an Antigravity session.")
@@ -76,8 +110,20 @@ SAFE_INGEST = PLUGIN_DIR / "scripts/safe_ingest.py"
 # <repo>/.agents/plugins/bug-fixer-loop-workspace/config.json
 STATE_DIR = CONFIG_FILE.parent
 REPO_DIR = STATE_DIR.parent.parent.parent
+DISPATCHES_DIR = STATE_DIR / "dispatches"
+
+from liveness import record_dispatch, sweep_dispatches
 
 log(f"Polling PRs in {TARGET_REPO}")
+
+# ---------------------------------------------------------------------------
+# Step 0: Sweep previous dispatches for stalled/completed conversations
+# ---------------------------------------------------------------------------
+
+recovered = sweep_dispatches(DISPATCHES_DIR, TARGET_REPO, log)
+for r_item in recovered:
+    log(f"Recovered: {r_item['type']} conv={r_item['conversation_id'][:8]}... "
+        f"action={r_item.get('action', 'unknown')}")
 
 # ---------------------------------------------------------------------------
 # Polling Logic
@@ -101,6 +147,17 @@ if not prs:
     log("No draft bug-fixer PRs found. Exiting.")
     sys.exit(0)
 
+# Build set of PRs with active review dispatches
+active_review_dispatches = set()
+if DISPATCHES_DIR.exists():
+    for df in DISPATCHES_DIR.glob("*.json"):
+        try:
+            d = json.loads(df.read_text())
+            if d.get("type") == "architect_review" and d.get("pr_number"):
+                active_review_dispatches.add(d["pr_number"])
+        except (json.JSONDecodeError, OSError):
+            pass
+
 spawned = 0
 
 for pr in prs:
@@ -111,6 +168,10 @@ for pr in prs:
     number = pr["number"]
     title = pr["title"]
     body = pr.get("body", "")
+
+    if number in active_review_dispatches:
+        log(f"PR #{number} — review already dispatched, skipping.")
+        continue
 
     # -----------------------------------------------------------------------
     # Max-iteration guard: count prior [ARCHITECT] review comments
@@ -164,11 +225,13 @@ Diff:
 ```"""
 
     spawn_new = True
+    dispatch_conv_id = None
     if conv_id:
         log(f"Resuming architect conversation {conv_id} for PR #{number}")
-        msg_r = run(["agentapi", "message", "--conversation-id", conv_id, prompt])
+        msg_r = run(["agentapi", "send-message", conv_id, prompt])
         if msg_r.returncode == 0:
             spawn_new = False
+            dispatch_conv_id = conv_id
         else:
             log(f"Failed to resume conversation {conv_id} (expired/deleted?). "
                 f"Falling back to new conversation. Error: {msg_r.stderr or msg_r.stdout}")
@@ -176,11 +239,24 @@ Diff:
     if spawn_new:
         log(f"Spawning new architect conversation for PR #{number}")
         conv_title = f"Architect Review #{number}"
-        new_r = run(["agentapi", "new-conversation", f"--title={conv_title}", prompt])
+        model = config.get("architect_model", "pro")
+        new_r = run(["agentapi", "new-conversation", f"--model={model}", f"--title={conv_title}", prompt])
         if new_r.returncode != 0:
             log(f"Failed to spawn new conversation for PR #{number}: "
                 f"{new_r.stderr or new_r.stdout}")
             continue
+        try:
+            result = json.loads(new_r.stdout)
+            dispatch_conv_id = result["response"]["newConversation"]["conversationId"]
+        except (json.JSONDecodeError, KeyError):
+            pass
         spawned += 1
+
+    if dispatch_conv_id:
+        record_dispatch(DISPATCHES_DIR, dispatch_conv_id, "architect_review",
+                        pr_number=number, timeout_minutes=20)
+        # Ensure the PR body has the architect conversation tag so the next
+        # review cycle can resume this conversation instead of spawning new.
+        inject_conv_tag(number, "agy_arch_conv_id", dispatch_conv_id)
 
 log(f"Finished polling PRs. Spawned/resumed {spawned} review(s).")
