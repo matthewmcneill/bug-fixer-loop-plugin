@@ -202,7 +202,12 @@ The workspace config contains **project settings only** — no paths, no machine
   "branch_prefix": "fix",
   "triage_cron": "0 * * * *",
   "engineering_cron": "*/10 * * * *",
-  "trajectory_review_cron": "0 18 * * *"
+  "architect_cron": "*/15 * * * *",
+  "trajectory_review_cron": "0 18 * * *",
+  "triage_model": "flash",
+  "engineering_model": "pro",
+  "architect_model": "pro",
+  "trajectory_model": "flash"
 }
 ```
 
@@ -495,7 +500,7 @@ Cron fires → Dispatcher runs  → 2 eligible issues  → Spawn 2 conversations
     a. Write claim file to STATE_DIR/claims/<issue_number>.json (atomic lock)
     b. Add "status:in-progress" label to the GitHub issue
     c. Build the skill prompt (read SKILL.md, inject config values)
-    d. Spawn LLM conversation via: agentapi new-conversation --system-prompt <skill> --user-prompt <issue>
+    d. Spawn LLM conversation via: agentapi new-conversation --model=<tier> --title=<title> <prompt>
     e. Capture conversation_id from agentapi stdout
     f. Update claim file with conversation_id
     g. If spawn fails: remove claim file, remove label, log error
@@ -510,16 +515,17 @@ The dispatchers use `agentapi new-conversation` to launch LLM sessions:
 ```python
 cmd = [
     "agentapi", "new-conversation",
-    "--system-prompt", skill_text,
-    "--user-prompt", prompt_text,
+    f"--model={model}",
+    f"--title={title}",
+    prompt,
 ]
-r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+r = subprocess.run(cmd, capture_output=True, text=True)
 ```
 
 The `agentapi` tool is Antigravity's CLI for programmatic conversation management. It:
 - Creates a new conversation in the Antigravity runtime
-- Injects the skill as the system prompt
-- Injects the issue details as the user prompt
+- Passes an explicit `--model` tier (`flash_lite`, `flash`, `pro`) based on role defaults or triage complexity labels, avoiding inheritance of arbitrary IDE defaults
+- Injects the prompt containing instructions, paths, and issue/PR context
 - Returns a JSON object with `conversationId` that can be used to monitor progress
 - Requires `ANTIGRAVITY_PROJECT_ID` to know which project context to use
 

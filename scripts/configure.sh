@@ -461,6 +461,16 @@ config["spec_file_path"] = "${SPEC_FILE_PATH}"
 config["test_command"] = "${TEST_COMMAND}"
 config["lint_command"] = "${LINT_COMMAND}"
 
+# Default model tiers
+if "triage_model" not in config:
+    config["triage_model"] = "flash"
+if "engineering_model" not in config:
+    config["engineering_model"] = config.get("tick_model", "pro")
+if "architect_model" not in config:
+    config["architect_model"] = "pro"
+if "trajectory_model" not in config:
+    config["trajectory_model"] = "flash"
+
 # Ensure required_labels list is complete
 req_labels = [
     "auto-fixable",
@@ -643,7 +653,7 @@ for tier, count in sorted(tier_counts.items()):
     print(f"    {tier}: {count} issue(s)")
 print()
 print("  ℹ  This is a heuristic preview. For LLM-quality classification,")
-print("     run "/bug-fixer" inside Antigravity after enabling the plugin.")
+print('     run "/bug-fixer" inside Antigravity after enabling the plugin.')
 
 # Write results to a review file
 review_path = sys.argv[2].replace("/", "_") + "_triage_preview.json"

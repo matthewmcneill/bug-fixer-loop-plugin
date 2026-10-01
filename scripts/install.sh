@@ -202,6 +202,8 @@ if workspace_config_path.is_file():
         with open(workspace_config_path) as f:
             existing = json.load(f)
         config.update(existing)
+        if "tick_model" in existing and "engineering_model" not in existing:
+            config["engineering_model"] = existing["tick_model"]
     except Exception:
         pass
 
