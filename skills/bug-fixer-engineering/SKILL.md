@@ -2,14 +2,14 @@
 name: bug-fixer-engineering
 description: >-
   Execute one cycle of the autonomous bug fixer loop. Picks the highest-priority
-  auto-fixable issue respecting milestone order, implements the fix, runs tests,
+  bug-fixer:engineer:needs-fix issue respecting milestone order, implements the fix, runs tests,
   and opens a PR with the bug-fixer label. Triggered by the engineering-loop sidecar every 2
   hours, or manually with "fix bugs" or "run bug fixer".
 ---
 
 # Bug Fixer Engineering (Execution Engine)
 
-This skill executes one cycle of the autonomous bug fixer loop. It checks for review feedback and approved approaches, selects the highest-priority eligible auto-fixable issue (with milestone awareness), implements a fix, tests it, and opens a pull request.
+This skill executes one cycle of the autonomous bug fixer loop. It checks for review feedback and approved approaches, selects the highest-priority eligible bug-fixer:engineer:needs-fix issue (with milestone awareness), implements a fix, tests it, and opens a pull request.
 
 ## Workflow
 
@@ -25,9 +25,9 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
 
 ### Step 2: Reconcile In-Progress Issues
 
-List all issues tagged `status:in-progress`:
+List all issues tagged `bug-fixer:engineer:in-progress`:
 ```bash
-gh issue list --repo <target_repo> --label "status:in-progress" --state open --json number,title
+gh issue list --repo <target_repo> --label "bug-fixer:engineer:in-progress" --state open --json number,title
 ```
 
 For each, read the lock file at `${STATE_DIR}/claims/<number>.lock`:
@@ -83,64 +83,64 @@ e. Post comment: `[BUG-FIXER] Reattached to orphaned work from session <old_conv
 
 ### Step 3: Concurrency Guard
 
-After reconciliation, count issues tagged `status:in-progress` that are **owned by other active sessions** (PID alive, not this session):
+After reconciliation, count issues tagged `bug-fixer:engineer:in-progress` that are **owned by other active sessions** (PID alive, not this session):
 ```bash
-gh issue list --repo <target_repo> --label "status:in-progress" --state open --json number,title
+gh issue list --repo <target_repo> --label "bug-fixer:engineer:in-progress" --state open --json number,title
 ```
 Exclude any issues this session just reattached to.
 
 If count >= `max_concurrent_prs`, output `ENGINEERING_EXIT: Active development cap reached (<count>/<max>).` and exit cleanly.
 
-> **Note:** The cap limits issues *being actively coded* (`status:in-progress`), not PRs waiting for review (`status:awaiting-review`). Once a PR is opened and the issue transitions to `awaiting-review`, the slot is freed immediately.
+> **Note:** The cap limits issues *being actively coded* (`bug-fixer:engineer:in-progress`), not PRs waiting for review (`bug-fixer:architect:awaiting-review`). Once a PR is opened and the issue transitions to `awaiting-review`, the slot is freed immediately.
 
 3. **Check for PR Feedback (Highest Priority):** For each open agent PR:
    - Query comments and reviews via: `python3 ${PLUGIN_DIR}/scripts/safe_ingest.py pr-comments <number>`
    - Look for any unaddressed maintainer comments (comments from `maintainer` or `trusted_users` that do not have a subsequent `[BUG-FIXER]` reply).
    - If found: check out the PR branch, implement the requested changes, run tests, push the changes, reply with `[BUG-FIXER] Addressed review feedback in <sha>`, and exit this cycle.
-   - After pushing iteration changes, remove the `needs-iteration` label:
+   - After pushing iteration changes, remove the `bug-fixer:engineer:needs-iteration` label:
      ```bash
-     gh pr edit <pr_number> --repo <target_repo> --remove-label needs-iteration
+     gh pr edit <pr_number> --repo <target_repo> --remove-label bug-fixer:engineer:needs-iteration
      ```
 
 ### Step 3.5: Check for Approved Approaches
-Query issues with the `needs-approach-review` label:
+Query issues with the `bug-fixer:human:needs-approach-review` label:
 ```bash
-python3 ${PLUGIN_DIR}/scripts/safe_ingest.py issue-list --repo <target_repo> --label needs-approach-review --state open --json number,title,labels,comments
+python3 ${PLUGIN_DIR}/scripts/safe_ingest.py issue-list --repo <target_repo> --label bug-fixer:human:needs-approach-review --state open --json number,title,labels,comments
 ```
 For each issue, check if the maintainer has posted an approval comment (contains `approved` or `/approve` from a trusted user). If found:
-- Remove `needs-approach-review` label
-- Add `auto-fixable` label
+- Remove `bug-fixer:human:needs-approach-review` label
+- Add `bug-fixer:engineer:needs-fix` label
 - Log: `[BUG-FIXER] Approach approved for #<number>, now eligible for fixing.`
 
-This ensures previously-reviewed issues enter the auto-fixable queue.
+This ensures previously-reviewed issues enter the bug-fixer:engineer:needs-fix queue.
 
 4. **Select Issue:**
-   - **Only T1 issues are eligible for immediate fixing.** The engineering skill MUST NOT pick up `needs-approach-review`, `input-needed`, `project-candidate`, or `human-required` issues. Only `auto-fixable` issues are eligible.
-   - Query open, auto-fixable issues:
+   - **Only T1 issues are eligible for immediate fixing.** The engineering skill MUST NOT pick up `bug-fixer:human:needs-approach-review`, `bug-fixer:human:input-needed`, `bug-fixer:human:project-candidate`, or `bug-fixer:human:required` issues. Only `bug-fixer:engineer:needs-fix` issues are eligible.
+   - Query open, bug-fixer:engineer:needs-fix issues:
      ```bash
-     python3 ${PLUGIN_DIR}/scripts/safe_ingest.py issue-list --repo <target_repo> --label auto-fixable --state open --json number,title,labels,body,milestone,priority,priorityRank
+     python3 ${PLUGIN_DIR}/scripts/safe_ingest.py issue-list --repo <target_repo> --label bug-fixer:engineer:needs-fix --state open --json number,title,labels,body,milestone,priority,priorityRank
      ```
    - Query milestones when selecting:
      ```bash
      gh api repos/<target_repo>/milestones --jq '.[] | {number, title, due_on}'
      ```
      and cross-reference with the issue's milestone field.
-   - Exclude issues with `status:in-progress` label.
+   - Exclude issues with `bug-fixer:engineer:in-progress` label.
    - **Milestone-aware priority ordering:**
-     1. First: `auto-fixable` issues in the `active_milestone` (from config), sorted by priority label then issue number
-     2. Then: `auto-fixable` issues in other milestones with due dates, sorted by due date ascending
-     3. Finally: `auto-fixable` issues with no milestone, sorted by priority label then issue number
+     1. First: `bug-fixer:engineer:needs-fix` issues in the `active_milestone` (from config), sorted by priority label then issue number
+     2. Then: `bug-fixer:engineer:needs-fix` issues in other milestones with due dates, sorted by due date ascending
+     3. Finally: `bug-fixer:engineer:needs-fix` issues with no milestone, sorted by priority label then issue number
    - Pick the first issue from this sorted list.
-   - **Batch detection:** Check if the selected issue has a `batch:*` label.
-     If it does, query for all other `auto-fixable` issues with the same batch
-     label that are not `status:in-progress`:
+   - **Batch detection:** Check if the selected issue has a `bug-fixer:batch:*` label.
+     If it does, query for all other `bug-fixer:engineer:needs-fix` issues with the same batch
+     label that are not `bug-fixer:engineer:in-progress`:
      ```bash
      BATCH_LABEL=$(echo "<labels>" | grep -o 'batch:[^ "]*')
      python3 ${PLUGIN_DIR}/scripts/safe_ingest.py issue-list --repo <target_repo> \
-       --label "${BATCH_LABEL}" --label auto-fixable --state open \
+       --label "${BATCH_LABEL}" --label bug-fixer:engineer:needs-fix --state open \
        --json number,title,labels,body,milestone
      ```
-     Exclude any issues already labeled `status:in-progress`. The selected
+     Exclude any issues already labeled `bug-fixer:engineer:in-progress`. The selected
      issue plus all eligible siblings form the **batch set** for this cycle.
      If no batch label is present, the batch set contains only the single
      selected issue.
@@ -148,14 +148,14 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
      > **Concurrency check:** The entire batch set counts as one concurrency
      > slot (one branch, one PR). However, verify that claiming all batch
      > issues would not exceed `max_concurrent_prs` when counted individually
-     > against `status:in-progress`. If it would, reduce the batch to fit.
+     > against `bug-fixer:engineer:in-progress`. If it would, reduce the batch to fit.
 
-   - Note if any issue was converted from T2 (`needs-approach-review` with maintainer approval) to accurately classify it in the PR body.
+   - Note if any issue was converted from T2 (`bug-fixer:human:needs-approach-review` with maintainer approval) to accurately classify it in the PR body.
 
 5. **Claim Issue(s):** Claim every issue in the batch set to prevent other agents from picking them up:
    ```bash
    # For each issue in the batch set:
-   gh issue edit <number> --repo <target_repo> --add-label status:in-progress
+   gh issue edit <number> --repo <target_repo> --add-label bug-fixer:engineer:in-progress
    ```
    Write a lock file for each issue so stale recovery can verify this session is alive:
    ```bash
@@ -172,7 +172,7 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
    git checkout -b <branch_prefix>/batch-<batch_slug> origin/main
    ```
    For single issues, `<slug>` is a kebab-case version of the issue title (max 40 chars).
-   For batches, `<batch_slug>` is the slug from the `batch:*` label (e.g., `memory-rules-nothrow`).
+   For batches, `<batch_slug>` is the slug from the `bug-fixer:batch:*` label (e.g., `memory-rules-nothrow`).
 
 7. **Understand the Issue(s):** For each issue in the batch set, read the issue body and all comments. Look for:
    - **`[BUG-FIXER-TRIAGE]` analysis comments** — the triager posts these with its
@@ -246,8 +246,8 @@ These indicate intentional patterns that should not be casually reversed.
 **7.5.5 — Evaluate compatibility.** If the proposed fix would contradict any discovered
 design decision, ADR, rejected approach, or in-code rationale:
 - **DO NOT implement the fix.**
-- Unclaim the issue (`--remove-label status:in-progress`).
-- Reclassify as `needs-approach-review` (T2).
+- Unclaim the issue (`--remove-label bug-fixer:engineer:in-progress`).
+- Reclassify as `bug-fixer:human:needs-approach-review` (T2).
 - Post a comment:
   ```
   [BUG-FIXER] Architectural conflict detected for #<number>:
@@ -318,9 +318,9 @@ Instead, include a structured discovery section in your **PR body** (Step 11), a
    - Run `<test_command>` and capture the full output. Respect any project-level rules about build/test tooling (e.g., MCP lock protocols, shared resource contention). If the project rules mandate using MCP server tools instead of CLI commands, follow them.
    - Run `<lint_command>` if configured.
    - Run `python3 ${PLUGIN_DIR}/scripts/pre_tool_gate.py --scan-only .` for leak check.
-   - All checks must pass. If any fails, debug and retry up to 2 times. If tests or lint still fail after 3 total attempts, unclaim **all issues in the batch set** (`--remove-label status:in-progress`), add the `human-required` label to each, comment `[BUG-FIXER] Attempted fix but tests/lint failed after 3 attempts. Needs human attention.` on each, and exit.
+   - All checks must pass. If any fails, debug and retry up to 2 times. If tests or lint still fail after 3 total attempts, unclaim **all issues in the batch set** (`--remove-label bug-fixer:engineer:in-progress`), add the `bug-fixer:human:required` label to each, comment `[BUG-FIXER] Attempted fix but tests/lint failed after 3 attempts. Needs human attention.` on each, and exit.
 
-10. **Self-Review Against Design Sources:** Re-read `spec_file_path` and any PA design history or additional design documents discovered in Step 7.5. Verify the completed fix does not contradict any specification, ADR, or documented design decision. If it does, unclaim the issue, label it `spec-change-request,input-needed`, comment explaining the conflict, and exit.
+10. **Self-Review Against Design Sources:** Re-read `spec_file_path` and any PA design history or additional design documents discovered in Step 7.5. Verify the completed fix does not contradict any specification, ADR, or documented design decision. If it does, unclaim the issue, label it `bug-fixer:human:spec-change-request,bug-fixer:human:input-needed`, comment explaining the conflict, and exit.
 
 11. **Open PR:**
     - Stage and commit changes:
@@ -345,9 +345,9 @@ Instead, include a structured discovery section in your **PR body** (Step 11), a
       The PR body must include:
       - **Closing keywords:** `Closes #<number>` for **every** issue in the batch set — this auto-closes all issues when the PR merges. For a batch: list each on its own line.
       - **Batch context (if batch):** `**Batch:** \`batch:<slug>\` — <count> issues` with a brief table listing each issue number, title, and what was changed for it.
-      - Issue tier: `**Classification:** T1 (auto-fixable)` or `T2 (approach approved by @maintainer)`
+      - Issue tier: `**Classification:** T1 (engineer:needs-fix)` or `T2 (approach approved by @maintainer)`
       - Milestone: `**Milestone:** <name>` if applicable
-      - The `bug-fixer` label must be listed (e.g., `**Labels:** bug-fixer`)
+      - The `bug-fixer:engineer:pr` label must be listed (e.g., `**Labels:** bug-fixer`)
       - What was changed and why it was changed (for batches, organise by issue)
       - **Design review note** from Step 7.5.6
       - **Platform-gap warning** (if applicable): If the fix moves work between execution contexts (e.g. main loop ↔ event callback, timer, ISR, or background task), include: `⚠️ This fix changes execution context. Native tests cannot validate stack limits or async dispatch timing. Hardware testing recommended.`
@@ -355,7 +355,7 @@ Instead, include a structured discovery section in your **PR body** (Step 11), a
       - Leak scan result
       - **Discoveries (Out-of-Scope)** section from Step 7.8 (if any discoveries were flagged)
       - The agent MUST include the following HTML comment at the very end of the body: `<!-- agy_dev_conv_id: <this_conversation_id> -->`. Note: `<this_conversation_id>` must be replaced by its actual Conversation ID.
-    - Apply `bug-fixer` label to the PR:
+    - Apply `bug-fixer:engineer:pr` label to the PR:
       ```bash
       gh pr edit <pr_number> --repo <target_repo> --add-label bug-fixer
       ```
@@ -366,17 +366,17 @@ Instead, include a structured discovery section in your **PR body** (Step 11), a
     - Transition **every** issue in the batch set from `in-progress` to `awaiting-review` and delete lock files:
       ```bash
       # For each issue in the batch set:
-      gh issue edit <number> --repo <target_repo> --remove-label status:in-progress --add-label status:awaiting-review
+      gh issue edit <number> --repo <target_repo> --remove-label bug-fixer:engineer:in-progress --add-label bug-fixer:architect:awaiting-review
       rm -f ${STATE_DIR}/claims/<number>.lock
       ```
-      > **Why `status:awaiting-review`?** The issue is no longer being actively coded (frees a concurrency slot), but not done — the PR needs human review. Keeps it off the triage queue and easy to find.
+      > **Why `bug-fixer:architect:awaiting-review`?** The issue is no longer being actively coded (frees a concurrency slot), but not done — the PR needs human review. Keeps it off the triage queue and easy to find.
 
 ### Step 12: Loop or Exit
 
 After successfully opening a PR, **loop back to Step 4** and pick the next eligible issue. Keep fixing issues until one of these conditions is met:
 
 - **No eligible issues remain** → output `ENGINEERING_EXIT: NO_ELIGIBLE_WORK — opened <count> PR(s) this cycle.` and exit.
-- **Concurrency cap reached** → re-check `status:in-progress` count. If >= `max_concurrent_prs`, output `ENGINEERING_EXIT: Active development cap reached — opened <count> PR(s) this cycle.` and exit.
+- **Concurrency cap reached** → re-check `bug-fixer:engineer:in-progress` count. If >= `max_concurrent_prs`, output `ENGINEERING_EXIT: Active development cap reached — opened <count> PR(s) this cycle.` and exit.
 - **A fix attempt fails** (tests fail after 3 retries) → unclaim that issue, then continue to the next eligible issue rather than exiting entirely.
 
 > **Important:** Each fix must start from a fresh branch off `origin/main` (Step 6). Pull latest main before each iteration to pick up any changes merged since the cycle started.

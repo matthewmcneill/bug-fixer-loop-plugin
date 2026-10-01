@@ -19,9 +19,9 @@ This skill performs a daily review of the bug-fixer's performance to catch recur
 2. **Identify Failure Patterns:**
    Analyze the transcripts for the following issues:
    - **Repeated test failures**: If tests fail repeatedly on the same module, suggest the module needs human attention.
-   - **Stale claims**: Issues claimed (`status:in-progress`) but no PR opened within 4 hours trigger a stale claim alert.
+   - **Stale claims**: Issues claimed (`bug-fixer:engineer:in-progress`) but no PR opened within 4 hours trigger a stale claim alert.
    - **Unaddressed PR feedback**: PR feedback not addressed within 24 hours requires escalation.
-   - **Churn**: If the same issue is attempted multiple times without success, add the `human-required` label.
+   - **Churn**: If the same issue is attempted multiple times without success, add the `bug-fixer:human:required` label.
 
 3. **Analyze Quality Trends:**
    Track the following metrics:
@@ -33,7 +33,7 @@ This skill performs a daily review of the bug-fixer's performance to catch recur
    Compare these metrics to the previous day if history exists.
 
 4. **Output Diagnostic Report:** 
-   Output a diagnostic report as a structured summary. If critical patterns are detected (e.g., >3 consecutive failures, stale claims), create a GitHub issue with the label `bug-fixer-health` describing the pattern so the maintainer is alerted.
+   Output a diagnostic report as a structured summary. If critical patterns are detected (e.g., >3 consecutive failures, stale claims), create a GitHub issue with the label `bug-fixer:system:health` describing the pattern so the maintainer is alerted.
 
 ## Workspace
 

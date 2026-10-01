@@ -34,19 +34,19 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
    The exclusion file set is the union of all files touched by these active PRs.
 
 4. **Classify Each Unclassified Issue:**
-   For each issue that does not yet have a classification label (`auto-fixable`, `needs-approach-review`, `input-needed`, `project-candidate`, `human-required`):
+   For each issue that does not yet have a classification label (`bug-fixer:engineer:needs-fix`, `bug-fixer:human:needs-approach-review`, `bug-fixer:human:input-needed`, `bug-fixer:human:project-candidate`, `bug-fixer:human:required`):
 
-   a. **Has exclusion label?** If the issue has any label found in `exclusion_labels`, classify as `human-required` (T5) and skip.
+   a. **Has exclusion label?** If the issue has any label found in `exclusion_labels`, classify as `bug-fixer:human:required` (T5) and skip.
 
-   b. **Check exclusion zone (PR overlap):** Read the issue and estimate which files/modules would need modification. If any overlap with the exclusion file set, classify as `human-required` (T5) and post this comment:
+   b. **Check exclusion zone (PR overlap):** Read the issue and estimate which files/modules would need modification. If any overlap with the exclusion file set, classify as `bug-fixer:human:required` (T5) and post this comment:
    `[BUG-FIXER] Skipped: overlaps with active PR #<number> (<branch>). Will re-evaluate when PR merges.`
 
-   c. **Hardware dependency:** If the issue requires physical hardware access (pins, sensors, oscilloscope, soldering, antenna measurement), classify as `human-required` (T5). Note: mentioning hardware *concepts* (e.g. "WiFi roaming behaviour") is NOT the same as requiring hardware access.
+   c. **Hardware dependency:** If the issue requires physical hardware access (pins, sensors, oscilloscope, soldering, antenna measurement), classify as `bug-fixer:human:required` (T5). Note: mentioning hardware *concepts* (e.g. "WiFi roaming behaviour") is NOT the same as requiring hardware access.
 
-   d. **Ambiguity check:** If the bug report is ambiguous, lacks repro steps, or has conflicting information, classify as `input-needed` (T3). Post this comment and skip:
+   d. **Ambiguity check:** If the bug report is ambiguous, lacks repro steps, or has conflicting information, classify as `bug-fixer:human:input-needed` (T3). Post this comment and skip:
    `[BUG-FIXER] Clarification needed: <ask specific questions based on ambiguity>.`
 
-   e. **Small-scope override (CHECK THIS BEFORE T4/T2):** If the issue is about renaming, adding comments/docs, fixing typos, updating URLs, CSS changes, log message changes, or moving files — it is `auto-fixable` (T1) regardless of what domain it touches. A comment about security code is still just a comment. A rename of an architecture folder is still just a rename.
+   e. **Small-scope override (CHECK THIS BEFORE T4/T2):** If the issue is about renaming, adding comments/docs, fixing typos, updating URLs, CSS changes, log message changes, or moving files — it is `bug-fixer:engineer:needs-fix` (T1) regardless of what domain it touches. A comment about security code is still just a comment. A rename of an architecture folder is still just a rename.
 
       This override also applies to **mechanical pattern-based code replacements** — changes that follow a repetitive, well-defined substitution pattern with no design decisions, even if they touch multiple files or "public API" signatures. Examples:
       - `bare new` → `std::nothrow` conversion (type substitution, same semantics)
@@ -65,7 +65,7 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
       >
       > If the body reveals complexity beyond the surface description, **do not apply this override** — continue to steps 4f/4g for proper classification.
 
-   f. **Size / Scope check:** Classify as `project-candidate` (T4) ONLY if ALL of these are true:
+   f. **Size / Scope check:** Classify as `bug-fixer:human:project-candidate` (T4) ONLY if ALL of these are true:
       - Spans 3+ modules/files
       - Requires architectural or design decisions
       - Estimated > 500 lines changed or multi-day effort
@@ -74,9 +74,9 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
 
       **Batch decomposition:** When an issue describes a large batch of *independent, repetitive* small changes (e.g. "fix doc formatting across 49 dirs"), classify by the **individual change unit**, not the total scope. If each individual change is trivial and mechanical, the issue is T1 (via step 4e override), not T4 — even if the total line count is large.
 
-      > **T4 vs T5 boundary:** T5 (`human-required`) is reserved for work that an agent **physically cannot do** — needs hardware access, or conflicts with an active PR exclusion zone. T4 (`project-candidate`) is work that is too large or needs architectural decisions, but *could theoretically* be done by an agent with guidance. "Needs human design decisions" alone is NOT T5 — that's T2 (if single-module) or T4 (if multi-module). T5 means impossible for the agent, not merely difficult.
+      > **T4 vs T5 boundary:** T5 (`bug-fixer:human:required`) is reserved for work that an agent **physically cannot do** — needs hardware access, or conflicts with an active PR exclusion zone. T4 (`bug-fixer:human:project-candidate`) is work that is too large or needs architectural decisions, but *could theoretically* be done by an agent with guidance. "Needs human design decisions" alone is NOT T5 — that's T2 (if single-module) or T4 (if multi-module). T5 means impossible for the agent, not merely difficult.
 
-   g. **Complexity check:** Classify as `needs-approach-review` (T2) ONLY if:
+   g. **Complexity check:** Classify as `bug-fixer:human:needs-approach-review` (T2) ONLY if:
       - The fix changes runtime *behaviour* in sensitive code (security, boot, OTA, crypto, memory safety)
       - OR has multiple valid implementation approaches that need human judgment
       - OR the fix **moves work between execution contexts**: main loop / `tick()` ↔ event-bus callback, timer callback, ISR, background task, or async handler. Also: the fix changes startup, shutdown, or restart sequencing.
@@ -120,7 +120,7 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
    Reply with `approved` to proceed, or provide alternative direction.
    ```
 
-   h. **Otherwise:** Classify as `auto-fixable` (T1). Single module, clear acceptance criteria, testable with host tests, no architectural decisions, <200 lines, no spec conflicts. Apply the label.
+   h. **Otherwise:** Classify as `bug-fixer:engineer:needs-fix` (T1). Single module, clear acceptance criteria, testable with host tests, no architectural decisions, <200 lines, no spec conflicts. Apply the label.
 
    i. **Post triage analysis comment:** For every issue classified in this run,
       post a structured `[BUG-FIXER-TRIAGE]` comment capturing the reasoning
@@ -130,9 +130,9 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
 
       **T2 and T3 already post structured comments above — skip them here.**
 
-      For **T1 (auto-fixable)** issues, post:
+      For **T1 (engineer:needs-fix)** issues, post:
       ```
-      [BUG-FIXER-TRIAGE] Classification: T1 (auto-fixable)
+      [BUG-FIXER-TRIAGE] Classification: T1 (engineer:needs-fix)
 
       **Scope estimate:**
       - Files likely affected: `<path/to/file1>`, `<path/to/file2>`
@@ -157,7 +157,7 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
       For **T1 via small-scope override** (step 4e — typos, renames, docs, URLs,
       CSS, log messages, file moves), use a shorter form:
       ```
-      [BUG-FIXER-TRIAGE] Classification: T1 (auto-fixable, small-scope override)
+      [BUG-FIXER-TRIAGE] Classification: T1 (bug-fixer:engineer:needs-fix, small-scope override)
 
       **Type:** <rename / typo fix / docs update / URL change / etc.>
       **Files likely affected:** `<path/to/file1>`
@@ -166,9 +166,9 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
       **Model routing:** `flash_lite`
       ```
 
-      For **T4 (project-candidate)** issues, post:
+      For **T4 (human:bug-fixer:human:project-candidate)** issues, post:
       ```
-      [BUG-FIXER-TRIAGE] Classification: T4 (project-candidate)
+      [BUG-FIXER-TRIAGE] Classification: T4 (human:bug-fixer:human:project-candidate)
 
       **Why T4:**
       - Estimated scope: <modules/files affected, line count estimate>
@@ -178,10 +178,10 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
       **Recommendation:** Use /principal-architect to decompose into work orders.
       ```
 
-      For **T5 (human-required)** issues that don't already have a comment from
+      For **T5 (human:required)** issues that don't already have a comment from
       step 4b (PR-overlap already posts its own comment), post:
       ```
-      [BUG-FIXER-TRIAGE] Classification: T5 (human-required)
+      [BUG-FIXER-TRIAGE] Classification: T5 (human:required)
 
       **Reason:** <exclusion label "<label>" matched / requires physical hardware
       access: <specific hardware need identified>>
@@ -195,17 +195,17 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
 
       | Classification | Complexity label | Model tier | Rationale |
       |---|---|---|---|
-      | T1 via small-scope override (step 4e) | `complexity:mechanical` | `flash_lite` | Rote, zero judgment |
-      | T1 standard (step 4h) | `complexity:standard` | `flash` | Clear scope, concrete checklist |
-      | T2 (needs-approach-review) | *(applied after approval — see Step 5)* | | |
+      | T1 via small-scope override (step 4e) | `bug-fixer:complexity:mechanical` | `flash_lite` | Rote, zero judgment |
+      | T1 standard (step 4h) | `bug-fixer:complexity:standard` | `flash` | Clear scope, concrete checklist |
+      | T2 (human:bug-fixer:human:needs-approach-review) | *(applied after approval — see Step 5)* | | |
 
       Create the labels if they don't exist (idempotent):
       ```bash
-      gh label create "complexity:mechanical" --repo <target_repo> --color "0E8A16" \
+      gh label create "bug-fixer:complexity:mechanical" --repo <target_repo> --color "0E8A16" \
         --description "Agent complexity: mechanical (flash_lite)" 2>/dev/null || true
-      gh label create "complexity:standard" --repo <target_repo> --color "1D76DB" \
+      gh label create "bug-fixer:complexity:standard" --repo <target_repo> --color "1D76DB" \
         --description "Agent complexity: standard (flash)" 2>/dev/null || true
-      gh label create "complexity:architect" --repo <target_repo> --color "B60205" \
+      gh label create "bug-fixer:complexity:architect" --repo <target_repo> --color "B60205" \
         --description "Agent complexity: architect (pro)" 2>/dev/null || true
       ```
 
@@ -214,9 +214,9 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
       gh issue edit <number> --repo <target_repo> --add-label "complexity:<tier>"
       ```
 
-   j. **Discovery HITL gate:** For issues labelled `discovered-in-review`, classify as **minimum T2** (`needs-approach-review`) regardless of apparent simplicity. Post comment:
+   j. **Discovery HITL gate:** For issues labelled `bug-fixer:triage:discovered-in-review`, classify as **minimum T2** (`bug-fixer:human:needs-approach-review`) regardless of apparent simplicity. Post comment:
       ```
-      [BUG-FIXER-TRIAGE] Classification: T2 (needs-approach-review)
+      [BUG-FIXER-TRIAGE] Classification: T2 (human:bug-fixer:human:needs-approach-review)
 
       **Reason:** Auto-discovered issue requiring human approval before
       automated fixing proceeds.
@@ -228,16 +228,16 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
       pursuing.
       ```
 
-      This ensures every auto-filed discovery issue gets a human checkpoint before entering the automated fix pipeline. Check this BEFORE other classification steps — the `discovered-in-review` label takes precedence.
+      This ensures every auto-filed discovery issue gets a human checkpoint before entering the automated fix pipeline. Check this BEFORE other classification steps — the `bug-fixer:triage:discovered-in-review` label takes precedence.
 
 
 5. **Handle Approach Reviews (T2 Re-evaluation):**
-   For issues already labeled `needs-approach-review`:
+   For issues already labeled `bug-fixer:human:needs-approach-review`:
    Check if the maintainer has replied with an approval comment (e.g. `approved`). If approved:
-   - Remove `needs-approach-review` label
-   - **If the issue also has the `discovered-in-review` label, remove it** — this is the depth reset. The issue is now human-blessed and indistinguishable from a human-filed issue. Discoveries from fixing it will start a fresh chain.
-   - Add `auto-fixable` label (T1)
-   - Add `complexity:architect` label — the triager originally assessed this as needing deep reasoning, so the engineering dispatcher should use `pro`
+   - Remove `bug-fixer:human:needs-approach-review` label
+   - **If the issue also has the `bug-fixer:triage:discovered-in-review` label, remove it** — this is the depth reset. The issue is now human-blessed and indistinguishable from a human-filed issue. Discoveries from fixing it will start a fresh chain.
+   - Add `bug-fixer:engineer:needs-fix` label (T1)
+   - Add `bug-fixer:complexity:architect` label — the triager originally assessed this as needing deep reasoning, so the engineering dispatcher should use `pro`
 
 6. **Milestone Query & Prioritisation:**
    Query milestones to get their status:
@@ -265,7 +265,7 @@ the engineering skill can implement them as single PRs. This reduces review over
 when an audit or sweep produces many small, thematically related issues.
 
 **When to bundle:** Only group issues that meet ALL of these criteria:
-- All are T1 (`auto-fixable`)
+- All are T1 (`bug-fixer:engineer:needs-fix`)
 - They share a clear affinity (see signals below)
 - Each individual fix is independent (no ordering dependency between them)
 - The combined change set would still be a reviewable PR (estimated < ~500 lines total)
@@ -289,8 +289,8 @@ audit group, sequential issue numbers, cross-references in the body text).
 **How to assign batches:**
 
 a. Generate a batch slug from the shared theme — e.g.,
-   `batch:memory-rules-nothrow`, `batch:audit-script-fixes`,
-   `batch:doc-header-cleanup`. Keep slugs short, lowercase, hyphenated,
+   `bug-fixer:batch:memory-rules-nothrow`, `bug-fixer:batch:audit-script-fixes`,
+   `bug-fixer:batch:doc-header-cleanup`. Keep slugs short, lowercase, hyphenated,
    and descriptive.
 
 b. Create the label if it doesn't exist:
@@ -323,7 +323,7 @@ d. Post a grouping comment on each issue in the batch:
 - A single issue with no natural siblings
 
 **Re-bundling on subsequent triage runs:** If a new issue is classified as T1
-and shares affinity with issues that already have a `batch:*` label, add the
+and shares affinity with issues that already have a `bug-fixer:batch:*` label, add the
 new issue to the existing batch (apply the same label, post the grouping
 comment referencing the updated sibling list). Do not create a new batch when
 an existing one covers the same theme.
