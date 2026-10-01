@@ -455,6 +455,9 @@ def _recover(dispatch: dict, dispatches_dir: Path, target_repo: str,
             if claims_dir:
                 lock = claims_dir / f"{issue_num}.lock"
                 lock.unlink(missing_ok=True)
+            wt_path = dispatch.get("worktree_path")
+            if wt_path and Path(wt_path).exists():
+                _run(["git", "-C", str(Path(wt_path).parent.parent), "worktree", "remove", "-f", wt_path])
             summary["action"] = f"state dumped to issue #{issue_num}, unclaimed"
 
     elif dtype == "pr_iteration":
@@ -504,6 +507,9 @@ def sweep_dispatches(dispatches_dir: Path, target_repo: str,
         # --- Check if work completed successfully ---
         if _check_success(dispatch, target_repo):
             log_fn(f"Dispatch {conv_id[:8]}... ({dispatch['type']}) completed successfully.")
+            wt_path = dispatch.get("worktree_path")
+            if wt_path and Path(wt_path).exists():
+                _run(["git", "-C", str(Path(wt_path).parent.parent), "worktree", "remove", "-f", wt_path])
             dispatch_file.unlink(missing_ok=True)
             continue
 

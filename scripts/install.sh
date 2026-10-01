@@ -373,6 +373,20 @@ else
 fi
 
 
+
+# ---------------------------------------------------------------------------
+# Step 5b: Add worktrees/ to repository .gitignore
+# ---------------------------------------------------------------------------
+REPO_GITIGNORE="${TARGET_REPO_DIR}/.gitignore"
+if ! grep -q "^worktrees/$" "$REPO_GITIGNORE" 2>/dev/null; then
+  echo "" >> "$REPO_GITIGNORE"
+  echo "# Added by bug-fixer-loop plugin" >> "$REPO_GITIGNORE"
+  echo "worktrees/" >> "$REPO_GITIGNORE"
+  echo "    - Added worktrees/ to ${REPO_GITIGNORE}"
+else
+  echo "    - worktrees/ already in ${REPO_GITIGNORE}"
+fi
+
 # ---------------------------------------------------------------------------
 # Step 6: Enable the plugin
 # ---------------------------------------------------------------------------

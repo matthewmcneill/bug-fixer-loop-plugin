@@ -164,15 +164,10 @@ This ensures previously-reviewed issues enter the bug-fixer:engineer:needs-fix q
    ```
    The `pid` is the current process ID (`$$`). The `conversation_id` is this agent's conversation ID (available as context). The `batch` field links sibling claims for stale recovery. All lock files in a batch share the same `conversation_id`.
 
-6. **Branch:** Check out a new branch from `origin/main`:
-   ```bash
-   # Single issue:
-   git checkout -b <branch_prefix>/issue-<number>-<slug> origin/main
-   # Batch (multiple issues):
-   git checkout -b <branch_prefix>/batch-<batch_slug> origin/main
-   ```
-   For single issues, `<slug>` is a kebab-case version of the issue title (max 40 chars).
-   For batches, `<batch_slug>` is the slug from the `bug-fixer:batch:*` label (e.g., `memory-rules-nothrow`).
+6. **Branch:** The dispatcher has already created an ephemeral git worktree and checked out the correct branch for this issue/batch.
+   - Do NOT run `git checkout -b`.
+   - Do NOT create or destroy git worktrees — the dispatcher manages the worktree lifecycle.
+   - You are already in the correct worktree directory.
 
 7. **Understand the Issue(s):** For each issue in the batch set, read the issue body and all comments. Look for:
    - **`[BUG-FIXER-TRIAGE]` analysis comments** — the triager posts these with its

@@ -12,8 +12,6 @@ MAINTAINER_USER=""
 SPEC_FILE_PATH=""
 TEST_COMMAND=""
 LINT_COMMAND=""
-WORKTREE_PATH=""
-NO_WORKTREE=false
 ASSUME_YES=false
 TRIAGE_ONLY=false
 
@@ -30,8 +28,6 @@ Options:
   --spec-file <path>            Path to design specification file (default: docs/design_specification.md)
   --test-command <cmd>          Test command to run (default: pio test -e native)
   --lint-command <cmd>          Lint command to run (optional)
-  --worktree-path <path>        Path for isolated git worktree
-  --no-worktree                 Skip creating git worktree
   --triage-only                 Skip configuration, just run triage preview
   -y, --yes                     Non-interactive mode (accept defaults)
   -h, --help                    Show this help message
@@ -47,10 +43,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     -y|--yes)
       ASSUME_YES=true
-      shift
-      ;;
-    --no-worktree)
-      NO_WORKTREE=true
       shift
       ;;
     --triage-only)
@@ -105,14 +97,6 @@ while [[ $# -gt 0 ]]; do
       LINT_COMMAND="$2"
       shift 2
       ;;
-    --worktree-path)
-      if [[ $# -lt 2 ]]; then
-        echo "Error: Option $1 requires an argument." >&2
-        exit 1
-      fi
-      WORKTREE_PATH="$2"
-      shift 2
-      ;;
     *)
       if [[ -z "$TARGET_REPO" ]]; then
         TARGET_REPO="$1"
@@ -158,7 +142,6 @@ EXISTING_MAINTAINER=""
 EXISTING_SPEC_FILE=""
 EXISTING_TEST_CMD=""
 EXISTING_LINT_CMD=""
-EXISTING_WORKTREE_PATH=""
 
 if [[ -f "${CONFIG_FILE}" ]]; then
   eval "$(python3 - <<EOF
@@ -172,7 +155,6 @@ try:
     print(f"EXISTING_SPEC_FILE='{cfg.get('spec_file_path', '')}'")
     print(f"EXISTING_TEST_CMD='{cfg.get('test_command', '')}'")
     print(f"EXISTING_LINT_CMD='{cfg.get('lint_command', '')}'")
-    print(f"EXISTING_WORKTREE_PATH='{cfg.get('worktree_path', '')}'")
 except Exception:
     pass
 EOF
@@ -398,48 +380,6 @@ done
 
 echo "    - Required labels configured."
 
-# Step 6: Set Up Worktree
-echo ""
-echo "--> Step 6: Worktree Setup..."
-CREATE_WORKTREE=true
-if [[ "$NO_WORKTREE" = true ]]; then
-  CREATE_WORKTREE=false
-elif [[ -n "$WORKTREE_PATH" ]]; then
-  CREATE_WORKTREE=true
-elif [[ "$ASSUME_YES" = true || ! -t 0 ]]; then
-  CREATE_WORKTREE=true
-else
-  read -r -p "Create isolated git worktree for agent operation? (recommended) [Y/n]: " wt_choice
-  wt_choice="$(echo "${wt_choice:-y}" | tr '[:upper:]' '[:lower:]')"
-  if [[ "$wt_choice" == "n" || "$wt_choice" == "no" ]]; then
-    CREATE_WORKTREE=false
-  fi
-fi
-
-if [[ "$CREATE_WORKTREE" = true ]]; then
-  if [[ -z "$WORKTREE_PATH" ]]; then
-    WORKTREE_PATH="${EXISTING_WORKTREE_PATH:-${TARGET_REPO_DIR}-bug-fixer-worktree}"
-  fi
-
-  if [[ -d "$WORKTREE_PATH" ]]; then
-    echo "    - Worktree directory already exists at: ${WORKTREE_PATH}"
-  elif [[ -d "$TARGET_REPO_DIR" ]] && git -C "$TARGET_REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    echo "    - Creating worktree at: ${WORKTREE_PATH}"
-    if git -C "$TARGET_REPO_DIR" worktree add "$WORKTREE_PATH" main >/dev/null 2>&1; then
-      echo "    - Worktree created from 'main' at ${WORKTREE_PATH}"
-    elif git -C "$TARGET_REPO_DIR" worktree add "$WORKTREE_PATH" HEAD >/dev/null 2>&1; then
-      echo "    - Worktree created from HEAD at ${WORKTREE_PATH}"
-    else
-      echo "    - Warning: Failed to add worktree via git worktree add." >&2
-    fi
-  else
-    echo "    - Target repo directory is not a git repository yet; set worktree path to ${WORKTREE_PATH}"
-  fi
-else
-  WORKTREE_PATH=""
-  echo "    - Worktree setup skipped."
-fi
-
 # Step 7: Write Config
 echo ""
 echo "--> Step 7: Writing Configuration..."
@@ -458,7 +398,6 @@ if config_path.is_file():
 
 config["target_repo"] = "${TARGET_REPO}"
 config["repo_dir"] = "${TARGET_REPO_DIR}"
-config["worktree_path"] = "${WORKTREE_PATH}"
 config["maintainer"] = "${MAINTAINER_USER}"
 config["spec_file_path"] = "${SPEC_FILE_PATH}"
 config["test_command"] = "${TEST_COMMAND}"
@@ -775,7 +714,6 @@ echo "  Maintainer:     ${MAINTAINER_USER}"
 echo "  Spec File:      ${SPEC_FILE_PATH}"
 echo "  Test Command:   ${TEST_COMMAND}"
 echo "  Lint Command:   ${LINT_COMMAND:-<none>}"
-echo "  Worktree Path:  ${WORKTREE_PATH:-<none>}"
 echo "  Config File:    ${CONFIG_FILE}"
 echo "================================================================"
 echo ""

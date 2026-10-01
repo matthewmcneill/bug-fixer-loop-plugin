@@ -31,7 +31,7 @@ The plugin ships **disabled** by default. No sidecars will run until you configu
 ```bash
 ./scripts/configure.sh --repo <owner/repo> --repo-dir <path>
 ```
-The wizard validates connectivity, creates labels, and optionally sets up an isolated worktree.
+The wizard validates connectivity, creates labels, and tests required commands.
 
 ### 3. Enable
 ```bash
@@ -104,7 +104,7 @@ flowchart TD
 - **Responsibilities:**
   - Enforces PR concurrency caps (`max_concurrent_prs`).
   - Prioritizes remediating feedback on existing agent PRs before picking new work.
-  - Claims highest-priority `bug-fixer:engineer:needs-fix` issue from `origin/main` in a dedicated worktree.
+  - Claims highest-priority `bug-fixer:engineer:needs-fix` issue from `origin/main` in an ephemeral worktree.
   - Implements the fix and executes the mandatory `test_command` (e.g. `pio test -e native`).
   - Audits staged files for leaks with `pre_tool_gate.py --scan-only`.
   - Opens an atomic PR titled `[BugFixer] Resolves #<number>` containing test output.
@@ -151,7 +151,7 @@ The security architecture provides three layers of defense against prompt inject
 
 ## Installation
 
-The plugin includes an installation script (`scripts/install.sh`) to link skills, agents, rules, and sidecars, followed by an interactive configuration wizard (`scripts/configure.sh`) that validates connectivity, creates GitHub labels, sets up a worktree, and configures the plugin.
+The plugin includes an installation script (`scripts/install.sh`) to link skills, agents, rules, and sidecars, followed by an interactive configuration wizard (`scripts/configure.sh`) that validates connectivity, creates GitHub labels, and configures the plugin.
 
 The plugin ships **disabled** by default. After installation and configuration, enable the plugin using `agy plugin enable bug-fixer-loop`.
 
@@ -164,7 +164,7 @@ The plugin ships **disabled** by default. After installation and configuration, 
   --repo-dir /Users/mcneillm/Documents/Projects/esp32-app-foundation \
   --maintainer matthewmcneill
 
-# 2. Run the configuration wizard (validates connectivity, labels, worktree)
+# 2. Run the configuration wizard (validates connectivity, labels)
 ./scripts/configure.sh --repo matthewmcneill/esp32-app-foundation --repo-dir /Users/mcneillm/Documents/Projects/esp32-app-foundation
 
 # 3. Enable the plugin
@@ -196,8 +196,6 @@ Options:
   --spec-file <path>            Path to design specification file (default: docs/design_specification.md)
   --test-command <cmd>          Test command to run (default: pio test -e native)
   --lint-command <cmd>          Lint command to run (optional)
-  --worktree-path <path>        Path for isolated git worktree
-  --no-worktree                 Skip creating git worktree
   -y, --yes                     Non-interactive mode (accept defaults)
   -h, --help                    Show this help message
 ```
@@ -213,7 +211,6 @@ Configuration is managed in `config.json` at the root of the plugin or target re
 | `$schema` | `string` | Configuration schema version identifier | `"bug-fixer-loop-config-v1"` |
 | `target_repo` | `string` | Target repository slug (`owner/repo`) | `""` |
 | `repo_dir` | `string` | Local checkout path of target repository | `""` |
-| `worktree_path` | `string` | Isolated git worktree directory for autonomous agent execution | `""` |
 | `maintainer` | `string` | Primary trusted GitHub maintainer username | `""` |
 | `trusted_users` | `array[string]` | Additional trusted GitHub logins allowed to approve issues | `[]` |
 | `spec_file_path` | `string` | Project specification file protected from agent mutation | `"docs/design_specification.md"` |
@@ -258,7 +255,7 @@ Autonomous agents running this plugin must strictly adhere to the 12 invariants 
 To prevent conflicts between autonomous background agent loops and human developers:
 
 - **Active PR Exclusion Zone:** Triage actively inspects the maintainer's open PRs via GitHub API. If an issue requires modifying files touched by an active maintainer PR, the issue is skipped or labeled `bug-fixer:human:required`.
-- **Dedicated Worktree Operation:** The engineering agent operates within a dedicated git worktree, ensuring the maintainer's active working tree, index, and untracked files are untouched.
+- **Ephemeral Worktree Operation:** The engineering dispatcher creates an ephemeral git worktree for each agent session (`<repo_root>/worktrees/issue-<number>`), ensuring complete isolation for concurrent agent sessions and protecting the maintainer's active working tree.
 
 ---
 
