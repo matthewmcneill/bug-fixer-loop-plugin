@@ -1,4 +1,4 @@
-# Eval: bug-fixer-tick
+# Eval: bug-fixer-engineering
 
 ## Scenario 1: Fix T1 issue end-to-end
 **Input:** Open issue "#201 test_otaUpdateManager" with `auto-fixable` label, P2 priority.

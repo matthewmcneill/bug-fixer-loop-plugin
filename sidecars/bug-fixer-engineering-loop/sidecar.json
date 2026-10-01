@@ -1,12 +1,12 @@
 {
   "builtin": "schedule",
   "args": [
-    "<architect_cron>",
-    "<plugin_dir>/scripts/architect_dispatcher.py"
+    "<tick_cron>",
+    "<plugin_dir>/scripts/tick_dispatcher.py"
   ],
   "restart_policy": "always",
-  "display_name": "Bug Fixer Architect Review (<owner/repo>)",
-  "description": "Polls for un-reviewed draft PRs every 15 min. Only spawns an Architect review conversation when there's a draft to review.",
+  "display_name": "Bug Fixer Engineering (<owner/repo>)",
+  "description": "Checks for eligible issues every 10 min. Only spawns an LLM conversation when there's actual work to do.",
   "agent_permissions": {
     "workspace_uris": [
       "file://<repo_dir>"

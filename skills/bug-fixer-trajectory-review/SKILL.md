@@ -1,9 +1,9 @@
 ---
-name: trajectory-review
+name: bug-fixer-trajectory-review
 description: >-
   Daily review of the bug-fixer loop's trajectory — identifies recurring
   failure patterns, stale claims, and quality trends. Triggered by the
-  trajectory-review sidecar daily at 18:00, or manually with
+  bug-fixer-trajectory-loop sidecar daily at 18:00, or manually with
   "review bug fixer trajectory".
 ---
 
@@ -14,7 +14,7 @@ This skill performs a daily review of the bug-fixer's performance to catch recur
 ## Workflow
 
 1. **Scan Recent Transcripts:** 
-   Scan recent sidecar transcripts in `~/.gemini/antigravity/brain/` for conversations matching the `bug-fixer-triage` and `bug-fixer-tick` display names from the last 24 hours.
+   Scan recent sidecar transcripts in `~/.gemini/antigravity/brain/` for conversations matching the `Bug Fixer Triage` and `Bug Fixer Engineering` display names from the last 24 hours.
 
 2. **Identify Failure Patterns:**
    Analyze the transcripts for the following issues:

@@ -69,13 +69,14 @@ my-project/                                         ← REPO_DIR (derivable)
 │   │   │   │   ├── safe_ingest.py
 │   │   │   │   └── pre_tool_gate.py
 │   │   │   ├── skills/
-│   │   │   │   ├── bug-fixer-tick/SKILL.md
+│   │   │   │   ├── bug-fixer-engineering/SKILL.md
 │   │   │   │   ├── bug-fixer-triage/SKILL.md
 │   │   │   │   └── ...
 │   │   │   ├── sidecars/                           ← Sidecar templates with placeholders
-│   │   │   │   ├── bug-fixer-tick/sidecar.json
-│   │   │   │   ├── bug-fixer-triage/sidecar.json
-│   │   │   │   └── trajectory-review/sidecar.json
+│   │   │   │   ├── bug-fixer-engineering-loop/sidecar.json
+│   │   │   │   ├── bug-fixer-triage-loop/sidecar.json
+│   │   │   │   ├── bug-fixer-pr-review-loop/sidecar.json
+│   │   │   │   └── bug-fixer-trajectory-loop/sidecar.json
 │   │   │   └── agents/
 │   │   │       └── leak-auditor.md
 │   │   │
@@ -418,8 +419,8 @@ This is defensive — the `env` block in the sidecar template is the proper solu
 The plugin repo contains **template** sidecar files with placeholders. The installer resolves them to absolute paths:
 
 ```
-plugin-repo/sidecars/bug-fixer-tick/sidecar.json           ← Template (placeholders)
-~/.gemini/antigravity/sidecars/bug-fixer-tick/sidecar.json  ← Installed (resolved)
+plugin-repo/sidecars/bug-fixer-engineering-loop/sidecar.json           ← Template (placeholders)
+~/.gemini/antigravity/sidecars/bug-fixer-engineering-loop/sidecar.json  ← Installed (resolved)
 ```
 
 Placeholders resolved by `install.sh`:
@@ -428,6 +429,7 @@ Placeholders resolved by `install.sh`:
 |-------------|-------------|---------|
 | `<tick_cron>` | Cron expression from config | `*/10 * * * *` |
 | `<triage_cron>` | Cron expression from config | `0 * * * *` |
+| `<architect_cron>` | Cron expression from config | `*/15 * * * *` |
 | `<trajectory_review_cron>` | Cron expression from config | `0 18 * * *` |
 | `<plugin_dir>` | Absolute path to the plugin directory | `/Users/me/project/.agents/plugins/bug-fixer-loop-plugin` |
 | `<owner/repo>` | GitHub `owner/repo` slug | `matthewmcneill/esp32-app-foundation` |
@@ -453,9 +455,10 @@ Understanding sidecar failure modes is essential for debugging:
 
 | Sidecar | Default Schedule | Script | What it Does |
 |---------|:---------------:|--------|-------------|
-| `bug-fixer-tick` | `*/10 * * * *` | `tick_dispatcher.py` | Checks for `auto-fixable` issues, claims them, spawns fix conversations |
-| `bug-fixer-triage` | `0 * * * *` | `triage_dispatcher.py` | Checks for unlabelled issues, spawns triage conversations to classify them |
-| `trajectory-review` | `0 18 * * *` | `trajectory_dispatcher.py` | Reviews recent bug-fixer transcripts for quality, posts trajectory analysis |
+| `bug-fixer-engineering-loop` | `*/10 * * * *` | `tick_dispatcher.py` | Checks for `auto-fixable` issues, claims them, spawns fix conversations |
+| `bug-fixer-triage-loop` | `0 * * * *` | `triage_dispatcher.py` | Checks for unlabelled issues, spawns triage conversations to classify them |
+| `bug-fixer-pr-review-loop` | `<architect_cron>` | `architect_dispatcher.py` | Polls for un-reviewed draft PRs, spawns architect review conversations |
+| `bug-fixer-trajectory-loop` | `0 18 * * *` | `trajectory_dispatcher.py` | Reviews recent bug-fixer transcripts for quality, posts trajectory analysis |
 
 ---
 

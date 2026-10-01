@@ -84,9 +84,9 @@ flowchart TD
 
 ---
 
-## The 3 Loops
+## The 4 Loops
 
-### 1. Loop 1: Triage Sidecar (`bug-fixer-triage`)
+### 1. Triage Loop (`bug-fixer-triage-loop`)
 - **Schedule:** Hourly (`0 * * * *`)
 - **Execution Role:** Evaluates newly created or unclassified issues.
 - **Responsibilities:**
@@ -95,7 +95,7 @@ flowchart TD
   - Cross-references the maintainer's open PR file lists to exclude any issue touching overlapping modules.
   - Labels candidates as `auto-fixable` (bounded, single-module bugs with clear criteria) or `human-required` (architectural, multi-module, or ambiguous issues).
 
-### 2. Loop 2: Tick / Fixer Sidecar (`bug-fixer-tick`)
+### 2. Engineering Loop (`bug-fixer-engineering-loop`)
 - **Schedule:** Every 2 hours (`30 */2 * * *`)
 - **Execution Role:** Implements surgical fixes and delivers pull requests.
 - **Responsibilities:**
@@ -106,7 +106,15 @@ flowchart TD
   - Audits staged files for leaks with `pre_tool_gate.py --scan-only`.
   - Opens an atomic PR titled `[BugFixer] Resolves #<number>` containing test output.
 
-### 3. Loop 3: Trajectory Review Sidecar (`trajectory-review`)
+### 3. PR Review Loop (`bug-fixer-pr-review-loop`)
+- **Schedule:** Every 15 minutes
+- **Execution Role:** Adversarial architect review of bug-fixer draft PRs.
+- **Responsibilities:**
+  - Polls for un-reviewed draft PRs with the `bug-fixer` label.
+  - Spawns an Architect review conversation for each eligible draft.
+  - Tracks review rounds and escalates to `needs-human-intervention` after max rounds.
+
+### 4. Trajectory Review Loop (`bug-fixer-trajectory-loop`)
 - **Schedule:** Daily (`0 18 * * *`)
 - **Execution Role:** Audits quality trends and agent trajectory logs.
 - **Responsibilities:**

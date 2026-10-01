@@ -140,7 +140,7 @@ update corresponding skill documentation in lockstep:
 | What you changed | What to update |
 |---|---|
 | Triage classification logic | `skills/bug-fixer-triage/SKILL.md` tier definitions |
-| Tick workflow steps | `skills/bug-fixer-tick/SKILL.md` step descriptions |
+| Engineering workflow steps | `skills/bug-fixer-engineering/SKILL.md` step descriptions |
 | Config.json fields (add/remove/rename) | `README.md` Configuration Reference table |
 | New sidecar or skill | `plugin.json`, `README.md` Architecture section |
 | Safety rule change | `rules/AGENTS.md`, `README.md` Safety Rules Summary |

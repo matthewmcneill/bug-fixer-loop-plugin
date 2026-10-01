@@ -24,7 +24,7 @@ if [[ -f "$RULES_FILE" ]] && grep -q 'Bug Fixer Loop' "$RULES_FILE" 2>/dev/null;
 fi
 
 # 3. Global skills (only bug-fixer related)
-for skill in bug-fixer bug-fixer-tick bug-fixer-triage test-quality-audit trajectory-review systematic-debugging; do
+for skill in bug-fixer bug-fixer-engineering bug-fixer-tick bug-fixer-triage test-quality-audit bug-fixer-trajectory-review trajectory-review systematic-debugging; do
   for base in "$HOME/.gemini/config/skills" "$HOME/.gemini/antigravity/skills"; do
     if [[ -d "$base/$skill" ]]; then
       rm -rf "$base/$skill"
@@ -42,7 +42,7 @@ for base in "$HOME/.gemini/config/agents" "$HOME/.gemini/antigravity/agents"; do
 done
 
 # 5. Global sidecars (all three directories)
-for sidecar in bug-fixer-tick bug-fixer-triage trajectory-review; do
+for sidecar in bug-fixer-engineering-loop bug-fixer-triage-loop bug-fixer-pr-review-loop bug-fixer-trajectory-loop bug-fixer-tick bug-fixer-triage bug-fixer-architect trajectory-review; do
   for base in "$HOME/.gemini/config/sidecars" "$HOME/.gemini/antigravity/sidecars" "$HOME/.gemini/jetski/sidecars"; do
     if [[ -d "$base/$sidecar" ]]; then
       rm -rf "$base/$sidecar"

@@ -2,7 +2,7 @@
 name: test-quality-audit
 description: >-
   Audit test quality for bug-fixer PRs using a 6-point anti-reward-hacking
-  rubric. Called inline by bug-fixer-tick before opening a PR, or manually
+  rubric. Called inline by bug-fixer-engineering before opening a PR, or manually
   with "audit test quality".
 ---
 
