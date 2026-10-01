@@ -455,7 +455,7 @@ Understanding sidecar failure modes is essential for debugging:
 
 | Sidecar | Default Schedule | Script | What it Does |
 |---------|:---------------:|--------|-------------|
-| `bug-fixer-engineering-loop` | `*/10 * * * *` | `engineering_dispatcher.py` | Checks for `auto-fixable` issues, claims them, spawns fix conversations |
+| `bug-fixer-engineering-loop` | `*/10 * * * *` | `engineering_dispatcher.py` | Checks for `bug-fixer:engineer:needs-fix` issues, claims them, spawns fix conversations |
 | `bug-fixer-triage-loop` | `0 * * * *` | `triage_dispatcher.py` | Checks for unlabelled issues, spawns triage conversations to classify them |
 | `bug-fixer-pr-review-loop` | `<architect_cron>` | `architect_dispatcher.py` | Polls for un-reviewed draft PRs, spawns architect review conversations |
 | `bug-fixer-trajectory-loop` | `0 18 * * *` | `trajectory_dispatcher.py` | Reviews recent bug-fixer transcripts for quality, posts trajectory analysis |
@@ -487,13 +487,13 @@ Cron fires → Dispatcher runs  → 2 eligible issues  → Spawn 2 conversations
     c. Conversation exists but is in terminal state (idle/errored/cancelled)
 5.  Count active bug-fixer PRs via safe_ingest.py — if >= max_concurrent, exit
 6.  Query GitHub for eligible issues (via safe_ingest.py):
-    - Has "auto-fixable" label
-    - Not in exclusion_labels (e.g., "human-required", "P1-blocker", "hardware-required")
+    - Has "bug-fixer:engineer:needs-fix" label
+    - Not in exclusion_labels (e.g., "bug-fixer:human:required", "P1-blocker", "hardware-required")
     - Not already claimed (no active claim file)
     - Sorted by priority (milestone boost, label priority ranking)
 7.  For each eligible issue (up to max_concurrent - active_prs):
     a. Write claim file to STATE_DIR/claims/<issue_number>.json (atomic lock)
-    b. Add "status:in-progress" label to the GitHub issue
+    b. Add "bug-fixer:engineer:in-progress" label to the GitHub issue
     c. Build the skill prompt (read SKILL.md, inject config values)
     d. Spawn LLM conversation via: agentapi new-conversation --system-prompt <skill> --user-prompt <issue>
     e. Capture conversation_id from agentapi stdout
@@ -551,7 +551,7 @@ if status in ("idle", "errored", "cancelled"):
 
 Recovery means:
 1. Remove the claim file from `STATE_DIR/claims/`
-2. Remove the `status:in-progress` label from the GitHub issue
+2. Remove the `bug-fixer:engineer:in-progress` label from the GitHub issue
 3. The issue becomes eligible for the next engineering cycle
 
 #### Claim File Format
@@ -572,7 +572,7 @@ Recovery means:
 When the LLM quota runs out, dispatchers can enter a catastrophic failure loop:
 
 1. **Engineering loop fires** (every 10 minutes)
-2. **Finds eligible issues**, writes claim files, adds `status:in-progress` labels
+2. **Finds eligible issues**, writes claim files, adds `bug-fixer:engineer:in-progress` labels
 3. **Spawns `agentapi new-conversation`** — all calls fail (quota exhausted)
 4. **Removes claim files**, removes labels (cleanup on failure)
 5. **Next cycle fires** — same issues are eligible again

@@ -65,7 +65,7 @@ flowchart TD
     end
 
     subgraph Loops ["Bug Fixer 4-Loop Engine"]
-        TriageSidecar["Triage Loop\n(Hourly cron: 0 * * * *)\nClassifies auto-fixable vs human-required"]
+        TriageSidecar["Triage Loop\n(Hourly cron: 0 * * * *)\nClassifies bug-fixer:engineer:needs-fix vs bug-fixer:human:required"]
         EngineeringSidecar["Engineering Loop\n(Every 10 min: */10 * * * *)\nClaims issue, branches, fixes, tests, PRs"]
         PRReviewSidecar["PR Review Loop\n(Every 15 min)\nAdversarial architect review of draft PRs"]
         TrajectoryReviewSidecar["Trajectory Review Loop\n(Daily: 0 18 * * *)\nAudits test quality & trajectory health"]
@@ -73,8 +73,8 @@ flowchart TD
 
     Issues --> SafeIngest
     SafeIngest --> TriageSidecar
-    TriageSidecar -- "Labels auto-fixable" --> Issues
-    TriageSidecar -- "Labels human-required (e.g. overlap)" --> Issues
+    TriageSidecar -- "Labels bug-fixer:engineer:needs-fix" --> Issues
+    TriageSidecar -- "Labels bug-fixer:human:required (e.g. overlap)" --> Issues
     SafeIngest --> EngineeringSidecar
     EngineeringSidecar --> PreToolGate
     PreToolGate -- "Verified Clean & Tested" --> PRs
@@ -96,7 +96,7 @@ flowchart TD
   - Safely reads open issues via `safe_ingest.py`.
   - Checks for exclusion labels (`hardware-required`, `P1-blocker`, etc.).
   - Cross-references the maintainer's open PR file lists to exclude any issue touching overlapping modules.
-  - Labels candidates as `auto-fixable` (bounded, single-module bugs with clear criteria) or `human-required` (architectural, multi-module, or ambiguous issues).
+  - Labels candidates as `bug-fixer:engineer:needs-fix` (bounded, single-module bugs with clear criteria) or `bug-fixer:human:required` (architectural, multi-module, or ambiguous issues).
 
 ### 2. Engineering Loop (`bug-fixer-engineering-loop`)
 - **Schedule:** Every 2 hours (`30 */2 * * *`)
@@ -104,7 +104,7 @@ flowchart TD
 - **Responsibilities:**
   - Enforces PR concurrency caps (`max_concurrent_prs`).
   - Prioritizes remediating feedback on existing agent PRs before picking new work.
-  - Claims highest-priority `auto-fixable` issue from `origin/main` in a dedicated worktree.
+  - Claims highest-priority `bug-fixer:engineer:needs-fix` issue from `origin/main` in a dedicated worktree.
   - Implements the fix and executes the mandatory `test_command` (e.g. `pio test -e native`).
   - Audits staged files for leaks with `pre_tool_gate.py --scan-only`.
   - Opens an atomic PR titled `[BugFixer] Resolves #<number>` containing test output.
@@ -115,7 +115,7 @@ flowchart TD
 - **Responsibilities:**
   - Polls for un-reviewed draft PRs with the `bug-fixer` label.
   - Spawns an Architect review conversation for each eligible draft.
-  - Tracks review rounds and escalates to `needs-human-intervention` after max rounds.
+  - Tracks review rounds and escalates to `bug-fixer:human:needs-intervention` after max rounds.
 
 ### 4. Trajectory Review Loop (`bug-fixer-trajectory-loop`)
 - **Schedule:** Daily (`0 18 * * *`)
@@ -220,9 +220,9 @@ Configuration is managed in `config.json` at the root of the plugin or target re
 | `protected_files` | `array[string]` | List of files that autonomous agents must never modify | `["docs/design_specification.md"]` |
 | `leak_patterns` | `array[string]` | Regular expressions checked for secrets and tokens | `["ya29\\.[A-Za-z0-9_-]+", "AKIA[0-9A-Z]{16}", "-----BEGIN (RSA \|EC )?PRIVATE KEY-----"]` |
 | `max_concurrent_prs` | `integer` | Maximum concurrent open agent PRs allowed | `1` |
-| `exclusion_labels` | `array[string]` | Issue labels that immediately disqualify from auto-fix | `["human-required", "P1-blocker", "hardware-required"]` |
-| `auto_fixable_labels` | `array[string]` | Labels identifying issues triaged for autonomous fixing | `["auto-fixable"]` |
-| `required_labels` | `array[string]` | Standard label taxonomy maintained in target repository | `["auto-fixable", "human-required", "needs-approach-review", "project-candidate", "input-needed", "status:in-progress", "bug-fixer", "bug-fixer-health", "spec-change-request"]` |
+| `exclusion_labels` | `array[string]` | Issue labels that immediately disqualify from auto-fix | `["bug-fixer:human:required", "P1-blocker", "hardware-required"]` |
+| `auto_fixable_labels` | `array[string]` | Labels identifying issues triaged for autonomous fixing | `["bug-fixer:engineer:needs-fix"]` |
+| `required_labels` | `array[string]` | Standard label taxonomy maintained in target repository | `["bug-fixer:engineer:needs-fix", "bug-fixer:human:required", "bug-fixer:human:needs-approach-review", "bug-fixer:human:project-candidate", "bug-fixer:human:input-needed", "bug-fixer:engineer:in-progress", "bug-fixer:engineer:pr", "bug-fixer:system:health", "bug-fixer:human:spec-change-request"]` |
 | `auto_fixable_max_priority` | `string` | Priority ceiling for automated fixes | `"P3-docs-dx"` |
 | `test_command` | `string` | Test command that must pass before any PR is opened | `"pio test -e native"` |
 | `lint_command` | `string` | Optional linter command to run before PR | `""` |
@@ -257,7 +257,7 @@ Autonomous agents running this plugin must strictly adhere to the 12 invariants 
 
 To prevent conflicts between autonomous background agent loops and human developers:
 
-- **Active PR Exclusion Zone:** Triage actively inspects the maintainer's open PRs via GitHub API. If an issue requires modifying files touched by an active maintainer PR, the issue is skipped or labeled `human-required`.
+- **Active PR Exclusion Zone:** Triage actively inspects the maintainer's open PRs via GitHub API. If an issue requires modifying files touched by an active maintainer PR, the issue is skipped or labeled `bug-fixer:human:required`.
 - **Dedicated Worktree Operation:** The engineering agent operates within a dedicated git worktree, ensuring the maintainer's active working tree, index, and untracked files are untouched.
 
 ---
