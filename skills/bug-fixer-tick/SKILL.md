@@ -127,34 +127,64 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
      2. Then: `auto-fixable` issues in other milestones with due dates, sorted by due date ascending
      3. Finally: `auto-fixable` issues with no milestone, sorted by priority label then issue number
    - Pick the first issue from this sorted list.
-   - Note if the issue was converted from T2 (`needs-approach-review` with maintainer approval) to accurately classify it in the PR body.
+   - **Batch detection:** Check if the selected issue has a `batch:*` label.
+     If it does, query for all other `auto-fixable` issues with the same batch
+     label that are not `status:in-progress`:
+     ```bash
+     BATCH_LABEL=$(echo "<labels>" | grep -o 'batch:[^ "]*')
+     python3 ${PLUGIN_DIR}/scripts/safe_ingest.py issue-list --repo <target_repo> \
+       --label "${BATCH_LABEL}" --label auto-fixable --state open \
+       --json number,title,labels,body,milestone
+     ```
+     Exclude any issues already labeled `status:in-progress`. The selected
+     issue plus all eligible siblings form the **batch set** for this tick.
+     If no batch label is present, the batch set contains only the single
+     selected issue.
 
-5. **Claim Issue:** Act as a lease to prevent other agents from picking up the same work:
+     > **Concurrency check:** The entire batch set counts as one concurrency
+     > slot (one branch, one PR). However, verify that claiming all batch
+     > issues would not exceed `max_concurrent_prs` when counted individually
+     > against `status:in-progress`. If it would, reduce the batch to fit.
+
+   - Note if any issue was converted from T2 (`needs-approach-review` with maintainer approval) to accurately classify it in the PR body.
+
+5. **Claim Issue(s):** Claim every issue in the batch set to prevent other agents from picking them up:
    ```bash
+   # For each issue in the batch set:
    gh issue edit <number> --repo <target_repo> --add-label status:in-progress
    ```
-   Write a lock file so stale recovery can verify this session is alive:
+   Write a lock file for each issue so stale recovery can verify this session is alive:
    ```bash
    mkdir -p ${STATE_DIR}/claims
-   echo '{"issue": <number>, "pid": '$$', "conversation_id": "<this_conversation_id>", "claimed_at": "<iso_now>"}' > ${STATE_DIR}/claims/<number>.lock
+   echo '{"issue": <number>, "pid": '$$', "conversation_id": "<this_conversation_id>", "claimed_at": "<iso_now>", "batch": "<batch_label_or_null>"}' > ${STATE_DIR}/claims/<number>.lock
    ```
-   The `pid` is the current process ID (`$$`). The `conversation_id` is this agent's conversation ID (available as context). Both are used by Step 2 to determine liveness.
+   The `pid` is the current process ID (`$$`). The `conversation_id` is this agent's conversation ID (available as context). The `batch` field links sibling claims for stale recovery. All lock files in a batch share the same `conversation_id`.
 
 6. **Branch:** Check out a new branch from `origin/main`:
    ```bash
+   # Single issue:
    git checkout -b <branch_prefix>/issue-<number>-<slug> origin/main
+   # Batch (multiple issues):
+   git checkout -b <branch_prefix>/batch-<batch_slug> origin/main
    ```
-   *(where `<slug>` is a kebab-case version of the issue title, max 40 chars)*
+   For single issues, `<slug>` is a kebab-case version of the issue title (max 40 chars).
+   For batches, `<batch_slug>` is the slug from the `batch:*` label (e.g., `memory-rules-nothrow`).
 
-7. **Understand the Issue:** Read the issue body and all comments. Look for:
+7. **Understand the Issue(s):** For each issue in the batch set, read the issue body and all comments. Look for:
    - **`[BUG-FIXER-TRIAGE]` analysis comments** — the triager posts these with its
      classification rationale, scope estimate, files likely affected, and checks
      already performed (exclusion zone, PA memory, design docs). Use these findings
      as a head start: adopt the file list as your starting point and note which
      design sources were already consulted.
+   - **`[BUG-FIXER-TRIAGE] Batch assignment`** comments — these confirm the batch
+     grouping and list sibling issues. Verify the batch is still coherent (no
+     issue has been reclassified since the triage assigned the batch).
    - **`[ISSUE-REVIEW]` execution contract comments** — additional context from
      issue reviewers.
    - Read the project's spec file (`spec_file_path`) for relevant sections.
+   - Build a **combined file list** across all batch issues. Note where issues
+     touch the same files — those changes must be composed together, not
+     applied sequentially.
    - Identify the exact files to modify (refine the triager's estimate if needed).
 
 ### Step 7.5: Architectural Design Review
@@ -239,17 +269,52 @@ Where `<sources consulted>` is one of:
 - `spec + PA MODULE_INDEX (N projects traced)` (PA memory was present and used)
 - `spec + additional design docs` (if additional_design_docs was consulted)
 
-8. **Implement the Fix:**
-   - Make the minimal code changes necessary to resolve the issue.
+### Step 7.8: Flag Out-of-Scope Discoveries
+
+While reading the codebase to understand and fix the assigned issue, you may discover significant bugs or improvement opportunities that are **unrelated to the current issue**. Do NOT fix them — they are out of scope. Do NOT file issues directly.
+
+Instead, include a structured discovery section in your **PR body** (Step 11), after the test output and before the conversation ID comment:
+
+~~~
+### Discoveries (Out-of-Scope)
+
+> [!NOTE]
+> The following were observed during investigation but are out of scope
+> for this fix. Flagged for architect review.
+
+1. **[DISCOVERY]** `path/to/file:line` — <one-line description>
+   **Detail:** <2-3 sentences explaining what's wrong and why it matters>
+   **Suggested severity:** <low/medium/high>
+
+2. **[DISCOVERY]** `path/to/file:line` — <one-line description>
+   **Detail:** <explanation>
+   **Suggested severity:** <low/medium/high>
+~~~
+
+**Rules:**
+- Only flag findings that are genuinely significant (would warrant a bug report)
+- Do NOT flag style issues, minor TODOs, or things covered by linting
+- Do NOT flag things in files you're already modifying (those are in-scope — fix them)
+- Do NOT file issues yourself — the architect will evaluate and decide
+
+8. **Implement the Fix(es):**
+   - For each issue in the batch set, make the minimal code changes necessary to resolve it.
+   - When multiple issues touch the same file, compose the changes together
+     rather than making separate passes.
    - Follow the project's coding style (check existing files in the same module).
-   - Add or update tests to cover the fix.
+   - Add or update tests to cover each fix.
    - Ensure changes remain within the module boundary — do NOT make cross-cutting changes.
+   - **Batch commit strategy:** Use a single commit for the batch if all
+     changes are thematically related (e.g., all `std::nothrow` conversions).
+     Use one commit per issue if the changes are conceptually distinct (e.g.,
+     an audit script fix vs. a code fix). In either case, all commits go on
+     the same branch and the same PR.
 
 9. **Verify:**
    - Run `<test_command>` and capture the full output. Respect any project-level rules about build/test tooling (e.g., MCP lock protocols, shared resource contention). If the project rules mandate using MCP server tools instead of CLI commands, follow them.
    - Run `<lint_command>` if configured.
    - Run `python3 ${PLUGIN_DIR}/scripts/pre_tool_gate.py --scan-only .` for leak check.
-   - All checks must pass. If any fails, debug and retry up to 2 times. If tests or lint still fail after 3 total attempts, unclaim the issue (`--remove-label status:in-progress`), add the `human-required` label, comment `[BUG-FIXER] Attempted fix but tests/lint failed after 3 attempts. Needs human attention.`, and exit.
+   - All checks must pass. If any fails, debug and retry up to 2 times. If tests or lint still fail after 3 total attempts, unclaim **all issues in the batch set** (`--remove-label status:in-progress`), add the `human-required` label to each, comment `[BUG-FIXER] Attempted fix but tests/lint failed after 3 attempts. Needs human attention.` on each, and exit.
 
 10. **Self-Review Against Design Sources:** Re-read `spec_file_path` and any PA design history or additional design documents discovered in Step 7.5. Verify the completed fix does not contradict any specification, ADR, or documented design decision. If it does, unclaim the issue, label it `spec-change-request,input-needed`, comment explaining the conflict, and exit.
 
@@ -257,7 +322,10 @@ Where `<sources consulted>` is one of:
     - Stage and commit changes:
       ```bash
       git add -A
+      # Single issue:
       git commit -m "<pr_prefix> Fix #<number>: <title>"
+      # Batch:
+      git commit -m "<pr_prefix> Fix #<n1>, #<n2>, ...: <batch_theme>"
       ```
     - Push the branch:
       ```bash
@@ -265,29 +333,35 @@ Where `<sources consulted>` is one of:
       ```
     - Create the PR:
       ```bash
+      # Single issue:
       gh pr create --draft --repo <target_repo> --base main --title "<pr_prefix> Fix #<number>: <title>" --body "<body>"
+      # Batch:
+      gh pr create --draft --repo <target_repo> --base main --title "<pr_prefix> Batch fix: <batch_theme> (#<n1>, #<n2>, ...)" --body "<body>"
       ```
       The PR body must include:
-      - **Closing keyword:** `Closes #<number>` — this auto-closes the issue when the PR merges
+      - **Closing keywords:** `Closes #<number>` for **every** issue in the batch set — this auto-closes all issues when the PR merges. For a batch: list each on its own line.
+      - **Batch context (if batch):** `**Batch:** \`batch:<slug>\` — <count> issues` with a brief table listing each issue number, title, and what was changed for it.
       - Issue tier: `**Classification:** T1 (auto-fixable)` or `T2 (approach approved by @maintainer)`
       - Milestone: `**Milestone:** <name>` if applicable
       - The `bug-fixer` label must be listed (e.g., `**Labels:** bug-fixer`)
-      - What was changed and why it was changed
+      - What was changed and why it was changed (for batches, organise by issue)
       - **Design review note** from Step 7.5.6
       - **Platform-gap warning** (if applicable): If the fix moves work between execution contexts (e.g. main loop ↔ event callback, timer, ISR, or background task), include: `⚠️ This fix changes execution context. Native tests cannot validate stack limits or async dispatch timing. Hardware testing recommended.`
       - Full test output
       - Leak scan result
+      - **Discoveries (Out-of-Scope)** section from Step 7.8 (if any discoveries were flagged)
       - The agent MUST include the following HTML comment at the very end of the body: `<!-- agy_dev_conv_id: <this_conversation_id> -->`. Note: `<this_conversation_id>` must be replaced by its actual Conversation ID.
     - Apply `bug-fixer` label to the PR:
       ```bash
       gh pr edit <pr_number> --repo <target_repo> --add-label bug-fixer
       ```
-    - Carry over milestone: If the resolved issue belongs to a milestone, set the same milestone on the PR:
+    - Carry over milestone: If the resolved issues belong to a milestone, set the same milestone on the PR:
       ```bash
       gh pr edit <pr_number> --repo <target_repo> --milestone "<milestone_title>"
       ```
-    - Transition the issue from `in-progress` to `awaiting-review` and delete the lock file:
+    - Transition **every** issue in the batch set from `in-progress` to `awaiting-review` and delete lock files:
       ```bash
+      # For each issue in the batch set:
       gh issue edit <number> --repo <target_repo> --remove-label status:in-progress --add-label status:awaiting-review
       rm -f ${STATE_DIR}/claims/<number>.lock
       ```

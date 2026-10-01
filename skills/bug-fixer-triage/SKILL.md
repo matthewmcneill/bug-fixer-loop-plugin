@@ -181,10 +181,28 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
       ```
 
 
+   j. **Discovery HITL gate:** For issues labelled `discovered-in-review`, classify as **minimum T2** (`needs-approach-review`) regardless of apparent simplicity. Post comment:
+      ```
+      [BUG-FIXER-TRIAGE] Classification: T2 (needs-approach-review)
+
+      **Reason:** Auto-discovered issue requiring human approval before
+      automated fixing proceeds.
+      Auto-filed during architect review of PR #<source_pr>.
+
+      **Discovery chain:** <chain from breadcrumb in issue body>
+
+      Reply with `approved` to allow automated fixing, or close if not worth
+      pursuing.
+      ```
+
+      This ensures every auto-filed discovery issue gets a human checkpoint before entering the automated fix pipeline. Check this BEFORE other classification steps — the `discovered-in-review` label takes precedence.
+
+
 5. **Handle Approach Reviews (T2 Re-evaluation):**
    For issues already labeled `needs-approach-review`:
    Check if the maintainer has replied with an approval comment (e.g. `approved`). If approved:
    - Remove `needs-approach-review` label
+   - **If the issue also has the `discovered-in-review` label, remove it** — this is the depth reset. The issue is now human-blessed and indistinguishable from a human-filed issue. Discoveries from fixing it will start a fresh chain.
    - Add `auto-fixable` label (T1)
 
 6. **Milestone Query & Prioritisation:**
@@ -206,4 +224,77 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
 
 9. **Loop Until Complete:** After classifying a batch of issues, re-query the issue list (Step 2) and check for any remaining unclassified issues. If unclassified issues remain, loop back to Step 4 and continue classifying. Do NOT exit with unclassified issues remaining unless you hit an unrecoverable error. If you must exit early, report which issues remain unclassified in the summary.
 
-10. **Summary Report:** At the end of the run, output a summary table of all classifications made during this run, along with the prioritized list of T1/T2 issues for the bug fixer to work on.
+### Step 9.5: Bundle Affinity Grouping
+
+After all issues are classified, group related T1 issues into **batches** so
+the tick skill can implement them as single PRs. This reduces review overhead
+when an audit or sweep produces many small, thematically related issues.
+
+**When to bundle:** Only group issues that meet ALL of these criteria:
+- All are T1 (`auto-fixable`)
+- They share a clear affinity (see signals below)
+- Each individual fix is independent (no ordering dependency between them)
+- The combined change set would still be a reviewable PR (estimated < ~500 lines total)
+- They share the same milestone assignment (or all have no milestone)
+
+**Affinity signals (in priority order):**
+
+1. **Same audit rule / spec section** — issues cite the same spec clause
+   (e.g., "memory-rules §6"), same audit check name, or same audit group.
+2. **Same change pattern** — mechanical substitutions following the same
+   template (e.g., all "bare `new` → `std::nothrow`", all "add `noexcept`").
+3. **Overlapping files** — issues that modify the same files or the same
+   module. Combining them avoids merge conflicts between sequential PRs.
+4. **Shared context label** — issues sharing an `audit`, `tech-debt`,
+   `release-*`, or similar thematic label that indicates common origin.
+
+Two signals is strong evidence for a bundle. One signal alone is sufficient
+only when the issues are clearly part of the same body of work (e.g., same
+audit group, sequential issue numbers, cross-references in the body text).
+
+**How to assign batches:**
+
+a. Generate a batch slug from the shared theme — e.g.,
+   `batch:memory-rules-nothrow`, `batch:audit-script-fixes`,
+   `batch:doc-header-cleanup`. Keep slugs short, lowercase, hyphenated,
+   and descriptive.
+
+b. Create the label if it doesn't exist:
+   ```bash
+   gh label create "batch:<slug>" --repo <target_repo> --color "C2E0C6" \
+     --description "PR bundle: <theme>" 2>/dev/null || true
+   ```
+
+c. Apply the label to every issue in the group:
+   ```bash
+   gh issue edit <number> --repo <target_repo> --add-label "batch:<slug>"
+   ```
+
+d. Post a grouping comment on each issue in the batch:
+   ```
+   [BUG-FIXER-TRIAGE] Batch assignment: `batch:<slug>`
+
+   Grouped with: #<sibling1>, #<sibling2>, ...
+   **Reason:** <1-line affinity rationale — e.g., "Same spec section
+   (memory-rules §6), overlapping files (BLEStack.cpp, DataManager.cpp)">
+
+   The bug fixer will implement these together in a single PR.
+   ```
+
+**Do NOT bundle:**
+- T2, T3, T4, or T5 issues (only T1s are eligible)
+- Issues where the combined diff would exceed ~500 lines
+- Issues with different milestone assignments
+- Issues where one fix depends on another being done first (order dependency)
+- A single issue with no natural siblings
+
+**Re-bundling on subsequent triage runs:** If a new issue is classified as T1
+and shares affinity with issues that already have a `batch:*` label, add the
+new issue to the existing batch (apply the same label, post the grouping
+comment referencing the updated sibling list). Do not create a new batch when
+an existing one covers the same theme.
+
+**Unbatched T1 issues are fine.** Not every issue needs a batch — standalone
+T1s continue to get their own PR as before.
+
+10. **Summary Report:** At the end of the run, output a summary table of all classifications made during this run, the prioritized list of T1/T2 issues for the bug fixer to work on, and any batch groups created or extended during this run (listing the batch slug, member issues, and affinity rationale).

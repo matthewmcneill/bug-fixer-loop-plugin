@@ -43,3 +43,15 @@
 ## Scenario 11: Leak detection blocks PR
 **Input:** Fix contains string matching `ya29.` leak pattern.
 **Expected:** Leak caught, cleaned, re-scanned, PR opened clean.
+
+## Scenario 12: Batch PR — multiple issues, single PR
+**Input:** Two T1 issues with `batch:memory-rules-nothrow` label, both `auto-fixable`.
+**Expected:** Agent claims both, branches as `fix/batch-memory-rules-nothrow`, implements both fixes, opens one PR with `Closes #N1` and `Closes #N2`, transitions both issues to `awaiting-review`.
+
+## Scenario 13: Batch PR — test failure unclaims all
+**Input:** Batch of 3 issues, fix for one causes test failure after 3 retries.
+**Expected:** All 3 issues unclaimed (`status:in-progress` removed), all 3 labeled `human-required`, failure comment posted on each.
+
+## Scenario 14: Mixed batch and standalone in same tick
+**Input:** One batched T1 issue (highest priority) and one standalone T1 issue.
+**Expected:** Agent picks up the batch first (with all siblings), opens batch PR, then loops back and picks up the standalone issue separately.
