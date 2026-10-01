@@ -181,10 +181,28 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
       ```
 
 
+   j. **Discovery HITL gate:** For issues labelled `discovered-in-review`, classify as **minimum T2** (`needs-approach-review`) regardless of apparent simplicity. Post comment:
+      ```
+      [BUG-FIXER-TRIAGE] Classification: T2 (needs-approach-review)
+
+      **Reason:** Auto-discovered issue requiring human approval before
+      automated fixing proceeds.
+      Auto-filed during architect review of PR #<source_pr>.
+
+      **Discovery chain:** <chain from breadcrumb in issue body>
+
+      Reply with `approved` to allow automated fixing, or close if not worth
+      pursuing.
+      ```
+
+      This ensures every auto-filed discovery issue gets a human checkpoint before entering the automated fix pipeline. Check this BEFORE other classification steps — the `discovered-in-review` label takes precedence.
+
+
 5. **Handle Approach Reviews (T2 Re-evaluation):**
    For issues already labeled `needs-approach-review`:
    Check if the maintainer has replied with an approval comment (e.g. `approved`). If approved:
    - Remove `needs-approach-review` label
+   - **If the issue also has the `discovered-in-review` label, remove it** — this is the depth reset. The issue is now human-blessed and indistinguishable from a human-filed issue. Discoveries from fixing it will start a fresh chain.
    - Add `auto-fixable` label (T1)
 
 6. **Milestone Query & Prioritisation:**

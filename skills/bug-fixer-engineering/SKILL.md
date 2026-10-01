@@ -269,6 +269,34 @@ Where `<sources consulted>` is one of:
 - `spec + PA MODULE_INDEX (N projects traced)` (PA memory was present and used)
 - `spec + additional design docs` (if additional_design_docs was consulted)
 
+### Step 7.8: Flag Out-of-Scope Discoveries
+
+While reading the codebase to understand and fix the assigned issue, you may discover significant bugs or improvement opportunities that are **unrelated to the current issue**. Do NOT fix them — they are out of scope. Do NOT file issues directly.
+
+Instead, include a structured discovery section in your **PR body** (Step 11), after the test output and before the conversation ID comment:
+
+~~~
+### Discoveries (Out-of-Scope)
+
+> [!NOTE]
+> The following were observed during investigation but are out of scope
+> for this fix. Flagged for architect review.
+
+1. **[DISCOVERY]** `path/to/file:line` — <one-line description>
+   **Detail:** <2-3 sentences explaining what's wrong and why it matters>
+   **Suggested severity:** <low/medium/high>
+
+2. **[DISCOVERY]** `path/to/file:line` — <one-line description>
+   **Detail:** <explanation>
+   **Suggested severity:** <low/medium/high>
+~~~
+
+**Rules:**
+- Only flag findings that are genuinely significant (would warrant a bug report)
+- Do NOT flag style issues, minor TODOs, or things covered by linting
+- Do NOT flag things in files you're already modifying (those are in-scope — fix them)
+- Do NOT file issues yourself — the architect will evaluate and decide
+
 8. **Implement the Fix(es):**
    - For each issue in the batch set, make the minimal code changes necessary to resolve it.
    - When multiple issues touch the same file, compose the changes together
@@ -321,6 +349,7 @@ Where `<sources consulted>` is one of:
       - **Platform-gap warning** (if applicable): If the fix moves work between execution contexts (e.g. main loop ↔ event callback, timer, ISR, or background task), include: `⚠️ This fix changes execution context. Native tests cannot validate stack limits or async dispatch timing. Hardware testing recommended.`
       - Full test output
       - Leak scan result
+      - **Discoveries (Out-of-Scope)** section from Step 7.8 (if any discoveries were flagged)
       - The agent MUST include the following HTML comment at the very end of the body: `<!-- agy_dev_conv_id: <this_conversation_id> -->`. Note: `<this_conversation_id>` must be replaced by its actual Conversation ID.
     - Apply `bug-fixer` label to the PR:
       ```bash

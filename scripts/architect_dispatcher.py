@@ -19,7 +19,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-MAX_REVIEW_ROUNDS = 3
+MAX_REVIEW_ROUNDS = 5
 
 
 def log(msg: str):
