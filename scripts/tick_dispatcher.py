@@ -92,7 +92,7 @@ with open(CONFIG_FILE) as f:
 TARGET_REPO = config["target_repo"]
 MAX_CONCURRENT = config.get("max_concurrent_prs", 4)
 BRANCH_PREFIX = config.get("branch_prefix", "bugfix")
-SKILL_PATH = PLUGIN_DIR / "skills/bug-fixer-tick/SKILL.md"
+SKILL_PATH = PLUGIN_DIR / "skills/bug-fixer-engineering/SKILL.md"
 SAFE_INGEST = PLUGIN_DIR / "scripts/safe_ingest.py"
 
 # Derive all paths from config file location (standard layout)

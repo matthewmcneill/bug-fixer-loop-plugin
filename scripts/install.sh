@@ -180,6 +180,7 @@ DEFAULTS = {
     "branch_prefix": "fix",
     "triage_cron": "0 * * * *",
     "tick_cron": "*/10 * * * *",
+    "architect_cron": "*/15 * * * *",
     "trajectory_review_cron": "0 18 * * *",
     "milestone_priority_boost": True,
     "active_milestone": "",
@@ -280,6 +281,7 @@ else
   # Read cron schedules from workspace config (just written in Step 1)
   TRIAGE_CRON="$(python3 -c "import json; c=json.load(open('${WORKSPACE_CONFIG}')); print(c.get('triage_cron', '0 * * * *'))" 2>/dev/null || echo "0 * * * *")"
   TICK_CRON="$(python3 -c "import json; c=json.load(open('${WORKSPACE_CONFIG}')); print(c.get('tick_cron', '*/10 * * * *'))" 2>/dev/null || echo "*/10 * * * *")"
+  ARCHITECT_CRON="$(python3 -c "import json; c=json.load(open('${WORKSPACE_CONFIG}')); print(c.get('architect_cron', '*/15 * * * *'))" 2>/dev/null || echo "*/15 * * * *")"
   TRAJECTORY_CRON="$(python3 -c "import json; c=json.load(open('${WORKSPACE_CONFIG}')); print(c.get('trajectory_review_cron', '0 18 * * *'))" 2>/dev/null || echo "0 18 * * *")"
 
   CURRENT_PATH="${PATH}"
@@ -315,6 +317,7 @@ else
           -e "s|<plugin_dir>|${PLUGIN_DIR}|g" \
           -e "s|<triage_cron>|${TRIAGE_CRON}|g" \
           -e "s|<tick_cron>|${TICK_CRON}|g" \
+          -e "s|<architect_cron>|${ARCHITECT_CRON}|g" \
           -e "s|<trajectory_review_cron>|${TRAJECTORY_CRON}|g" \
           -e "s|<path>|${CURRENT_PATH}|g" \
           -e "s|<config_path>|${WORKSPACE_CONFIG}|g" \
@@ -385,7 +388,7 @@ echo "  Workspace config: ${WORKSPACE_CONFIG}"
 echo "  Workspace hooks:  ${TARGET_REPO_DIR}/.agents/hooks.json"
 echo "  Workspace rules:  ${TARGET_REPO_DIR}/.agents/rules/bug-fixer-AGENTS.md"
 if [[ "$SKILLS_ONLY" = false ]]; then
-  echo "  Sidecars:         ${SIDECARS_DIR}/{bug-fixer-tick,bug-fixer-triage,trajectory-review}--${REPO_SLUG}"
+  echo "  Sidecars:         ${SIDECARS_DIR}/{bug-fixer-engineering-loop,bug-fixer-triage-loop,bug-fixer-pr-review-loop,bug-fixer-trajectory-loop}--${REPO_SLUG}"
 fi
 echo ""
 echo "  Plugin source:    ${PLUGIN_DIR} (scripts, skills, agents used in-place)"

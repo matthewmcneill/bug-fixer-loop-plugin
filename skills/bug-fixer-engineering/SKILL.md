@@ -1,13 +1,13 @@
 ---
-name: bug-fixer-tick
+name: bug-fixer-engineering
 description: >-
   Execute one cycle of the autonomous bug fixer loop. Picks the highest-priority
   auto-fixable issue respecting milestone order, implements the fix, runs tests,
-  and opens a PR with the bug-fixer label. Triggered by the tick sidecar every 2
+  and opens a PR with the bug-fixer label. Triggered by the engineering-loop sidecar every 2
   hours, or manually with "fix bugs" or "run bug fixer".
 ---
 
-# Bug Fixer Tick (Execution Engine)
+# Bug Fixer Engineering (Execution Engine)
 
 This skill executes one cycle of the autonomous bug fixer loop. It checks for review feedback and approved approaches, selects the highest-priority eligible auto-fixable issue (with milestone awareness), implements a fix, tests it, and opens a pull request.
 

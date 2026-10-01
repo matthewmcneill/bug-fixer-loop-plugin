@@ -66,7 +66,7 @@ with open(CONFIG_FILE) as f:
     config = json.load(f)
 
 TARGET_REPO = config["target_repo"]
-SKILL_PATH = PLUGIN_DIR / "skills/trajectory-review/SKILL.md"
+SKILL_PATH = PLUGIN_DIR / "skills/bug-fixer-trajectory-review/SKILL.md"
 SAFE_INGEST = PLUGIN_DIR / "scripts/safe_ingest.py"
 
 # Workspace tmp directory — scratch space for spawned review conversations
@@ -116,7 +116,7 @@ if brain_dir.exists():
             with open(transcript) as f:
                 head = f.read(2000)
             if any(kw in head for kw in [
-                "bug-fixer-tick", "bug-fixer-triage",
+                "bug-fixer-engineering", "bug-fixer-triage",
                 "Fix #", "Triage:", "auto-fixable",
                 "tick_dispatcher", "triage_dispatcher",
             ]):
@@ -127,7 +127,7 @@ if brain_dir.exists():
 # Also check the sidecar logs
 sidecar_log_dir = Path.home() / ".gemini/antigravity/sidecar_data"
 recent_sidecar_logs = []
-for sidecar_name in ["bug-fixer-tick", "bug-fixer-triage"]:
+for sidecar_name in ["bug-fixer-engineering-loop", "bug-fixer-triage-loop"]:
     log_file = sidecar_log_dir / sidecar_name / "logs/sidecar.log"
     if log_file.exists() and log_file.stat().st_mtime > cutoff:
         recent_sidecar_logs.append(str(log_file))
@@ -171,7 +171,7 @@ context_summary = "\n".join(context_lines)
 # ---------------------------------------------------------------------------
 
 title = "Trajectory Review: daily check-in"
-prompt = f"""Run the trajectory-review skill for repository {TARGET_REPO}.
+prompt = f"""Run the bug-fixer-trajectory-review skill for repository {TARGET_REPO}.
 
 Read the skill at: {SKILL_PATH}
 Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.
