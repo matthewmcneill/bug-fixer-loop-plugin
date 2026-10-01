@@ -189,7 +189,8 @@ Sidecar logs:
 
 Review these for recurring failure patterns, stale claims, and quality trends."""
 
-r = run(["agentapi", "new-conversation", f"--title={title}", prompt])
+model = config.get("trajectory_model", "flash")
+r = run(["agentapi", "new-conversation", f"--model={model}", f"--title={title}", prompt])
 
 try:
     result = json.loads(r.stdout)

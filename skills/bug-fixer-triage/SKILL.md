@@ -148,6 +148,10 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
       **Why not T2:** <1-2 sentence rationale — e.g. "Single module, no behaviour
       change in sensitive code, clear acceptance criteria, no alternative
       approaches to weigh.">
+
+      **Complexity:** `standard`
+      **Model routing:** `flash`
+      **Reasoning:** <1 sentence — e.g. "Clear scope, concrete checklist, no design decisions">
       ```
 
       For **T1 via small-scope override** (step 4e — typos, renames, docs, URLs,
@@ -157,6 +161,9 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
 
       **Type:** <rename / typo fix / docs update / URL change / etc.>
       **Files likely affected:** `<path/to/file1>`
+
+      **Complexity:** `mechanical`
+      **Model routing:** `flash_lite`
       ```
 
       For **T4 (project-candidate)** issues, post:
@@ -181,6 +188,32 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
       ```
 
 
+   i.1. **Complexity labelling (model routing):** For every issue classified as
+      T1 or T2, apply a `complexity:` label that the engineering dispatcher uses
+      to select the right model tier for the fix conversation. This uses the
+      same complexity vocabulary as the Principal Architect's work orders:
+
+      | Classification | Complexity label | Model tier | Rationale |
+      |---|---|---|---|
+      | T1 via small-scope override (step 4e) | `complexity:mechanical` | `flash_lite` | Rote, zero judgment |
+      | T1 standard (step 4h) | `complexity:standard` | `flash` | Clear scope, concrete checklist |
+      | T2 (needs-approach-review) | *(applied after approval — see Step 5)* | | |
+
+      Create the labels if they don't exist (idempotent):
+      ```bash
+      gh label create "complexity:mechanical" --repo <target_repo> --color "0E8A16" \
+        --description "Agent complexity: mechanical (flash_lite)" 2>/dev/null || true
+      gh label create "complexity:standard" --repo <target_repo> --color "1D76DB" \
+        --description "Agent complexity: standard (flash)" 2>/dev/null || true
+      gh label create "complexity:architect" --repo <target_repo> --color "B60205" \
+        --description "Agent complexity: architect (pro)" 2>/dev/null || true
+      ```
+
+      Apply the label alongside the classification label:
+      ```bash
+      gh issue edit <number> --repo <target_repo> --add-label "complexity:<tier>"
+      ```
+
    j. **Discovery HITL gate:** For issues labelled `discovered-in-review`, classify as **minimum T2** (`needs-approach-review`) regardless of apparent simplicity. Post comment:
       ```
       [BUG-FIXER-TRIAGE] Classification: T2 (needs-approach-review)
@@ -204,6 +237,7 @@ Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missin
    - Remove `needs-approach-review` label
    - **If the issue also has the `discovered-in-review` label, remove it** — this is the depth reset. The issue is now human-blessed and indistinguishable from a human-filed issue. Discoveries from fixing it will start a fresh chain.
    - Add `auto-fixable` label (T1)
+   - Add `complexity:architect` label — the triager originally assessed this as needing deep reasoning, so the engineering dispatcher should use `pro`
 
 6. **Milestone Query & Prioritisation:**
    Query milestones to get their status:

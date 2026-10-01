@@ -155,7 +155,8 @@ Configuration is at: {CONFIG_FILE}
 
 There are {len(untriaged)} untriaged issue(s) to classify: {issue_nums}"""
 
-r = run(["agentapi", "new-conversation", f"--title={title}", prompt])
+model = config.get("triage_model", "flash")
+r = run(["agentapi", "new-conversation", f"--model={model}", f"--title={title}", prompt])
 
 try:
     result = json.loads(r.stdout)

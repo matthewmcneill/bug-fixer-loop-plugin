@@ -22,6 +22,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from liveness import (record_dispatch, sweep_dispatches,
+                      transcript_age_seconds, transcript_path, is_stalled)
+
 
 def log(msg: str):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -34,6 +37,55 @@ def run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
 
 def gh(*args) -> subprocess.CompletedProcess:
     return run(["gh", *args])
+
+
+def inject_conv_tag(pr_number: int, tag_name: str, conv_id: str) -> bool:
+    """Inject or update an HTML conversation-ID tag in a PR body.
+
+    Ensures the PR body always has the correct tag, regardless of whether
+    the LLM agent remembered to write it.  Idempotent — safe to call on
+    every dispatch cycle.
+
+    Args:
+        pr_number: GitHub PR number.
+        tag_name:  Tag key, e.g. 'agy_dev_conv_id' or 'agy_arch_conv_id'.
+        conv_id:   Conversation ID to embed.
+
+    Returns True on success, False on failure (logged, non-fatal).
+    """
+    try:
+        r = gh("pr", "view", str(pr_number), "--repo", TARGET_REPO,
+               "--json", "body", "--jq", ".body")
+        if r.returncode != 0:
+            log(f"inject_conv_tag: failed to read PR #{pr_number} body: {r.stderr}")
+            return False
+
+        body = r.stdout.rstrip()
+
+        # Remove any existing tag with this name
+        new_body = re.sub(
+            rf'<!--\s*{re.escape(tag_name)}:\s*[a-zA-Z0-9-]+\s*-->\s*',
+            '', body
+        ).rstrip()
+
+        # Append the tag
+        new_body += f"\n<!-- {tag_name}: {conv_id} -->"
+
+        gh("pr", "edit", str(pr_number), "--repo", TARGET_REPO,
+           "--body", new_body)
+        log(f"inject_conv_tag: wrote {tag_name}={conv_id[:8]}... to PR #{pr_number}")
+        return True
+    except Exception as e:
+        log(f"inject_conv_tag: error updating PR #{pr_number}: {e}")
+        return False
+
+
+# PA-aligned complexity → model mapping (same table as the Principal Architect harness)
+COMPLEXITY_MODEL_MAP = {
+    "mechanical": "flash_lite",
+    "standard": "flash",
+    "architect": "pro",
+}
 
 
 if not os.environ.get("ANTIGRAVITY_PROJECT_ID"):
@@ -95,11 +147,27 @@ BRANCH_PREFIX = config.get("branch_prefix", "bugfix")
 SKILL_PATH = PLUGIN_DIR / "skills/bug-fixer-engineering/SKILL.md"
 SAFE_INGEST = PLUGIN_DIR / "scripts/safe_ingest.py"
 
+
+def get_model_for_issue(issue: dict) -> str:
+    """Read complexity label from triage, map to agentapi model tier.
+
+    Uses the PA-aligned complexity mapping. Falls back to the
+    engineering_model config key, then defaults to 'pro'.
+    """
+    for label in issue.get("labels", []):
+        name = label.get("name", "")
+        if name.startswith("complexity:"):
+            tier = name.split(":", 1)[1]
+            if tier in COMPLEXITY_MODEL_MAP:
+                return COMPLEXITY_MODEL_MAP[tier]
+    return config.get("engineering_model", "pro")
+
 # Derive all paths from config file location (standard layout)
 # <repo>/.agents/plugins/bug-fixer-loop-workspace/config.json
 STATE_DIR = CONFIG_FILE.parent
 REPO_DIR = STATE_DIR.parent.parent.parent
 CLAIMS_DIR = STATE_DIR / "claims"
+DISPATCHES_DIR = STATE_DIR / "dispatches"
 
 COOLDOWN_FILE = STATE_DIR / "cooldown.json"
 FAILURE_COUNT_FILE = STATE_DIR / "failure_count"
@@ -124,6 +192,17 @@ log(f"Checking {TARGET_REPO} (max_concurrent={MAX_CONCURRENT})")
 
 
 # ---------------------------------------------------------------------------
+# Step 0: Sweep previous dispatches for stalled/completed conversations
+# ---------------------------------------------------------------------------
+
+recovered = sweep_dispatches(DISPATCHES_DIR, TARGET_REPO, log,
+                             claims_dir=CLAIMS_DIR)
+for r in recovered:
+    log(f"Recovered: {r['type']} conv={r['conversation_id'][:8]}... "
+        f"action={r.get('action', 'unknown')}")
+
+
+# ---------------------------------------------------------------------------
 # Step 1: Stale claim recovery (3-layer detection)
 # ---------------------------------------------------------------------------
 
@@ -138,7 +217,6 @@ if CLAIMS_DIR.exists():
             continue
 
         issue_num = claim["issue"]
-        claim_pid = claim.get("pid", 0)
         conv_id = claim.get("conversation_id", "")
 
         # Get issue title for conversation naming
@@ -146,31 +224,28 @@ if CLAIMS_DIR.exists():
                "--json", "title", "--jq", ".title")
         issue_title = r.stdout.strip() or "Unknown"
 
-        # --- Layer 1: PID check (microseconds) ---
-        if pid_alive(claim_pid):
-            log(f"Issue #{issue_num} — PID {claim_pid} alive, skipping.")
+        # --- Layer 1: Transcript-based liveness check ---
+        # (Replaces old PID check — the PID in lock files is the dispatcher's
+        # PID, not the agent's, so it's always dead by the next tick.)
+        age = transcript_age_seconds(conv_id)
+
+        if age is not None and age < 300 and not is_stalled(conv_id):
+            log(f"Issue #{issue_num} — conv {conv_id[:8]}... active ({age}s ago), skipping.")
             continue
 
-        # --- Layer 2: Transcript mtime check ---
-        transcript = (Path.home() / ".gemini/antigravity/brain" / conv_id /
-                       ".system_generated/logs/transcript.jsonl")
-        age = file_mtime_age_seconds(transcript)
-
-        if age is not None and age < 300:
-            log(f"Issue #{issue_num} — PID dead but transcript active {age}s ago.")
-            # Check if PR was already opened (clean exit)
-            r = gh("pr", "list", "--repo", TARGET_REPO,
-                   "--search", f"#{issue_num}",
-                   "--json", "number", "--jq", "length")
-            if r.stdout.strip() not in ("", "0"):
-                log(f"Issue #{issue_num} — PR exists, cleaning up lock.")
-                lockfile.unlink(missing_ok=True)
-                gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
-                   "--remove-label", "status:in-progress")
+        # --- Check if PR was already opened (clean exit) ---
+        r = gh("pr", "list", "--repo", TARGET_REPO,
+               "--search", f"#{issue_num}",
+               "--json", "number", "--jq", "length")
+        if r.stdout.strip() not in ("", "0"):
+            log(f"Issue #{issue_num} — PR exists, cleaning up lock.")
+            lockfile.unlink(missing_ok=True)
+            gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
+               "--remove-label", "status:in-progress")
             continue
 
-        # --- Layer 3: Both dead → ORPHANED ---
-        log(f"Issue #{issue_num} — ORPHANED (PID {claim_pid} dead, transcript stale).")
+        # --- ORPHANED: transcript stale, no PR opened ---
+        log(f"Issue #{issue_num} — ORPHANED (conv {conv_id[:8]}... stale).")
 
         # Check for existing branch (durable code state)
         r = run(["git", "ls-remote", "origin", f"{BRANCH_PREFIX}/{issue_num}-*"],
@@ -185,6 +260,7 @@ if CLAIMS_DIR.exists():
             reattach_lines.append(
                 f"REATTACH CONTEXT: Previous agent made progress on branch: {existing_branch}\n"
                 f"Check it out and inspect the diff against main.")
+        transcript = transcript_path(conv_id)
         if transcript.exists():
             reattach_lines.append(
                 f"Previous agent transcript: {transcript}\n"
@@ -214,7 +290,8 @@ After opening the PR (with 'Closes #N' in the body), transition the issue to sta
 This conversation handles ONE issue only."""
 
         title = f"Fix #{issue_num}: {issue_title} (reattach)"
-        r = run(["agentapi", "new-conversation", f"--title={title}", prompt])
+        model = config.get("engineering_model", "pro")  # reattach always pro
+        r = run(["agentapi", "new-conversation", f"--model={model}", f"--title={title}", prompt])
 
         try:
             result = json.loads(r.stdout)
@@ -229,10 +306,12 @@ This conversation handles ONE issue only."""
         # Update lock file with new conversation
         lockfile.write_text(json.dumps({
             "issue": issue_num,
-            "pid": os.getpid(),
+            "dispatcher_pid": os.getpid(),  # debug only — not used for liveness
             "conversation_id": new_conv_id,
             "claimed_at": datetime.now(timezone.utc).isoformat(),
         }))
+        record_dispatch(DISPATCHES_DIR, new_conv_id, "reattach",
+                        issue_number=issue_num, timeout_minutes=45)
         log(f"Reattached #{issue_num} → conversation {new_conv_id}")
         gh("issue", "comment", str(issue_num), "--repo", TARGET_REPO,
            "--body", f"[BUG-FIXER] Reattached to orphaned work from session {conv_id}. New session: {new_conv_id}.")
@@ -274,10 +353,25 @@ if r_prs.returncode == 0:
         log(f"Failed to parse needs-iteration PRs: {r_prs.stderr}")
         needs_iteration_prs = []
 
+    # Build set of PRs with active dispatches to skip re-dispatch
+    active_pr_dispatches = set()
+    if DISPATCHES_DIR.exists():
+        for df in DISPATCHES_DIR.glob("*.json"):
+            try:
+                d = json.loads(df.read_text())
+                if d.get("type") == "pr_iteration" and d.get("pr_number"):
+                    active_pr_dispatches.add(d["pr_number"])
+            except (json.JSONDecodeError, OSError):
+                pass
+
     for pr in needs_iteration_prs:
         pr_num = pr["number"]
         pr_body = pr.get("body", "")
-        
+
+        if pr_num in active_pr_dispatches:
+            log(f"PR #{pr_num} — iteration already dispatched, skipping.")
+            continue
+
         # Fetch the latest architect review comments
         r_comments = gh("pr", "view", str(pr_num), "--repo", TARGET_REPO, "--comments", "--json", "comments")
         comments_text = ""
@@ -299,18 +393,22 @@ if r_prs.returncode == 0:
                   f"Read config from: {CONFIG_FILE}\n"
                   f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
                   f"Work in: {REPO_DIR}\n\n"
+                  f"After pushing changes, remove the needs-iteration label:\n"
+                  f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label needs-iteration\n\n"
                   f"Architect comments:\n{comments_text}")
 
         # Try to resume the existing developer conversation
         dev_conv_id_match = re.search(r"<!-- agy_dev_conv_id:\s*([a-zA-Z0-9-]+)\s*-->", pr_body)
-        resumed = False
+        dispatched = False
+        dispatch_conv_id = None
 
         if dev_conv_id_match:
             dev_conv_id = dev_conv_id_match.group(1)
             log(f"Resuming developer conversation {dev_conv_id} for PR #{pr_num} iteration.")
-            msg_r = run(["agentapi", "message", "--conversation-id", dev_conv_id, prompt])
+            msg_r = run(["agentapi", "send-message", dev_conv_id, prompt])
             if msg_r.returncode == 0:
-                resumed = True
+                dispatched = True
+                dispatch_conv_id = dev_conv_id
             else:
                 log(f"Failed to resume conversation {dev_conv_id} (expired/deleted?). "
                     f"Falling back to new conversation. Error: {msg_r.stderr or msg_r.stdout}")
@@ -318,7 +416,7 @@ if r_prs.returncode == 0:
             log(f"PR #{pr_num} has needs-iteration but no agy_dev_conv_id. Spawning fresh developer.")
 
         # Fallback: spawn a fresh developer agent with full context
-        if not resumed:
+        if not dispatched:
             fresh_prompt = (f"You are the bug-fixer agent. The Architect has reviewed PR #{pr_num} "
                            f"in repository {TARGET_REPO} and requested changes.\n\n"
                            f"Read the full engineering skill instructions at: {SKILL_PATH}\n"
@@ -327,18 +425,40 @@ if r_prs.returncode == 0:
                            f"Work in: {REPO_DIR}\n\n"
                            f"Check out the PR branch, apply the fixes requested below, run tests, "
                            f"and push to the same branch.\n\n"
+                           f"After pushing changes, remove the needs-iteration label:\n"
+                           f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label needs-iteration\n\n"
+                           f"IMPORTANT: After pushing, ensure the PR body ends with this HTML comment "
+                           f"(replace YOUR_CONVERSATION_ID with your actual conversation ID):\n"
+                           f"  <!-- agy_dev_conv_id: YOUR_CONVERSATION_ID -->\n\n"
                            f"Architect comments:\n{comments_text}\n\n"
                            f"Current PR diff for context:\n```diff\n{pr_diff}\n```")
             title = f"Fix PR #{pr_num} iteration (architect feedback)"
-            new_r = run(["agentapi", "new-conversation", f"--title={title}", fresh_prompt])
+            model = config.get("engineering_model", "pro")  # iteration always pro
+            new_r = run(["agentapi", "new-conversation", f"--model={model}", f"--title={title}", fresh_prompt])
             if new_r.returncode == 0:
-                resumed = True
+                try:
+                    result = json.loads(new_r.stdout)
+                    dispatch_conv_id = result["response"]["newConversation"]["conversationId"]
+                    dispatched = True
+                except (json.JSONDecodeError, KeyError):
+                    pass
                 log(f"Spawned fresh developer conversation for PR #{pr_num} iteration.")
             else:
                 log(f"Failed to spawn fresh conversation for PR #{pr_num}: {new_r.stderr or new_r.stdout}")
 
-        if resumed:
-            gh("pr", "edit", str(pr_num), "--repo", TARGET_REPO, "--remove-label", "needs-iteration")
+        if dispatched and dispatch_conv_id:
+            # Track the dispatch — don't remove needs-iteration label yet.
+            # The agent removes it after pushing. If the agent stalls, the
+            # liveness sweep will post state to the PR and the label stays
+            # for the next cycle to re-dispatch.
+            record_dispatch(DISPATCHES_DIR, dispatch_conv_id, "pr_iteration",
+                            pr_number=pr_num,
+                            labels_to_restore=["needs-iteration"],
+                            timeout_minutes=30)
+            # Ensure the PR body has the dev conversation tag so the next
+            # iteration cycle can resume this conversation instead of
+            # spawning a new one.
+            inject_conv_tag(pr_num, "agy_dev_conv_id", dispatch_conv_id)
             active_others += 1  # Occupies a slot since the developer is running
             available_slots = MAX_CONCURRENT - active_others
 
@@ -394,7 +514,7 @@ for issue in eligible:
     lock_path = CLAIMS_DIR / f"{issue_num}.lock"
     lock_path.write_text(json.dumps({
         "issue": issue_num,
-        "pid": os.getpid(),
+        "dispatcher_pid": os.getpid(),  # debug only — not used for liveness
         "conversation_id": "pending",
         "claimed_at": datetime.now(timezone.utc).isoformat(),
     }))
@@ -417,7 +537,8 @@ After opening the PR (with 'Closes #N' in the body), transition the issue to sta
 This conversation handles ONE issue only. Do not pick up additional issues."""
 
     title = f"Fix #{issue_num}: {issue_title}"
-    r = run(["agentapi", "new-conversation", f"--title={title}", prompt])
+    model = get_model_for_issue(issue)
+    r = run(["agentapi", "new-conversation", f"--model={model}", f"--title={title}", prompt])
 
     try:
         result = json.loads(r.stdout)
@@ -432,10 +553,12 @@ This conversation handles ONE issue only. Do not pick up additional issues."""
     # Update lock file with conversation ID
     lock_path.write_text(json.dumps({
         "issue": issue_num,
-        "pid": os.getpid(),
+        "dispatcher_pid": os.getpid(),  # debug only — not used for liveness
         "conversation_id": new_conv_id,
         "claimed_at": datetime.now(timezone.utc).isoformat(),
     }))
+    record_dispatch(DISPATCHES_DIR, new_conv_id, "fresh_fix",
+                    issue_number=issue_num, timeout_minutes=45)
     log(f"Spawned conversation {new_conv_id} for #{issue_num}")
     spawned += 1
 
