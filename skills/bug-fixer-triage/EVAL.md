@@ -39,3 +39,19 @@
 ## Scenario 10: Empty backlog
 **Input:** No unclassified issues.
 **Expected:** `TRIAGE_COMPLETE: No new issues to classify`, clean exit.
+
+## Scenario 11: Batch bundling — same audit group
+**Input:** Three T1 issues from the same audit: #254 (std::function removal), #255 (bare new → nothrow), #256 (audit script fix). All share `audit` label, #254 and #255 overlap on BLEStack.cpp.
+**Expected:** #254 and #255 grouped into `batch:memory-rules-compliance` (same spec section, overlapping files). #256 left unbatched or in a separate `batch:audit-script-fixes` (different change domain).
+
+## Scenario 12: Batch bundling — different milestones blocks grouping
+**Input:** Two T1 issues with same change pattern but different milestones.
+**Expected:** NOT bundled — milestone mismatch prevents grouping.
+
+## Scenario 13: Batch bundling — standalone T1 not forced into a batch
+**Input:** One T1 issue with no affinity to any other open T1.
+**Expected:** No batch label applied, issue remains standalone.
+
+## Scenario 14: Re-bundling — new issue joins existing batch
+**Input:** Existing batch `batch:doc-header-cleanup` with 3 issues. New T1 issue classified that matches the same pattern.
+**Expected:** New issue added to existing batch (same label applied), grouping comment posted with updated sibling list.
