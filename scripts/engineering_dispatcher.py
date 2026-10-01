@@ -160,7 +160,7 @@ def get_model_for_issue(issue: dict) -> str:
             tier = name.split(":", 1)[1]
             if tier in COMPLEXITY_MODEL_MAP:
                 return COMPLEXITY_MODEL_MAP[tier]
-    return config.get("engineering_model", "pro")
+    return config.get("engineering_model", config.get("tick_model", "pro"))
 
 # Derive all paths from config file location (standard layout)
 # <repo>/.agents/plugins/bug-fixer-loop-workspace/config.json
@@ -290,7 +290,7 @@ After opening the PR (with 'Closes #N' in the body), transition the issue to sta
 This conversation handles ONE issue only."""
 
         title = f"Fix #{issue_num}: {issue_title} (reattach)"
-        model = config.get("engineering_model", "pro")  # reattach always pro
+        model = config.get("engineering_model", config.get("tick_model", "pro"))  # reattach always pro
         r = run(["agentapi", "new-conversation", f"--model={model}", f"--title={title}", prompt])
 
         try:
@@ -433,7 +433,7 @@ if r_prs.returncode == 0:
                            f"Architect comments:\n{comments_text}\n\n"
                            f"Current PR diff for context:\n```diff\n{pr_diff}\n```")
             title = f"Fix PR #{pr_num} iteration (architect feedback)"
-            model = config.get("engineering_model", "pro")  # iteration always pro
+            model = config.get("engineering_model", config.get("tick_model", "pro"))  # iteration always pro
             new_r = run(["agentapi", "new-conversation", f"--model={model}", f"--title={title}", fresh_prompt])
             if new_r.returncode == 0:
                 try:
