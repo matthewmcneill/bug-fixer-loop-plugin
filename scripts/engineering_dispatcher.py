@@ -162,8 +162,8 @@ if WORKSPACE_CONFIG:
         DISPATCHES_DIR = STATE_DIR / "dispatches"
         COOLDOWN_FILE = STATE_DIR / "cooldown.json"
         FAILURE_COUNT_FILE = STATE_DIR / "failure_count"
-    except Exception:
-        pass
+    except (json.JSONDecodeError, OSError) as e:
+        log(f"Failed to load config {CONFIG_FILE}: {e}")
 
 
 def get_default_engineering_model() -> str:
@@ -294,23 +294,18 @@ def main():
 
             reattach_context = "\n".join(reattach_lines)
 
-            prompt = f"""You are the bug-fixer agent. REATTACH to orphaned issue #{issue_num} in repository {TARGET_REPO}.
-
-    Issue title: {issue_title}
-
-    {reattach_context}
-
-    Read the full engineering skill instructions at: {SKILL_PATH}
-    Read config from: {CONFIG_FILE}
-    Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.
-    Work in: {REPO_DIR}
-
-    The issue is already claimed (status:in-progress label applied).
-    Update the lock file at: {CLAIMS_DIR}/{issue_num}.lock with your conversation_id and PID.
-
-    Continue from the best available state — DO NOT start over if there is existing progress.
-    After opening the PR (with 'Closes #N' in the body), transition the issue to status:awaiting-review and delete the lock file.
-    This conversation handles ONE issue only."""
+            prompt = (f"You are the bug-fixer agent. REATTACH to orphaned issue #{issue_num} in repository {TARGET_REPO}.\n\n"
+                      f"Issue title: {issue_title}\n\n"
+                      f"{reattach_context}\n\n"
+                      f"Read the full engineering skill instructions at: {SKILL_PATH}\n"
+                      f"Read config from: {CONFIG_FILE}\n"
+                      f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
+                      f"Work in: {REPO_DIR}\n\n"
+                      f"The issue is already claimed (status:in-progress label applied).\n"
+                      f"Update the lock file at: {CLAIMS_DIR}/{issue_num}.lock with your conversation_id and PID.\n\n"
+                      f"Continue from the best available state — DO NOT start over if there is existing progress.\n"
+                      f"After opening the PR (with 'Closes #N' in the body), transition the issue to status:awaiting-review and delete the lock file.\n"
+                      f"This conversation handles ONE issue only.")
 
             title = f"Fix #{issue_num}: {issue_title} (reattach)"
             model = get_default_engineering_model()
@@ -543,21 +538,17 @@ def main():
         }))
 
         # Spawn LLM conversation — this shows up in the IDE
-        prompt = f"""You are the bug-fixer agent. Fix issue #{issue_num} in repository {TARGET_REPO}.
-
-    Issue title: {issue_title}
-
-    Read the full engineering skill instructions at: {SKILL_PATH}
-    Read config from: {CONFIG_FILE}
-    Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.
-    Work in: {REPO_DIR}
-
-    The issue is already claimed (status:in-progress label applied).
-    The lock file is at: {lock_path} — update it with your conversation_id and PID.
-
-    Start from Step 6 (Branch) in the skill — Steps 1-5 are already done by the dispatcher.
-    After opening the PR (with 'Closes #N' in the body), transition the issue to status:awaiting-review and delete the lock file.
-    This conversation handles ONE issue only. Do not pick up additional issues."""
+        prompt = (f"You are the bug-fixer agent. Fix issue #{issue_num} in repository {TARGET_REPO}.\n\n"
+                  f"Issue title: {issue_title}\n\n"
+                  f"Read the full engineering skill instructions at: {SKILL_PATH}\n"
+                  f"Read config from: {CONFIG_FILE}\n"
+                  f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
+                  f"Work in: {REPO_DIR}\n\n"
+                  f"The issue is already claimed (status:in-progress label applied).\n"
+                  f"The lock file is at: {lock_path} — update it with your conversation_id and PID.\n\n"
+                  f"Start from Step 6 (Branch) in the skill — Steps 1-5 are already done by the dispatcher.\n"
+                  f"After opening the PR (with 'Closes #N' in the body), transition the issue to status:awaiting-review and delete the lock file.\n"
+                  f"This conversation handles ONE issue only. Do not pick up additional issues.")
 
         title = f"Fix #{issue_num}: {issue_title}"
         model = get_model_for_issue(issue)
