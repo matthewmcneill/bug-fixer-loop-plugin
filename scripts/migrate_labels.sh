@@ -6,7 +6,8 @@ set -euo pipefail
 #
 # This script renames old-style bug-fixer labels to the new
 # bug-fixer:<actor>:<name> routed-segment namespace.
-# Uses `gh label create --force` which renames in-place.
+# Uses `gh label edit --name` which renames in-place, preserving
+# all issue/PR associations.
 
 TARGET_REPO="${1:-}"
 if [[ -z "$TARGET_REPO" ]]; then
@@ -69,14 +70,16 @@ for old_label in "${!RENAME_MAP[@]}"; do
     echo "[DRY RUN] Would rename: '${old_label}' → '${new_label}' (${color})"
   else
     echo "Renaming: '${old_label}' → '${new_label}'"
-    # Create new label (in-place if same name, or creates new one)
-    gh label create "${new_label}" --repo "${TARGET_REPO}" --force \
-      --color "${color}" --description "${description}" 2>/dev/null || true
-    
-    # Delete the old label if it differs from the new one (case-insensitive check)
-    if [[ "${old_label,,}" != "${new_label,,}" ]]; then
-      gh label delete "${old_label}" --repo "${TARGET_REPO}" --yes 2>/dev/null || true
-    fi
+    # Rename in-place — preserves issue/PR associations
+    gh label edit "${old_label}" --repo "${TARGET_REPO}" \
+      --name "${new_label}" \
+      --color "${color}" \
+      --description "${description}" 2>/dev/null || {
+      # If old label doesn't exist, ensure the new one does
+      echo "  ⚠ Old label '${old_label}' not found — ensuring '${new_label}' exists"
+      gh label create "${new_label}" --repo "${TARGET_REPO}" --force \
+        --color "${color}" --description "${description}" 2>/dev/null || true
+    }
   fi
 done
 
