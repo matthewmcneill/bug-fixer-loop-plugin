@@ -1,0 +1,9 @@
+[
+  {
+    "number": 10,
+    "title": "bug: dispatchers don't specify --model tier \u2014 spawned conver",
+    "tier": "T1 engineer:needs-fix",
+    "reason": "Clear scope, single module, testable",
+    "milestone": ""
+  }
+]

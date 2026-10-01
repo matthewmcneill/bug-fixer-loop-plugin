@@ -117,7 +117,7 @@ if brain_dir.exists():
                 head = f.read(2000)
             if any(kw in head for kw in [
                 "bug-fixer-engineering", "bug-fixer-triage",
-                "Fix #", "Triage:", "auto-fixable",
+                "Fix #", "Triage:", "bug-fixer:engineer:needs-fix",
                 "engineering_dispatcher", "triage_dispatcher",
             ]):
                 recent_transcripts.append(str(transcript))
@@ -147,13 +147,13 @@ log(f"Found {len(recent_transcripts)} transcript(s) and {len(recent_sidecar_logs
 
 # Quick check: any stale in-progress issues?
 r = run(["gh", "issue", "list", "--repo", TARGET_REPO,
-         "--label", "status:in-progress", "--state", "open",
+         "--label", "bug-fixer:engineer:in-progress", "--state", "open",
          "--json", "number,title", "--jq", "length"])
 in_progress_count = int(r.stdout.strip() or "0")
 
 # Quick check: any recent PRs from the bug-fixer?
 r = run(["gh", "pr", "list", "--repo", TARGET_REPO,
-         "--label", "bug-fixer", "--state", "all",
+         "--label", "bug-fixer:engineer:pr", "--state", "all",
          "--json", "number", "--jq", "length"])
 recent_prs = int(r.stdout.strip() or "0")
 

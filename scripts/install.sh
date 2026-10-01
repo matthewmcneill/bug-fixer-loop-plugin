@@ -167,12 +167,23 @@ DEFAULTS = {
         "-----BEGIN (RSA |EC )?PRIVATE KEY-----"
     ],
     "max_concurrent_prs": 4,
-    "exclusion_labels": ["human-required", "P1-blocker", "hardware-required"],
-    "auto_fixable_labels": ["auto-fixable"],
+    "exclusion_labels": ["bug-fixer:human:required", "P1-blocker", "hardware-required"],
+    "auto_fixable_labels": ["bug-fixer:engineer:needs-fix"],
     "required_labels": [
-        "auto-fixable", "human-required", "needs-approach-review",
-        "project-candidate", "input-needed", "status:in-progress",
-        "bug-fixer", "bug-fixer-health", "spec-change-request"
+        "bug-fixer:engineer:needs-fix",
+        "bug-fixer:human:required",
+        "bug-fixer:human:needs-approach-review",
+        "bug-fixer:human:project-candidate",
+        "bug-fixer:human:input-needed",
+        "bug-fixer:engineer:in-progress",
+        "bug-fixer:engineer:pr",
+        "bug-fixer:system:health",
+        "bug-fixer:human:spec-change-request",
+        "bug-fixer:engineer:needs-iteration",
+        "bug-fixer:architect:approved",
+        "bug-fixer:architect:awaiting-review",
+        "bug-fixer:human:needs-intervention",
+        "bug-fixer:triage:discovered-in-review"
     ],
     "test_command": "",
     "lint_command": "",

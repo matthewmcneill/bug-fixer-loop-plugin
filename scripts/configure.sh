@@ -351,27 +351,37 @@ echo ""
 echo "--> Step 5: Creating Required Labels in ${TARGET_REPO}..."
 
 declare -A LABELS_META=(
-  ["auto-fixable"]="0E8A16:Issues eligible for autonomous fixing"
-  ["human-required"]="D93F0B:Issues requiring human intervention or architectural review"
-  ["needs-approach-review"]="FBCA04:Fix approach requires human maintainer sign-off"
-  ["project-candidate"]="5319E7:Large multi-step initiative candidate"
-  ["input-needed"]="D4C5F9:Waiting for human input or clarification"
-  ["status:in-progress"]="1D76DB:Currently being worked on by an agent or human"
-  ["bug-fixer"]="0075CA:Managed by autonomous bug-fixer loop"
-  ["bug-fixer-health"]="C5DEF5:Bug fixer health, metrics, or diagnostic report"
-  ["spec-change-request"]="F9D0C4:Proposed modification to design specification"
+  ["bug-fixer:engineer:needs-fix"]="0E8A16:Issues eligible for autonomous fixing"
+  ["bug-fixer:human:required"]="D93F0B:Issues requiring human intervention or architectural review"
+  ["bug-fixer:human:needs-approach-review"]="FBCA04:Fix approach requires human maintainer sign-off"
+  ["bug-fixer:human:project-candidate"]="5319E7:Large multi-step initiative candidate"
+  ["bug-fixer:human:input-needed"]="D4C5F9:Waiting for human input or clarification"
+  ["bug-fixer:engineer:in-progress"]="1D76DB:Currently being worked on by an agent or human"
+  ["bug-fixer:engineer:pr"]="0075CA:Managed by autonomous bug-fixer loop"
+  ["bug-fixer:system:health"]="C5DEF5:Bug fixer health, metrics, or diagnostic report"
+  ["bug-fixer:human:spec-change-request"]="F9D0C4:Proposed modification to design specification"
+  ["bug-fixer:engineer:needs-iteration"]="E4E669:PR needs engineering rework after architect review"
+  ["bug-fixer:architect:approved"]="0E8A16:Architect approved the PR for merge"
+  ["bug-fixer:architect:awaiting-review"]="BFD4F2:PR ready for architect review"
+  ["bug-fixer:human:needs-intervention"]="D93F0B:Architect escalated — needs human resolution"
+  ["bug-fixer:triage:discovered-in-review"]="d4c5f9:Auto-filed during PR review, requires human approval before auto-fix"
 )
 
 REQUIRED_LABELS=(
-  "auto-fixable"
-  "human-required"
-  "needs-approach-review"
-  "project-candidate"
-  "input-needed"
-  "status:in-progress"
-  "bug-fixer"
-  "bug-fixer-health"
-  "spec-change-request"
+  "bug-fixer:engineer:needs-fix"
+  "bug-fixer:human:required"
+  "bug-fixer:human:needs-approach-review"
+  "bug-fixer:human:project-candidate"
+  "bug-fixer:human:input-needed"
+  "bug-fixer:engineer:in-progress"
+  "bug-fixer:engineer:pr"
+  "bug-fixer:system:health"
+  "bug-fixer:human:spec-change-request"
+  "bug-fixer:engineer:needs-iteration"
+  "bug-fixer:architect:approved"
+  "bug-fixer:architect:awaiting-review"
+  "bug-fixer:human:needs-intervention"
+  "bug-fixer:triage:discovered-in-review"
 )
 
 for label in "${REQUIRED_LABELS[@]}"; do
@@ -385,13 +395,6 @@ for label in "${REQUIRED_LABELS[@]}"; do
     --description "${description}" \
     --color "${color}" >/dev/null 2>&1 || true
 done
-
-# Ensure discovered-in-review label exists on target repo (for tech debt discovery chain)
-gh label create "discovered-in-review" \
-  --repo "${TARGET_REPO}" \
-  --color "d4c5f9" \
-  --description "Auto-filed during PR review, requires human approval before auto-fix" \
-  2>/dev/null || true
 
 echo "    - Required labels configured."
 
@@ -473,15 +476,20 @@ if "trajectory_model" not in config:
 
 # Ensure required_labels list is complete
 req_labels = [
-    "auto-fixable",
-    "human-required",
-    "needs-approach-review",
-    "project-candidate",
-    "input-needed",
-    "status:in-progress",
-    "bug-fixer",
-    "bug-fixer-health",
-    "spec-change-request"
+    "bug-fixer:engineer:needs-fix",
+    "bug-fixer:human:required",
+    "bug-fixer:human:needs-approach-review",
+    "bug-fixer:human:project-candidate",
+    "bug-fixer:human:input-needed",
+    "bug-fixer:engineer:in-progress",
+    "bug-fixer:engineer:pr",
+    "bug-fixer:system:health",
+    "bug-fixer:human:spec-change-request",
+    "bug-fixer:engineer:needs-iteration",
+    "bug-fixer:architect:approved",
+    "bug-fixer:architect:awaiting-review",
+    "bug-fixer:human:needs-intervention",
+    "bug-fixer:triage:discovered-in-review"
 ]
 existing = config.get("required_labels", [])
 for lbl in req_labels:
@@ -536,9 +544,9 @@ issues = json.loads(sys.argv[1])
 target_repo = sys.argv[2]
 spec_file = sys.argv[3]
 
-exclusion_labels = {"human-required", "hardware-required", "P1-blocker"}
+exclusion_labels = {"bug-fixer:human:required", "hardware-required", "P1-blocker"}
 hardware_keywords = {"pin", "gpio", "sensor", "antenna", "soldering", "oscilloscope", "multimeter"}
-auto_labels = {"auto-fixable", "needs-approach-review", "input-needed", "project-candidate", "human-required"}
+auto_labels = {"bug-fixer:engineer:needs-fix", "bug-fixer:human:needs-approach-review", "bug-fixer:human:input-needed", "bug-fixer:human:project-candidate", "bug-fixer:human:required"}
 
 # Effort labels — if present, use them as strong signals
 small_effort_labels = {"S", "S-effort", "P3-docs-dx", "P4-enhancement"}
@@ -598,37 +606,37 @@ for issue in issues:
 
     # T5: exclusion labels (highest priority)
     if labels & exclusion_labels:
-        tier = "T5 human-required"
+        tier = "T5 bug-fixer:human:required"
         reason = f"Has exclusion label: {labels & exclusion_labels}"
     # T5: hardware-dependent (strict keywords only, not "roaming" which is a feature)
     elif any(kw in text for kw in hardware_keywords) and not is_small_scope:
-        tier = "T5 human-required"
+        tier = "T5 bug-fixer:human:required"
         reason = "Hardware-dependent (mentions physical components)"
     # T3: ambiguous / no clear criteria
     elif body_len < 30:
-        tier = "T3 input-needed"
+        tier = "T3 bug-fixer:human:input-needed"
         reason = "Issue body too short / lacks clear acceptance criteria"
     # Small effort label overrides keyword escalation
     elif has_small_effort and is_small_scope:
-        tier = "T1 auto-fixable"
+        tier = "T1 bug-fixer:engineer:needs-fix"
         reason = "Small effort + small scope indicators"
     # T4: requires STRONG multi-module signals (not just keyword presence)
     elif any(kw in text for kw in t4_multi_module_signals):
-        tier = "T4 project-candidate"
+        tier = "T4 bug-fixer:human:project-candidate"
         reason = "Large scope / architectural work"
     elif any(kw in text for kw in t4_weak_signals) and not is_small_scope and (file_mentions > 3 or has_large_effort):
-        tier = "T4 project-candidate"
+        tier = "T4 bug-fixer:human:project-candidate"
         reason = f"Weak T4 signal + multi-file scope ({file_mentions} files mentioned)"
     # T2: must indicate actual behaviour change in sensitive area
     elif any(kw in text for kw in t2_behaviour_signals):
-        tier = "T2 needs-approach-review"
+        tier = "T2 bug-fixer:human:needs-approach-review"
         reason = "Behaviour change in sensitive code path"
     elif any(kw in text for kw in t2_weak_signals) and not is_small_scope and not has_small_effort:
-        tier = "T2 needs-approach-review"
+        tier = "T2 bug-fixer:human:needs-approach-review"
         reason = "Touches sensitive area — agent should confirm approach first"
     # T1: everything else (including weak-signal matches that are small scope)
     else:
-        tier = "T1 auto-fixable"
+        tier = "T1 bug-fixer:engineer:needs-fix"
         reason = "Clear scope, single module, testable"
 
     results.append({
@@ -684,9 +692,9 @@ import subprocess
 issues = json.loads(sys.argv[1])
 target_repo = sys.argv[2]
 
-exclusion_labels = {"human-required", "hardware-required", "P1-blocker"}
+exclusion_labels = {"bug-fixer:human:required", "hardware-required", "P1-blocker"}
 hardware_keywords = {"pin", "gpio", "sensor", "antenna", "soldering", "oscilloscope", "multimeter"}
-auto_labels = {"auto-fixable", "needs-approach-review", "input-needed", "project-candidate", "human-required"}
+auto_labels = {"bug-fixer:engineer:needs-fix", "bug-fixer:human:needs-approach-review", "bug-fixer:human:input-needed", "bug-fixer:human:project-candidate", "bug-fixer:human:required"}
 small_effort_labels = {"S", "S-effort", "P3-docs-dx", "P4-enhancement"}
 large_effort_labels = {"L", "L-effort", "XL", "XL-effort"}
 t4_multi_module_signals = ["cross-cutting", "ci pipeline", "ci/cd", "rewrite from scratch",
@@ -718,23 +726,23 @@ for issue in issues:
     file_mentions = len(set(re.findall(r'\b\w+\.(cpp|h|py|js|css|html|ini|json|md)\b', text)))
 
     if labels & exclusion_labels:
-        label = "human-required"
+        label = "bug-fixer:human:required"
     elif any(kw in text for kw in hardware_keywords) and not is_small_scope:
-        label = "human-required"
+        label = "bug-fixer:human:required"
     elif body_len < 30:
-        label = "input-needed"
+        label = "bug-fixer:human:input-needed"
     elif has_small_effort and is_small_scope:
-        label = "auto-fixable"
+        label = "bug-fixer:engineer:needs-fix"
     elif any(kw in text for kw in t4_multi_module_signals):
-        label = "project-candidate"
+        label = "bug-fixer:human:project-candidate"
     elif any(kw in text for kw in t4_weak_signals) and not is_small_scope and (file_mentions > 3 or has_large_effort):
-        label = "project-candidate"
+        label = "bug-fixer:human:project-candidate"
     elif any(kw in text for kw in t2_behaviour_signals):
-        label = "needs-approach-review"
+        label = "bug-fixer:human:needs-approach-review"
     elif any(kw in text for kw in t2_weak_signals) and not is_small_scope and not has_small_effort:
-        label = "needs-approach-review"
+        label = "bug-fixer:human:needs-approach-review"
     else:
-        label = "auto-fixable"
+        label = "bug-fixer:engineer:needs-fix"
 
     subprocess.run(
         ["gh", "issue", "edit", str(num), "--repo", target_repo, "--add-label", label],

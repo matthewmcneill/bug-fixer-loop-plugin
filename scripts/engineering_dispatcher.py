@@ -179,8 +179,8 @@ def get_model_for_issue(issue: dict) -> str:
     """
     for label in issue.get("labels", []):
         name = label.get("name", "")
-        if name.startswith("complexity:"):
-            tier = name.split(":", 1)[1]
+        if name.startswith("bug-fixer:complexity:"):
+            tier = name.rsplit(":", 1)[1]
             if tier in COMPLEXITY_MODEL_MAP:
                 return COMPLEXITY_MODEL_MAP[tier]
     return get_default_engineering_model()
@@ -264,7 +264,7 @@ def main():
                 log(f"Issue #{issue_num} — PR exists, cleaning up lock.")
                 lockfile.unlink(missing_ok=True)
                 gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
-                   "--remove-label", "status:in-progress")
+                   "--remove-label", "bug-fixer:engineer:in-progress")
                 continue
 
             # --- ORPHANED: transcript stale, no PR opened ---
@@ -301,10 +301,10 @@ def main():
                       f"Read config from: {CONFIG_FILE}\n"
                       f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
                       f"Work in: {REPO_DIR}\n\n"
-                      f"The issue is already claimed (status:in-progress label applied).\n"
+                      f"The issue is already claimed (bug-fixer:engineer:in-progress label applied).\n"
                       f"Update the lock file at: {CLAIMS_DIR}/{issue_num}.lock with your conversation_id and PID.\n\n"
                       f"Continue from the best available state — DO NOT start over if there is existing progress.\n"
-                      f"After opening the PR (with 'Closes #N' in the body), transition the issue to status:awaiting-review and delete the lock file.\n"
+                      f"After opening the PR (with 'Closes #N' in the body), transition the issue to bug-fixer:architect:awaiting-review and delete the lock file.\n"
                       f"This conversation handles ONE issue only.")
 
             title = f"Fix #{issue_num}: {issue_title} (reattach)"
@@ -317,7 +317,7 @@ def main():
             except (json.JSONDecodeError, KeyError):
                 log(f"Failed to reattach #{issue_num}. Reclaiming for fresh retry.")
                 gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
-                   "--remove-label", "status:in-progress")
+                   "--remove-label", "bug-fixer:engineer:in-progress")
                 lockfile.unlink(missing_ok=True)
                 continue
 
@@ -341,7 +341,7 @@ def main():
     # ---------------------------------------------------------------------------
 
     r = gh("issue", "list", "--repo", TARGET_REPO,
-           "--label", "status:in-progress", "--state", "open",
+           "--label", "bug-fixer:engineer:in-progress", "--state", "open",
            "--json", "number", "--jq", "length")
     in_progress = int(r.stdout.strip() or "0")
 
@@ -357,18 +357,18 @@ def main():
 
 
     # ---------------------------------------------------------------------------
-    # Step 2.5: Handle needs-iteration PRs
+    # Step 2.5: Handle bug-fixer:engineer:needs-iteration PRs
     # ---------------------------------------------------------------------------
 
     r_prs = gh("pr", "list", "--repo", TARGET_REPO,
-               "--label", "bug-fixer,needs-iteration", "--state", "open",
+               "--label", "bug-fixer:engineer:pr,bug-fixer:engineer:needs-iteration", "--state", "open",
                "--json", "number,body,url")
 
     if r_prs.returncode == 0:
         try:
             needs_iteration_prs = json.loads(r_prs.stdout)
         except json.JSONDecodeError:
-            log(f"Failed to parse needs-iteration PRs: {r_prs.stderr}")
+            log(f"Failed to parse bug-fixer:engineer:needs-iteration PRs: {r_prs.stderr}")
             needs_iteration_prs = []
 
         # Build set of PRs with active dispatches to skip re-dispatch
@@ -411,8 +411,8 @@ def main():
                       f"Read config from: {CONFIG_FILE}\n"
                       f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
                       f"Work in: {REPO_DIR}\n\n"
-                      f"After pushing changes, remove the needs-iteration label:\n"
-                      f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label needs-iteration\n\n"
+                      f"After pushing changes, remove the bug-fixer:engineer:needs-iteration label:\n"
+                      f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label bug-fixer:engineer:needs-iteration\n\n"
                       f"Architect comments:\n{comments_text}")
 
             # Try to resume the existing developer conversation
@@ -431,7 +431,7 @@ def main():
                     log(f"Failed to resume conversation {dev_conv_id} (expired/deleted?). "
                         f"Falling back to new conversation. Error: {msg_r.stderr or msg_r.stdout}")
             else:
-                log(f"PR #{pr_num} has needs-iteration but no agy_dev_conv_id. Spawning fresh developer.")
+                log(f"PR #{pr_num} has bug-fixer:engineer:needs-iteration but no agy_dev_conv_id. Spawning fresh developer.")
 
             # Fallback: spawn a fresh developer agent with full context
             if not dispatched:
@@ -443,8 +443,8 @@ def main():
                                f"Work in: {REPO_DIR}\n\n"
                                f"Check out the PR branch, apply the fixes requested below, run tests, "
                                f"and push to the same branch.\n\n"
-                               f"After pushing changes, remove the needs-iteration label:\n"
-                               f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label needs-iteration\n\n"
+                               f"After pushing changes, remove the bug-fixer:engineer:needs-iteration label:\n"
+                               f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label bug-fixer:engineer:needs-iteration\n\n"
                                f"IMPORTANT: After pushing, ensure the PR body ends with this HTML comment "
                                f"(replace YOUR_CONVERSATION_ID with your actual conversation ID):\n"
                                f"  <!-- agy_dev_conv_id: YOUR_CONVERSATION_ID -->\n\n"
@@ -465,13 +465,13 @@ def main():
                     log(f"Failed to spawn fresh conversation for PR #{pr_num}: {new_r.stderr or new_r.stdout}")
 
             if dispatched and dispatch_conv_id:
-                # Track the dispatch — don't remove needs-iteration label yet.
+                # Track the dispatch — don't remove bug-fixer:engineer:needs-iteration label yet.
                 # The agent removes it after pushing. If the agent stalls, the
                 # liveness sweep will post state to the PR and the label stays
                 # for the next cycle to re-dispatch.
                 record_dispatch(DISPATCHES_DIR, dispatch_conv_id, "pr_iteration",
                                 pr_number=pr_num,
-                                labels_to_restore=["needs-iteration"],
+                                labels_to_restore=["bug-fixer:engineer:needs-iteration"],
                                 timeout_minutes=30)
                 # Ensure the PR body has the dev conversation tag so the next
                 # iteration cycle can resume this conversation instead of
@@ -485,7 +485,7 @@ def main():
     # ---------------------------------------------------------------------------
 
     r = run([sys.executable, str(SAFE_INGEST), "issue-list",
-             "--repo", TARGET_REPO, "--label", "auto-fixable",
+             "--repo", TARGET_REPO, "--label", "bug-fixer:engineer:needs-fix",
              "--state", "open", "--json", "number,title,milestone,labels"])
 
     try:
@@ -497,7 +497,7 @@ def main():
     # Filter out issues already in-progress or awaiting review
     eligible = [
         i for i in issues
-        if not any(l.get("name") in ("status:in-progress", "status:awaiting-review") for l in i.get("labels", []))
+        if not any(l.get("name") in ("bug-fixer:engineer:in-progress", "bug-fixer:architect:awaiting-review") for l in i.get("labels", []))
     ]
 
     if not eligible:
@@ -525,7 +525,7 @@ def main():
 
         # Claim issue
         gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
-           "--add-label", "status:in-progress")
+           "--add-label", "bug-fixer:engineer:in-progress")
 
         # Write lock file
         CLAIMS_DIR.mkdir(parents=True, exist_ok=True)
@@ -544,10 +544,10 @@ def main():
                   f"Read config from: {CONFIG_FILE}\n"
                   f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
                   f"Work in: {REPO_DIR}\n\n"
-                  f"The issue is already claimed (status:in-progress label applied).\n"
+                  f"The issue is already claimed (bug-fixer:engineer:in-progress label applied).\n"
                   f"The lock file is at: {lock_path} — update it with your conversation_id and PID.\n\n"
                   f"Start from Step 6 (Branch) in the skill — Steps 1-5 are already done by the dispatcher.\n"
-                  f"After opening the PR (with 'Closes #N' in the body), transition the issue to status:awaiting-review and delete the lock file.\n"
+                  f"After opening the PR (with 'Closes #N' in the body), transition the issue to bug-fixer:architect:awaiting-review and delete the lock file.\n"
                   f"This conversation handles ONE issue only. Do not pick up additional issues.")
 
         title = f"Fix #{issue_num}: {issue_title}"
@@ -560,7 +560,7 @@ def main():
         except (json.JSONDecodeError, KeyError):
             log(f"Failed to spawn for #{issue_num}: {r.stderr or r.stdout}")
             gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
-               "--remove-label", "status:in-progress")
+               "--remove-label", "bug-fixer:engineer:in-progress")
             lock_path.unlink(missing_ok=True)
             continue
 

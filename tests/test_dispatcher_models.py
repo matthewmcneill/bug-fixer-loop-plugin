@@ -69,15 +69,15 @@ class TestDispatcherModels(unittest.TestCase):
 
         # Test complexity label mappings
         self.assertEqual(
-            get_model_for_issue({"labels": [{"name": "complexity:mechanical"}]}),
+            get_model_for_issue({"labels": [{"name": "bug-fixer:complexity:mechanical"}]}),
             "flash_lite",
         )
         self.assertEqual(
-            get_model_for_issue({"labels": [{"name": "complexity:standard"}]}),
+            get_model_for_issue({"labels": [{"name": "bug-fixer:complexity:standard"}]}),
             "flash",
         )
         self.assertEqual(
-            get_model_for_issue({"labels": [{"name": "complexity:architect"}]}),
+            get_model_for_issue({"labels": [{"name": "bug-fixer:complexity:architect"}]}),
             "pro",
         )
 

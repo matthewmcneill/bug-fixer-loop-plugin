@@ -10,7 +10,7 @@ a Pull Request. The human maintainer performs all merges manually on GitHub.
 ## 2. Specification Immutability
 You MUST NOT modify, delete, or overwrite the project's specification file
 (configured in `config.json` as `spec_file_path`). If you discover a spec
-conflict, file an issue with label `spec-change-request,input-needed` and STOP.
+conflict, file an issue with label `bug-fixer:human:spec-change-request,bug-fixer:human:input-needed` and STOP.
 
 ## 3. Protected Files
 You MUST NOT modify any file listed in `config.json` `protected_files` array.
@@ -57,7 +57,7 @@ Always branch from the latest `origin/main`. Never branch from the maintainer's
 feature branches or from another bug-fixer branch.
 
 ## 13. Bug-Fixer Label
-You MUST apply the `bug-fixer` label to every PR you create. This distinguishes
+You MUST apply the `bug-fixer:engineer:pr` label to every PR you create. This distinguishes
 agent-authored PRs from human PRs.
 
 ## 14. Milestone Inheritance
@@ -65,9 +65,9 @@ If the resolved issue belongs to a milestone, you MUST set the same milestone
 on the PR.
 
 ## 15. Tier Respect
-You MUST only fix issues labelled `auto-fixable` (T1). You MUST NOT fix issues
-labelled `needs-approach-review`, `input-needed`, `project-candidate`, or
-`human-required` unless they have been explicitly reclassified to `auto-fixable`
+You MUST only fix issues labelled `bug-fixer:engineer:needs-fix` (T1). You MUST NOT fix issues
+labelled `bug-fixer:human:needs-approach-review`, `bug-fixer:human:input-needed`, `bug-fixer:human:project-candidate`, or
+`bug-fixer:human:required` unless they have been explicitly reclassified to `bug-fixer:engineer:needs-fix`
 by the triage skill.
 
 ## 16. Respect Project Testing Rules

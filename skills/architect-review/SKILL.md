@@ -86,7 +86,7 @@ Identify the target PR number:
 - Provided via dispatcher prompt or user argument: `<pr_number>`.
 - If unprovided, find the oldest open draft PR with label `bug-fixer`:
   ```bash
-  gh pr list --repo <target_repo> --state open --draft --label "bug-fixer" --json number,title,createdAt --jq 'sort_by(.createdAt) | .[0].number'
+  gh pr list --repo <target_repo> --state open --draft --label "bug-fixer:engineer:pr" --json number,title,createdAt --jq 'sort_by(.createdAt) | .[0].number'
   ```
 
 ---
@@ -133,7 +133,7 @@ The dispatcher passes the current review round (e.g., "Review round: 3 of 5") in
 
 - **Rounds 1–4:** Apply the full adversarial rubric. **Reject if ANY findings exist** — including minor items such as naming, missing comments, missing qualifiers, non-idiomatic patterns, or simplifiable logic. Every finding is a required fix. Do NOT approve with advisory comments.
 
-- **Round 5 (final round):** If the ONLY remaining issues are **purely cosmetic** (formatting preferences where the project has no enforced style, comment wording preferences), approve the PR. If any substantive finding remains — even naming or missing comments — **reject**. The dispatcher will escalate to `needs-human-intervention` if you reject on round 5, so clearly explain what remains and why it matters.
+- **Round 5 (final round):** If the ONLY remaining issues are **purely cosmetic** (formatting preferences where the project has no enforced style, comment wording preferences), approve the PR. If any substantive finding remains — even naming or missing comments — **reject**. The dispatcher will escalate to `bug-fixer:human:needs-intervention` if you reject on round 5, so clearly explain what remains and why it matters.
 
 > **Why no advisory approvals?** In an automated system, advisory items are never actioned. Approving with outstanding items creates silent tech debt. The developer agent has full context cached — fixing minor items now costs a fraction of what it would cost to track and fix them later. Five rounds is generous; if a minor fix can't be resolved in 4 attempts, it needs human judgment.
 
@@ -145,9 +145,9 @@ The dispatcher passes the current review round (e.g., "Review round: 3 of 5") in
 
 If the PR is architecturally sound, introduces zero technical debt, has verified pointer/memory safety, satisfies all constraints, and includes adequate tests:
 
-1. **Add `architect-approved` label:**
+1. **Add `bug-fixer:architect:approved` label:**
    ```bash
-   gh pr edit <pr_number> --repo <target_repo> --add-label "architect-approved"
+   gh pr edit <pr_number> --repo <target_repo> --add-label "bug-fixer:architect:approved"
    ```
 
 2. **Mark PR "Ready for review" (remove draft status):**
@@ -155,9 +155,9 @@ If the PR is architecturally sound, introduces zero technical debt, has verified
    gh pr ready <pr_number> --repo <target_repo>
    ```
 
-3. **Remove `needs-iteration` label (if previously present):**
+3. **Remove `bug-fixer:engineer:needs-iteration` label (if previously present):**
    ```bash
-   gh pr edit <pr_number> --repo <target_repo> --remove-label "needs-iteration" 2>/dev/null || true
+   gh pr edit <pr_number> --repo <target_repo> --remove-label "bug-fixer:engineer:needs-iteration" 2>/dev/null || true
    ```
 
 4. **Post Approval Review Comment:**
@@ -177,14 +177,14 @@ If the PR is architecturally sound, introduces zero technical debt, has verified
 
 If ANY architectural flaws, technical debt, pointer instability, memory leaks, or missing constraints are detected:
 
-1. **Add `needs-iteration` label:**
+1. **Add `bug-fixer:engineer:needs-iteration` label:**
    ```bash
-   gh pr edit <pr_number> --repo <target_repo> --add-label "needs-iteration"
+   gh pr edit <pr_number> --repo <target_repo> --add-label "bug-fixer:engineer:needs-iteration"
    ```
 
-2. **Remove `architect-approved` label (if present):**
+2. **Remove `bug-fixer:architect:approved` label (if present):**
    ```bash
-   gh pr edit <pr_number> --repo <target_repo> --remove-label "architect-approved" 2>/dev/null || true
+   gh pr edit <pr_number> --repo <target_repo> --remove-label "bug-fixer:architect:approved" 2>/dev/null || true
    ```
 
 3. **Add Review Comment Detailing Required Fixes:**
@@ -274,7 +274,7 @@ For each discovery:
 
      ---
      _Auto-filed by architect review of PR #<pr_number>._" \
-       --label "discovered-in-review"
+       --label "bug-fixer:triage:discovered-in-review"
      ```
 
    - **Dismiss** — if inaccurate, too minor, or already tracked.
@@ -287,7 +287,7 @@ For each discovery:
    ```
 
 **Guardrails:**
-- Never add `auto-fixable` or any classification label — let the triage system handle classification
+- Never add `bug-fixer:engineer:needs-fix` or any classification label — let the triage system handle classification
 - If a discovery is actually related to the current fix, tell the developer to address it in the next iteration (add it to your findings list)
 
 ---

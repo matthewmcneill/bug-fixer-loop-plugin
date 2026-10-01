@@ -56,7 +56,7 @@ These are the issues where the bug fixer is blocked on you.
 
 **T2 — Approach Reviews (needs your `approved`):**
 ```bash
-python3 <plugin_dir>/scripts/safe_ingest.py issue-list --repo <target_repo> --label needs-approach-review --state open --json number,title,labels,milestone,comments
+python3 <plugin_dir>/scripts/safe_ingest.py issue-list --repo <target_repo> --label bug-fixer:human:needs-approach-review --state open --json number,title,labels,milestone,comments
 ```
 For each issue, find the `[BUG-FIXER] Proposed approach` comment and summarise:
 - Issue number and title
@@ -65,7 +65,7 @@ For each issue, find the `[BUG-FIXER] Proposed approach` comment and summarise:
 
 **T3 — Clarification Requests (needs your answer):**
 ```bash
-python3 <plugin_dir>/scripts/safe_ingest.py issue-list --repo <target_repo> --label input-needed --state open --json number,title,labels,comments
+python3 <plugin_dir>/scripts/safe_ingest.py issue-list --repo <target_repo> --label bug-fixer:human:input-needed --state open --json number,title,labels,comments
 ```
 For each, show the question the agent asked.
 
@@ -114,11 +114,11 @@ Count issues by tier label and output:
 ```
 📊 Issue Triage:
 
-  T1 auto-fixable:          6 issue(s) — agent will fix these
-  T2 needs-approach-review: 4 issue(s) — waiting for your approval
-  T3 input-needed:          0 issue(s) — waiting for clarification
-  T4 project-candidate:    13 issue(s) — too large, use /principal-architect
-  T5 human-required:       10 issue(s) — agent skips these
+  T1 bug-fixer:engineer:needs-fix:          6 issue(s) — agent will fix these
+  T2 bug-fixer:human:needs-approach-review: 4 issue(s) — waiting for your approval
+  T3 bug-fixer:human:input-needed:          0 issue(s) — waiting for clarification
+  T4 bug-fixer:human:project-candidate:    13 issue(s) — too large, use /principal-architect
+  T5 bug-fixer:human:required:       10 issue(s) — agent skips these
   Unclassified:             0 issue(s) — next triage will classify
 ```
 
@@ -130,7 +130,7 @@ conversations from the last 24 hours. Summarise:
 - Issues fixed (PRs opened)
 - PRs merged
 - Test failures encountered
-- Any `human-required` escalations
+- Any `bug-fixer:human:required` escalations
 
 **Format:**
 ```
@@ -163,7 +163,7 @@ Show progress for active milestones:
 ### Step 6: Health Check
 
 Report any concerns:
-- ⚠️ Stale claims: issues with `status:in-progress` but no PR opened in >4 hours
+- ⚠️ Stale claims: issues with `bug-fixer:engineer:in-progress` but no PR opened in >4 hours
 - ⚠️ Unaddressed feedback: agent PRs with review comments older than 24 hours
 - ⚠️ Repeated failures: same issue attempted multiple times
 - ⚠️ Plugin disabled: if the plugin is currently disabled, remind the user
