@@ -63,7 +63,7 @@ my-project/                                         ← REPO_DIR (derivable)
 │   │   │   │   ├── install.sh
 │   │   │   │   ├── uninstall.sh
 │   │   │   │   ├── configure.sh
-│   │   │   │   ├── tick_dispatcher.py
+│   │   │   │   ├── engineering_dispatcher.py
 │   │   │   │   ├── triage_dispatcher.py
 │   │   │   │   ├── trajectory_dispatcher.py
 │   │   │   │   ├── safe_ingest.py
@@ -201,7 +201,7 @@ The workspace config contains **project settings only** — no paths, no machine
   "pr_prefix": "[BugFixer]",
   "branch_prefix": "fix",
   "triage_cron": "0 * * * *",
-  "tick_cron": "*/10 * * * *",
+  "engineering_cron": "*/10 * * * *",
   "trajectory_review_cron": "0 18 * * *"
 }
 ```
@@ -350,9 +350,9 @@ A sidecar manifest defines what to run, how to schedule it, and what environment
 ```json
 {
   "builtin": "schedule",
-  "args": ["*/10 * * * *", "/path/to/scripts/tick_dispatcher.py"],
+  "args": ["*/10 * * * *", "/path/to/scripts/engineering_dispatcher.py"],
   "restart_policy": "always",
-  "display_name": "Bug Fixer Tick (owner/repo)",
+  "display_name": "Bug Fixer Engineering (owner/repo)",
   "description": "Checks for eligible issues every 10 min.",
   "env": {
     "ANTIGRAVITY_PROJECT_ID": "project-uuid",
@@ -427,7 +427,7 @@ Placeholders resolved by `install.sh`:
 
 | Placeholder | Resolved to | Example |
 |-------------|-------------|---------|
-| `<tick_cron>` | Cron expression from config | `*/10 * * * *` |
+| `<engineering_cron>` | Cron expression from config | `*/10 * * * *` |
 | `<triage_cron>` | Cron expression from config | `0 * * * *` |
 | `<architect_cron>` | Cron expression from config | `*/15 * * * *` |
 | `<trajectory_review_cron>` | Cron expression from config | `0 18 * * *` |
@@ -455,7 +455,7 @@ Understanding sidecar failure modes is essential for debugging:
 
 | Sidecar | Default Schedule | Script | What it Does |
 |---------|:---------------:|--------|-------------|
-| `bug-fixer-engineering-loop` | `*/10 * * * *` | `tick_dispatcher.py` | Checks for `auto-fixable` issues, claims them, spawns fix conversations |
+| `bug-fixer-engineering-loop` | `*/10 * * * *` | `engineering_dispatcher.py` | Checks for `auto-fixable` issues, claims them, spawns fix conversations |
 | `bug-fixer-triage-loop` | `0 * * * *` | `triage_dispatcher.py` | Checks for unlabelled issues, spawns triage conversations to classify them |
 | `bug-fixer-pr-review-loop` | `<architect_cron>` | `architect_dispatcher.py` | Polls for un-reviewed draft PRs, spawns architect review conversations |
 | `bug-fixer-trajectory-loop` | `0 18 * * *` | `trajectory_dispatcher.py` | Reviews recent bug-fixer transcripts for quality, posts trajectory analysis |
@@ -475,7 +475,7 @@ Cron fires → Dispatcher runs  → No eligible issues → Exit immediately (cos
 Cron fires → Dispatcher runs  → 2 eligible issues  → Spawn 2 conversations (cost: ~$0.50)
 ```
 
-#### Dispatcher Flow (Tick — the most complex)
+#### Dispatcher Flow (Engineering — the most complex)
 
 ```
 1.  Load config from workspace (WORKSPACE_CONFIG only — no plugin root fallback)
@@ -532,7 +532,7 @@ A failed spawn (quota exhausted, missing env vars, etc.) returns a non-zero exit
 
 #### Stale Claim Recovery
 
-The tick dispatcher implements 3-layer stale claim detection to handle conversations that crash, timeout, or are killed:
+The engineering dispatcher implements 3-layer stale claim detection to handle conversations that crash, timeout, or are killed:
 
 ```python
 # Layer 1: Claim file has no conversation ID (spawn failed mid-write)
@@ -552,7 +552,7 @@ if status in ("idle", "errored", "cancelled"):
 Recovery means:
 1. Remove the claim file from `STATE_DIR/claims/`
 2. Remove the `status:in-progress` label from the GitHub issue
-3. The issue becomes eligible for the next tick cycle
+3. The issue becomes eligible for the next engineering cycle
 
 #### Claim File Format
 
@@ -571,11 +571,11 @@ Recovery means:
 
 When the LLM quota runs out, dispatchers can enter a catastrophic failure loop:
 
-1. **Tick fires** (every 10 minutes)
+1. **Engineering loop fires** (every 10 minutes)
 2. **Finds eligible issues**, writes claim files, adds `status:in-progress` labels
 3. **Spawns `agentapi new-conversation`** — all calls fail (quota exhausted)
 4. **Removes claim files**, removes labels (cleanup on failure)
-5. **Next tick fires** — same issues are eligible again
+5. **Next cycle fires** — same issues are eligible again
 6. **Labels churn** on GitHub (added/removed every 10 minutes), user is spammed with dozens of failing conversation notifications
 7. **Repeat indefinitely** until quota is restored or the sidecar is manually stopped
 
@@ -585,7 +585,7 @@ Each dispatcher tracks consecutive spawn failures using two files in the workspa
 
 | File | Purpose | Format |
 |------|---------|--------|
-| `failure_count` | Number of consecutive ticks where all spawns failed | Plain text integer |
+| `failure_count` | Number of consecutive cycles where all spawns failed | Plain text integer |
 | `cooldown.json` | Present only when cooling down | JSON with `reason`, `entered_at`, `expires_at`, `expires_at_iso` |
 
 #### Startup Check
@@ -601,7 +601,7 @@ if COOLDOWN_FILE.exists():
     try:
         cooldown = json.loads(COOLDOWN_FILE.read_text())
         if time.time() < cooldown.get("expires_at", 0):
-            log(f"TICK_EXIT: Cooling down until {cooldown['expires_at_iso']} — "
+            log(f"ENGINEERING_EXIT: Cooling down until {cooldown['expires_at_iso']} — "
                 f"reason: {cooldown['reason']}")
             sys.exit(0)
         # Cooldown expired, clean up and resume normal operation
@@ -652,7 +652,7 @@ else:
 
 #### Behaviour Summary
 
-| Tick # | Eligible Issues | Spawned | Failure Count | Action |
+| Cycle # | Eligible Issues | Spawned | Failure Count | Action |
 |:------:|:--------------:|:-------:|:-------------:|--------|
 | 1 | 3 | 0 (quota fail) | 1 | Continue |
 | 2 | 3 | 0 (quota fail) | 2 | Continue |
@@ -712,9 +712,9 @@ else:
 
 ### 4. No Circuit Breaker
 
-**Problem:** When LLM quota ran out, the tick dispatcher fired every 10 minutes, spawned conversations that all failed, churned issue labels on GitHub, and spammed the user with failing conversations.
+**Problem:** When LLM quota ran out, the engineering dispatcher fired every 10 minutes, spawned conversations that all failed, churned issue labels on GitHub, and spammed the user with failing conversations.
 
-**Fix:** Track consecutive spawn failures. After 3 failures, write a cooldown file and stop ticking for 1 hour.
+**Fix:** Track consecutive spawn failures. After 3 failures, write a cooldown file and stop dispatching for 1 hour.
 
 ### 5. Project-Specific Rules in Generic Plugin
 

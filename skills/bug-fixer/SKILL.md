@@ -215,10 +215,10 @@ Combine all sections into a single dashboard:
 - **Issue management**: "file a plugin issue", "report a bug-fixer bug",
   "bug-fixer defect", "plugin bug", "raise a plugin issue", "file a GitHub
   issue against the plugin", "misclassification", "false positive",
-  "safe_ingest bug", "pre_tool_gate bug", "triage bug", "tick crash",
+  "safe_ingest bug", "pre_tool_gate bug", "triage bug", "engineering crash",
   "orphaned claim", "sidecar didn't fire", "issue template",
   "P1-blocker", "P2-correctness", "P3-docs-dx", "found-in:", "backfill",
-  "component:triage", "component:tick", "component:safe-ingest".
+  "component:triage", "component:engineering", "component:safe-ingest".
   → Read `references/issue-management.md` for the full process.
 
 - **Contributing & proposals**: "contribute to the plugin", "improve the bug

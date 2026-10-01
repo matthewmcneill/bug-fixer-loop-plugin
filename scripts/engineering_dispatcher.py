@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-tick_dispatcher.py — Lightweight control plane for the bug fixer loop.
+engineering_dispatcher.py — Lightweight control plane for the bug fixer loop.
 
 Runs on a cron schedule via the sidecar. Does NOT use an LLM.
 Checks for eligible work and only spawns LLM conversations
@@ -25,7 +25,7 @@ from pathlib import Path
 
 def log(msg: str):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    print(f"TICK_DISPATCH: {ts} — {msg}", flush=True)
+    print(f"ENGINEERING_DISPATCH: {ts} — {msg}", flush=True)
 
 
 def run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
@@ -111,7 +111,7 @@ if COOLDOWN_FILE.exists():
     try:
         cooldown = json.loads(COOLDOWN_FILE.read_text())
         if time.time() < cooldown.get("expires_at", 0):
-            log(f"TICK_EXIT: Cooling down until {cooldown.get('expires_at_iso', 'unknown')} — "
+            log(f"ENGINEERING_EXIT: Cooling down until {cooldown.get('expires_at_iso', 'unknown')} — "
                 f"reason: {cooldown.get('reason', 'unknown')}")
             sys.exit(0)
         # Cooldown expired, clean up
@@ -201,7 +201,7 @@ Issue title: {issue_title}
 
 {reattach_context}
 
-Read the full tick skill instructions at: {SKILL_PATH}
+Read the full engineering skill instructions at: {SKILL_PATH}
 Read config from: {CONFIG_FILE}
 Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.
 Work in: {REPO_DIR}
@@ -295,7 +295,7 @@ if r_prs.returncode == 0:
 
         prompt = (f"The Architect has reviewed your PR #{pr_num} in repository {TARGET_REPO} "
                   f"and requested changes. Please fix the issues and push to the same PR branch.\n\n"
-                  f"Read the full tick skill instructions at: {SKILL_PATH}\n"
+                  f"Read the full engineering skill instructions at: {SKILL_PATH}\n"
                   f"Read config from: {CONFIG_FILE}\n"
                   f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
                   f"Work in: {REPO_DIR}\n\n"
@@ -321,7 +321,7 @@ if r_prs.returncode == 0:
         if not resumed:
             fresh_prompt = (f"You are the bug-fixer agent. The Architect has reviewed PR #{pr_num} "
                            f"in repository {TARGET_REPO} and requested changes.\n\n"
-                           f"Read the full tick skill instructions at: {SKILL_PATH}\n"
+                           f"Read the full engineering skill instructions at: {SKILL_PATH}\n"
                            f"Read config from: {CONFIG_FILE}\n"
                            f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
                            f"Work in: {REPO_DIR}\n\n"
@@ -377,7 +377,7 @@ spawned = 0
 
 for issue in eligible:
     if spawned >= available_slots:
-        log(f"Slot cap reached ({spawned}/{available_slots}). Remaining issues next tick.")
+        log(f"Slot cap reached ({spawned}/{available_slots}). Remaining issues next cycle.")
         break
 
     issue_num = issue["number"]
@@ -404,7 +404,7 @@ for issue in eligible:
 
 Issue title: {issue_title}
 
-Read the full tick skill instructions at: {SKILL_PATH}
+Read the full engineering skill instructions at: {SKILL_PATH}
 Read config from: {CONFIG_FILE}
 Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.
 Work in: {REPO_DIR}

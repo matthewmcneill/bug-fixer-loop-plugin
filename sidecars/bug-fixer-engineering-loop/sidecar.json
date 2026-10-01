@@ -1,8 +1,8 @@
 {
   "builtin": "schedule",
   "args": [
-    "<tick_cron>",
-    "<plugin_dir>/scripts/tick_dispatcher.py"
+    "<engineering_cron>",
+    "<plugin_dir>/scripts/engineering_dispatcher.py"
   ],
   "restart_policy": "always",
   "display_name": "Bug Fixer Engineering (<owner/repo>)",

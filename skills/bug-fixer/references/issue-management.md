@@ -22,7 +22,7 @@ to file:
 | Triage misclassifies an issue (wrong tier) | `matthewmcneill/bug-fixer-loop-plugin` |
 | `safe_ingest.py` false-positive redacts valid content | `matthewmcneill/bug-fixer-loop-plugin` |
 | `pre_tool_gate.py` blocks a legitimate operation | `matthewmcneill/bug-fixer-loop-plugin` |
-| Tick sidecar crashes, orphans a claim, or opens a broken PR | `matthewmcneill/bug-fixer-loop-plugin` |
+| Engineering loop crashes, orphans a claim, or opens a broken PR | `matthewmcneill/bug-fixer-loop-plugin` |
 | Trajectory review misidentifies a failure pattern | `matthewmcneill/bug-fixer-loop-plugin` |
 | Test quality audit rubric is too strict/lenient | `matthewmcneill/bug-fixer-loop-plugin` |
 | `configure.sh` or `install.sh` fails or misconfigures | `matthewmcneill/bug-fixer-loop-plugin` |
@@ -55,7 +55,7 @@ applicable attribution/meta labels.
 | Label | When to use |
 |---|---|
 | `component:triage` | Bug is in the triage skill or triage sidecar logic |
-| `component:tick` | Bug is in the tick/fixer skill or tick sidecar logic |
+| `component:engineering` | Bug is in the engineering skill or engineering loop sidecar logic |
 | `component:trajectory` | Bug is in the trajectory review skill or sidecar |
 | `component:safe-ingest` | Bug is in `safe_ingest.py` ingestion or redaction |
 | `component:pre-tool-gate` | Bug is in `pre_tool_gate.py` hook enforcement |
@@ -100,7 +100,7 @@ Do not attempt to impersonate another user. File as yourself.
 Examples:
 - `[safe_ingest] Maintainer approval gate rejects issues with unicode titles`
 - `[triage] Small-scope override not applied to doc-only issues in security module`
-- `[tick] Orphaned claim not cleaned up when transcript is missing`
+- `[engineering] Orphaned claim not cleaned up when transcript is missing`
 - `[install] configure.sh fails silently when gh CLI is not authenticated`
 
 ### Issue Body Template
@@ -149,7 +149,7 @@ gh issue create \
   --repo matthewmcneill/bug-fixer-loop-plugin \
   --title "[Component] Description" \
   --body-file issue-body.md \
-  --label "P2-correctness,component:tick,found-in:<target-repo-name>"
+  --label "P2-correctness,component:engineering,found-in:<target-repo-name>"
 ```
 
 If the `found-in:` label does not exist on the repo yet, create it first:
@@ -195,7 +195,7 @@ NUM=$(gh issue create \
   --repo matthewmcneill/bug-fixer-loop-plugin \
   --title "[Component] Description" \
   --body-file body.md \
-  --label "P2-correctness,component:tick,found-in:<target-repo-name>,backfill" | grep -oE '[0-9]+$')
+  --label "P2-correctness,component:engineering,found-in:<target-repo-name>,backfill" | grep -oE '[0-9]+$')
 
 gh issue close "$NUM" \
   --repo matthewmcneill/bug-fixer-loop-plugin \

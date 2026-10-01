@@ -179,7 +179,7 @@ DEFAULTS = {
     "pr_prefix": "[BugFixer]",
     "branch_prefix": "fix",
     "triage_cron": "0 * * * *",
-    "tick_cron": "*/10 * * * *",
+    "engineering_cron": "*/10 * * * *",
     "architect_cron": "*/15 * * * *",
     "trajectory_review_cron": "0 18 * * *",
     "milestone_priority_boost": True,
@@ -280,7 +280,7 @@ else
 
   # Read cron schedules from workspace config (just written in Step 1)
   TRIAGE_CRON="$(python3 -c "import json; c=json.load(open('${WORKSPACE_CONFIG}')); print(c.get('triage_cron', '0 * * * *'))" 2>/dev/null || echo "0 * * * *")"
-  TICK_CRON="$(python3 -c "import json; c=json.load(open('${WORKSPACE_CONFIG}')); print(c.get('tick_cron', '*/10 * * * *'))" 2>/dev/null || echo "*/10 * * * *")"
+  ENGINEERING_CRON="$(python3 -c "import json; c=json.load(open('${WORKSPACE_CONFIG}')); print(c.get('engineering_cron', c.get('tick_cron', '*/10 * * * *')))" 2>/dev/null || echo "*/10 * * * *")"
   ARCHITECT_CRON="$(python3 -c "import json; c=json.load(open('${WORKSPACE_CONFIG}')); print(c.get('architect_cron', '*/15 * * * *'))" 2>/dev/null || echo "*/15 * * * *")"
   TRAJECTORY_CRON="$(python3 -c "import json; c=json.load(open('${WORKSPACE_CONFIG}')); print(c.get('trajectory_review_cron', '0 18 * * *'))" 2>/dev/null || echo "0 18 * * *")"
 
@@ -316,7 +316,7 @@ else
           -e "s|<maintainer>|${MAINTAINER_USER}|g" \
           -e "s|<plugin_dir>|${PLUGIN_DIR}|g" \
           -e "s|<triage_cron>|${TRIAGE_CRON}|g" \
-          -e "s|<tick_cron>|${TICK_CRON}|g" \
+          -e "s|<engineering_cron>|${ENGINEERING_CRON}|g" \
           -e "s|<architect_cron>|${ARCHITECT_CRON}|g" \
           -e "s|<trajectory_review_cron>|${TRAJECTORY_CRON}|g" \
           -e "s|<path>|${CURRENT_PATH}|g" \

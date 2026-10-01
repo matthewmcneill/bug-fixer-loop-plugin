@@ -83,20 +83,20 @@ e. Post comment: `[BUG-FIXER] Reattached to orphaned work from session <old_conv
 
 ### Step 3: Concurrency Guard
 
-After reconciliation, count issues tagged `status:in-progress` that are **owned by other active sessions** (PID alive, not this tick):
+After reconciliation, count issues tagged `status:in-progress` that are **owned by other active sessions** (PID alive, not this session):
 ```bash
 gh issue list --repo <target_repo> --label "status:in-progress" --state open --json number,title
 ```
-Exclude any issues this tick just reattached to.
+Exclude any issues this session just reattached to.
 
-If count >= `max_concurrent_prs`, output `TICK_EXIT: Active development cap reached (<count>/<max>).` and exit cleanly.
+If count >= `max_concurrent_prs`, output `ENGINEERING_EXIT: Active development cap reached (<count>/<max>).` and exit cleanly.
 
 > **Note:** The cap limits issues *being actively coded* (`status:in-progress`), not PRs waiting for review (`status:awaiting-review`). Once a PR is opened and the issue transitions to `awaiting-review`, the slot is freed immediately.
 
 3. **Check for PR Feedback (Highest Priority):** For each open agent PR:
    - Query comments and reviews via: `python3 ${PLUGIN_DIR}/scripts/safe_ingest.py pr-comments <number>`
    - Look for any unaddressed maintainer comments (comments from `maintainer` or `trusted_users` that do not have a subsequent `[BUG-FIXER]` reply).
-   - If found: check out the PR branch, implement the requested changes, run tests, push the changes, reply with `[BUG-FIXER] Addressed review feedback in <sha>`, and exit this tick.
+   - If found: check out the PR branch, implement the requested changes, run tests, push the changes, reply with `[BUG-FIXER] Addressed review feedback in <sha>`, and exit this cycle.
 
 ### Step 3.5: Check for Approved Approaches
 Query issues with the `needs-approach-review` label:
@@ -111,7 +111,7 @@ For each issue, check if the maintainer has posted an approval comment (contains
 This ensures previously-reviewed issues enter the auto-fixable queue.
 
 4. **Select Issue:**
-   - **Only T1 issues are eligible for immediate fixing.** The tick skill MUST NOT pick up `needs-approach-review`, `input-needed`, `project-candidate`, or `human-required` issues. Only `auto-fixable` issues are eligible.
+   - **Only T1 issues are eligible for immediate fixing.** The engineering skill MUST NOT pick up `needs-approach-review`, `input-needed`, `project-candidate`, or `human-required` issues. Only `auto-fixable` issues are eligible.
    - Query open, auto-fixable issues:
      ```bash
      python3 ${PLUGIN_DIR}/scripts/safe_ingest.py issue-list --repo <target_repo> --label auto-fixable --state open --json number,title,labels,body,milestone,priority,priorityRank
@@ -137,7 +137,7 @@ This ensures previously-reviewed issues enter the auto-fixable queue.
        --json number,title,labels,body,milestone
      ```
      Exclude any issues already labeled `status:in-progress`. The selected
-     issue plus all eligible siblings form the **batch set** for this tick.
+     issue plus all eligible siblings form the **batch set** for this cycle.
      If no batch label is present, the batch set contains only the single
      selected issue.
 
@@ -371,10 +371,10 @@ Instead, include a structured discovery section in your **PR body** (Step 11), a
 
 After successfully opening a PR, **loop back to Step 4** and pick the next eligible issue. Keep fixing issues until one of these conditions is met:
 
-- **No eligible issues remain** → output `TICK_EXIT: NO_ELIGIBLE_WORK — opened <count> PR(s) this tick.` and exit.
-- **Concurrency cap reached** → re-check `status:in-progress` count. If >= `max_concurrent_prs`, output `TICK_EXIT: Active development cap reached — opened <count> PR(s) this tick.` and exit.
+- **No eligible issues remain** → output `ENGINEERING_EXIT: NO_ELIGIBLE_WORK — opened <count> PR(s) this cycle.` and exit.
+- **Concurrency cap reached** → re-check `status:in-progress` count. If >= `max_concurrent_prs`, output `ENGINEERING_EXIT: Active development cap reached — opened <count> PR(s) this cycle.` and exit.
 - **A fix attempt fails** (tests fail after 3 retries) → unclaim that issue, then continue to the next eligible issue rather than exiting entirely.
 
-> **Important:** Each fix must start from a fresh branch off `origin/main` (Step 6). Pull latest main before each iteration to pick up any changes merged since the tick started.
+> **Important:** Each fix must start from a fresh branch off `origin/main` (Step 6). Pull latest main before each iteration to pick up any changes merged since the cycle started.
 
 Never invent work, create issues, or expand scope.
