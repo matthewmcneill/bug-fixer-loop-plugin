@@ -385,6 +385,14 @@ for label in "${REQUIRED_LABELS[@]}"; do
     --description "${description}" \
     --color "${color}" >/dev/null 2>&1 || true
 done
+
+# Ensure discovered-in-review label exists on target repo (for tech debt discovery chain)
+gh label create "discovered-in-review" \
+  --repo "${TARGET_REPO}" \
+  --color "d4c5f9" \
+  --description "Auto-filed during PR review, requires human approval before auto-fix" \
+  2>/dev/null || true
+
 echo "    - Required labels configured."
 
 # Step 6: Set Up Worktree

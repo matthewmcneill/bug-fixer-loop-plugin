@@ -129,12 +129,13 @@ Determine whether the PR meets the bar for approval or requires iteration.
 
 ### Step 2.5: Review Round Awareness
 
-The dispatcher passes the current review round (e.g., "Review round: 2 of 3") in the prompt. Be aware of this:
+The dispatcher passes the current review round (e.g., "Review round: 3 of 5") in the prompt. Apply the appropriate standard:
 
-- **Round 1–2:** Apply the full adversarial rubric. Hard-reject if any findings exist.
-- **Round 3 (final round):** If the remaining issues are **minor** (style, naming, advisory suggestions that do not affect correctness or safety), **approve the PR with advisory comments** rather than hard-rejecting. The dispatcher will escalate to `needs-human-intervention` if you reject on round 3, so only reject if there are genuinely critical safety or correctness issues remaining.
+- **Rounds 1–4:** Apply the full adversarial rubric. **Reject if ANY findings exist** — including minor items such as naming, missing comments, missing qualifiers, non-idiomatic patterns, or simplifiable logic. Every finding is a required fix. Do NOT approve with advisory comments.
 
-This prevents infinite review loops while still ensuring critical issues are never let through.
+- **Round 5 (final round):** If the ONLY remaining issues are **purely cosmetic** (formatting preferences where the project has no enforced style, comment wording preferences), approve the PR. If any substantive finding remains — even naming or missing comments — **reject**. The dispatcher will escalate to `needs-human-intervention` if you reject on round 5, so clearly explain what remains and why it matters.
+
+> **Why no advisory approvals?** In an automated system, advisory items are never actioned. Approving with outstanding items creates silent tech debt. The developer agent has full context cached — fixing minor items now costs a fraction of what it would cost to track and fix them later. Five rounds is generous; if a minor fix can't be resolved in 4 attempts, it needs human judgment.
 
 ---
 
@@ -228,6 +229,66 @@ If ANY architectural flaws, technical debt, pointer instability, memory leaks, o
    ```
 
 5. **Exit cleanly.**
+
+---
+
+### Step 2.8: Evaluate Developer Discoveries
+
+After reviewing the PR diff, check the PR body for a `### Discoveries (Out-of-Scope)` section containing `[DISCOVERY]` items flagged by the developer agent.
+
+**Build the breadcrumb:**
+1. Find the issue this PR fixes (from `Closes #N` in the PR body)
+2. Read that issue's body for a `<!-- discovery_chain: ... -->` comment
+3. If found: new chain = existing chain + ` → #this`
+4. If not found: new chain = `#N → #this` (source issue is the root)
+
+For each discovery:
+
+1. **Validate the finding.** Read the referenced file and line. Is the developer's assessment accurate? Is it actually a problem?
+
+2. **Assess severity.** Is this worth tracking as a separate issue, or is it noise?
+
+3. **Decide:**
+   - **File as issue** — if genuine and worth tracking:
+     ```bash
+     gh issue create --repo <target_repo> \
+       --title "[Review Discovery] <concise title>" \
+       --body "## Discovered During Review
+
+     Found during architect review of PR #<pr_number> (fixing #<source_issue>).
+
+     ## Finding
+     <validated description — rewrite in your own assessment, don't just copy>
+
+     ## Location
+     - File: \`<path/to/file>\`
+     - Line(s): <line range>
+
+     ## Architect Assessment
+     <your evaluation of severity and impact>
+
+     ## Discovery Breadcrumb
+     <!-- discovery_source_pr: #<pr_number> -->
+     <!-- discovery_source_issue: #<source_issue> -->
+     <!-- discovery_chain: <chain> -->
+
+     ---
+     _Auto-filed by architect review of PR #<pr_number>._" \
+       --label "discovered-in-review"
+     ```
+
+   - **Dismiss** — if inaccurate, too minor, or already tracked.
+
+4. **Report in review comment.** In your `[ARCHITECT]` review comment, add a section:
+   ```
+   ### Discovery Disposition
+   - ✅ Filed #<N>: <title>
+   - ❌ Dismissed: <reason>
+   ```
+
+**Guardrails:**
+- Never add `auto-fixable` or any classification label — let the triage system handle classification
+- If a discovery is actually related to the current fix, tell the developer to address it in the next iteration (add it to your findings list)
 
 ---
 
