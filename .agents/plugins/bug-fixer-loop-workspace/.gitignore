@@ -1,0 +1,7 @@
+# Bug Fixer Loop — workspace state (runtime, not committed)
+claims/
+cooldown.json
+failure_count
+triage_cooldown.json
+triage_failure_count
+tmp/

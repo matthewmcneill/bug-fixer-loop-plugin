@@ -141,6 +141,7 @@ SKILL_PATH = PLUGIN_DIR / "skills/bug-fixer-engineering/SKILL.md"
 SAFE_INGEST = PLUGIN_DIR / "scripts/safe_ingest.py"
 STATE_DIR = None
 REPO_DIR = None
+WORKTREES_DIR = None
 CLAIMS_DIR = None
 DISPATCHES_DIR = None
 COOLDOWN_FILE = None
@@ -158,6 +159,7 @@ if WORKSPACE_CONFIG:
         BRANCH_PREFIX = config.get("branch_prefix", "bugfix")
         STATE_DIR = CONFIG_FILE.parent
         REPO_DIR = STATE_DIR.parent.parent.parent
+        WORKTREES_DIR = REPO_DIR / "worktrees"
         CLAIMS_DIR = STATE_DIR / "claims"
         DISPATCHES_DIR = STATE_DIR / "dispatches"
         COOLDOWN_FILE = STATE_DIR / "cooldown.json"
@@ -185,6 +187,27 @@ def get_model_for_issue(issue: dict) -> str:
                 return COMPLEXITY_MODEL_MAP[tier]
     return get_default_engineering_model()
 
+
+
+def create_worktree(issue_num: int, branch_name: str, existing_branch: bool = False) -> Path | None:
+    wt_path = WORKTREES_DIR / f"issue-{issue_num}"
+    if wt_path.exists():
+        remove_worktree(wt_path)
+    wt_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if existing_branch:
+        r = run(["git", "-C", str(REPO_DIR), "worktree", "add", str(wt_path), branch_name])
+    else:
+        r = run(["git", "-C", str(REPO_DIR), "worktree", "add", "-b", branch_name, str(wt_path), "origin/main"])
+        
+    if r.returncode == 0:
+        return wt_path
+    log(f"Failed to create worktree for #{issue_num} on branch {branch_name}: {r.stderr or r.stdout}")
+    return None
+
+def remove_worktree(wt_path: Path):
+    if wt_path.exists():
+        run(["git", "-C", str(REPO_DIR), "worktree", "remove", "-f", str(wt_path)], check=False)
 
 def main():
     if not os.environ.get("ANTIGRAVITY_PROJECT_ID"):
@@ -226,7 +249,37 @@ def main():
 
 
     # ---------------------------------------------------------------------------
+    # Step 0.5: Sweep stale worktrees
+    # ---------------------------------------------------------------------------
+    if WORKTREES_DIR and WORKTREES_DIR.exists():
+        active_wts = set()
+        if CLAIMS_DIR.exists():
+            for lf in CLAIMS_DIR.glob("*.lock"):
+                try:
+                    import json
+                    c = json.loads(lf.read_text())
+                    if "worktree_path" in c:
+                        active_wts.add(c["worktree_path"])
+                except:
+                    pass
+        if DISPATCHES_DIR.exists():
+            for df in DISPATCHES_DIR.glob("*.json"):
+                try:
+                    import json
+                    d = json.loads(df.read_text())
+                    if "worktree_path" in d:
+                        active_wts.add(d["worktree_path"])
+                except:
+                    pass
+        for wt in WORKTREES_DIR.iterdir():
+            if wt.is_dir() and str(wt) not in active_wts:
+                log(f"Removing stale worktree: {wt}")
+                remove_worktree(wt)
+        run(["git", "-C", str(REPO_DIR), "worktree", "prune"])
+
+    # ---------------------------------------------------------------------------
     # Step 1: Stale claim recovery (3-layer detection)
+
     # ---------------------------------------------------------------------------
 
     reattach_count = 0
@@ -294,13 +347,23 @@ def main():
 
             reattach_context = "\n".join(reattach_lines)
 
+            wt_path = None
+            if existing_branch:
+                wt_path = create_worktree(issue_num, existing_branch, existing_branch=True)
+            else:
+                wt_path = create_worktree(issue_num, f"{BRANCH_PREFIX}/{issue_num}-reattach", existing_branch=False)
+            
+            if not wt_path:
+                log(f"Failed to create worktree for reattach #{issue_num}, skipping.")
+                continue
+
             prompt = (f"You are the bug-fixer agent. REATTACH to orphaned issue #{issue_num} in repository {TARGET_REPO}.\n\n"
                       f"Issue title: {issue_title}\n\n"
                       f"{reattach_context}\n\n"
                       f"Read the full engineering skill instructions at: {SKILL_PATH}\n"
                       f"Read config from: {CONFIG_FILE}\n"
                       f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
-                      f"Work in: {REPO_DIR}\n\n"
+                      f"Work in: {wt_path}\n\n"
                       f"The issue is already claimed (bug-fixer:engineer:in-progress label applied).\n"
                       f"Update the lock file at: {CLAIMS_DIR}/{issue_num}.lock with your conversation_id and PID.\n\n"
                       f"Continue from the best available state — DO NOT start over if there is existing progress.\n"
@@ -327,9 +390,10 @@ def main():
                 "dispatcher_pid": os.getpid(),  # debug only — not used for liveness
                 "conversation_id": new_conv_id,
                 "claimed_at": datetime.now(timezone.utc).isoformat(),
+                "worktree_path": str(wt_path),
             }))
             record_dispatch(DISPATCHES_DIR, new_conv_id, "reattach",
-                            issue_number=issue_num, timeout_minutes=45)
+                            issue_number=issue_num, timeout_minutes=45, worktree_path=str(wt_path))
             log(f"Reattached #{issue_num} → conversation {new_conv_id}")
             gh("issue", "comment", str(issue_num), "--repo", TARGET_REPO,
                "--body", f"[BUG-FIXER] Reattached to orphaned work from session {conv_id}. New session: {new_conv_id}.")
@@ -405,12 +469,26 @@ def main():
             diff_r = gh("pr", "diff", str(pr_num), "--repo", TARGET_REPO)
             pr_diff = diff_r.stdout if diff_r.returncode == 0 else "(diff unavailable)"
 
+
+            # We need to get the PR branch to check it out in a worktree
+            pr_r = gh("pr", "view", str(pr_num), "--repo", TARGET_REPO, "--json", "headRefName", "--jq", ".headRefName")
+            if pr_r.returncode != 0:
+                log(f"Failed to get branch for PR #{pr_num}, skipping.")
+                continue
+            pr_branch = pr_r.stdout.strip()
+            
+            # Use PR number as issue number for worktree dir naming
+            wt_path = create_worktree(pr_num, pr_branch, existing_branch=True)
+            if not wt_path:
+                log(f"Failed to create worktree for PR #{pr_num}, skipping.")
+                continue
+
             prompt = (f"The Architect has reviewed your PR #{pr_num} in repository {TARGET_REPO} "
                       f"and requested changes. Please fix the issues and push to the same PR branch.\n\n"
                       f"Read the full engineering skill instructions at: {SKILL_PATH}\n"
                       f"Read config from: {CONFIG_FILE}\n"
                       f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
-                      f"Work in: {REPO_DIR}\n\n"
+                      f"Work in: {wt_path}\n\n"
                       f"After pushing changes, remove the bug-fixer:engineer:needs-iteration label:\n"
                       f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label bug-fixer:engineer:needs-iteration\n\n"
                       f"Architect comments:\n{comments_text}")
@@ -440,8 +518,8 @@ def main():
                                f"Read the full engineering skill instructions at: {SKILL_PATH}\n"
                                f"Read config from: {CONFIG_FILE}\n"
                                f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
-                               f"Work in: {REPO_DIR}\n\n"
-                               f"Check out the PR branch, apply the fixes requested below, run tests, "
+                               f"Work in: {wt_path}\n\n"
+                               f"Apply the fixes requested below, run tests, "
                                f"and push to the same branch.\n\n"
                                f"After pushing changes, remove the bug-fixer:engineer:needs-iteration label:\n"
                                f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label bug-fixer:engineer:needs-iteration\n\n"
@@ -472,7 +550,7 @@ def main():
                 record_dispatch(DISPATCHES_DIR, dispatch_conv_id, "pr_iteration",
                                 pr_number=pr_num,
                                 labels_to_restore=["bug-fixer:engineer:needs-iteration"],
-                                timeout_minutes=30)
+                                timeout_minutes=30, worktree_path=str(wt_path))
                 # Ensure the PR body has the dev conversation tag so the next
                 # iteration cycle can resume this conversation instead of
                 # spawning a new one.
@@ -527,6 +605,18 @@ def main():
         gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
            "--add-label", "bug-fixer:engineer:in-progress")
 
+        # Create worktree first
+        import re as re_mod
+        slug = re_mod.sub(r'[^a-z0-9]+', '-', issue_title.lower()).strip('-')[:40]
+        branch_name = f"{BRANCH_PREFIX}/issue-{issue_num}-{slug}"
+        
+        wt_path = create_worktree(issue_num, branch_name, existing_branch=False)
+        if not wt_path:
+            log(f"Failed to create worktree for #{issue_num}, skipping.")
+            gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
+               "--remove-label", "bug-fixer:engineer:in-progress")
+            continue
+
         # Write lock file
         CLAIMS_DIR.mkdir(parents=True, exist_ok=True)
         lock_path = CLAIMS_DIR / f"{issue_num}.lock"
@@ -535,15 +625,17 @@ def main():
             "dispatcher_pid": os.getpid(),  # debug only — not used for liveness
             "conversation_id": "pending",
             "claimed_at": datetime.now(timezone.utc).isoformat(),
+            "worktree_path": str(wt_path),
         }))
 
         # Spawn LLM conversation — this shows up in the IDE
+
         prompt = (f"You are the bug-fixer agent. Fix issue #{issue_num} in repository {TARGET_REPO}.\n\n"
                   f"Issue title: {issue_title}\n\n"
                   f"Read the full engineering skill instructions at: {SKILL_PATH}\n"
                   f"Read config from: {CONFIG_FILE}\n"
                   f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
-                  f"Work in: {REPO_DIR}\n\n"
+                  f"Work in: {wt_path}\n\n"
                   f"The issue is already claimed (bug-fixer:engineer:in-progress label applied).\n"
                   f"The lock file is at: {lock_path} — update it with your conversation_id and PID.\n\n"
                   f"Start from Step 6 (Branch) in the skill — Steps 1-5 are already done by the dispatcher.\n"
@@ -570,9 +662,10 @@ def main():
             "dispatcher_pid": os.getpid(),  # debug only — not used for liveness
             "conversation_id": new_conv_id,
             "claimed_at": datetime.now(timezone.utc).isoformat(),
+            "worktree_path": str(wt_path),
         }))
         record_dispatch(DISPATCHES_DIR, new_conv_id, "fresh_fix",
-                        issue_number=issue_num, timeout_minutes=45)
+                        issue_number=issue_num, timeout_minutes=45, worktree_path=str(wt_path))
         log(f"Spawned conversation {new_conv_id} for #{issue_num}")
         spawned += 1
 
