@@ -343,5 +343,74 @@ class TestPreToolGate(unittest.TestCase):
             self.assertIn("Receipt verified", verify_proc.stdout)
 
 
+    def test_scan_repository_excludes_tests(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subprocess.run(["git", "init"], cwd=temp_dir, check=True, capture_output=True)
+            
+            leak_file = Path(temp_dir) / "tests" / "credentials.txt"
+            leak_file.parent.mkdir(parents=True, exist_ok=True)
+            leak_file.write_text("aws_key = AKIAIOSFODNN7EXAMPLE\\n")
+            
+            subprocess.run(["git", "add", "tests/credentials.txt"], cwd=temp_dir, check=True, capture_output=True)
+            
+            patterns = TEST_CONFIG["leak_patterns"]
+            import scripts.pre_tool_gate as pre_tool_gate
+            violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns, exclude_paths=["tests/"])
+            self.assertEqual(len(violations), 0)
+            self.assertEqual(excluded, 1)
+            self.assertEqual(scanned, 0)
+
+    def test_scan_repository_excludes_do_not_suppress_others(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subprocess.run(["git", "init"], cwd=temp_dir, check=True, capture_output=True)
+            
+            leak_file1 = Path(temp_dir) / "tests" / "credentials.txt"
+            leak_file1.parent.mkdir(parents=True, exist_ok=True)
+            leak_file1.write_text("aws_key = AKIAIOSFODNN7EXAMPLE\\n")
+            
+            leak_file2 = Path(temp_dir) / "src" / "credentials.txt"
+            leak_file2.parent.mkdir(parents=True, exist_ok=True)
+            leak_file2.write_text("aws_key = AKIAIOSFODNN7EXAMPLE\\n")
+            
+            subprocess.run(["git", "add", "tests/credentials.txt", "src/credentials.txt"], cwd=temp_dir, check=True, capture_output=True)
+            
+            patterns = TEST_CONFIG["leak_patterns"]
+            import scripts.pre_tool_gate as pre_tool_gate
+            violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns, exclude_paths=["tests/"])
+            self.assertEqual(len(violations), 1)
+            self.assertIn("src/credentials.txt", violations[0])
+            self.assertEqual(excluded, 1)
+            self.assertEqual(scanned, 1)
+
+    def test_cli_scan_only_exclude_pattern(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subprocess.run(["git", "init"], cwd=temp_dir, check=True, capture_output=True)
+            
+            leak_file = Path(temp_dir) / "tests" / "credentials.txt"
+            leak_file.parent.mkdir(parents=True, exist_ok=True)
+            leak_file.write_text("aws_key = AKIAIOSFODNN7EXAMPLE\\n")
+            subprocess.run(["git", "add", "tests/credentials.txt"], cwd=temp_dir, check=True, capture_output=True)
+
+            cfg_file = Path(temp_dir) / "test_config.json"
+            cfg = TEST_CONFIG.copy()
+            cfg["scan_exclude_paths"] = []
+            cfg_file.write_text(json.dumps(cfg))
+
+            cmd = [
+                sys.executable,
+                str(GATE_SCRIPT),
+                "--scan-only",
+                temp_dir,
+                "--config",
+                str(cfg_file),
+                "--exclude-pattern",
+                "tests/"
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0)
+            self.assertIn("LEAK SCAN CLEAN", proc.stdout)
+            self.assertIn("1 excluded", proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
