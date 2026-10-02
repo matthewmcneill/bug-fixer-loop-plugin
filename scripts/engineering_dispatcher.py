@@ -40,6 +40,28 @@ def run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
 
+
+CONTAINMENT = (
+    "
+
+## CRITICAL: Working Directory Rules
+"
+    "- Your working directory is: {wt_path}
+"
+    "- ALL file reads, edits, and git operations MUST happen inside this directory
+"
+    "- NEVER run git commands against the main repo at {repo_dir}
+"
+    "- NEVER run `git checkout` or `git switch` outside your working directory
+"
+    "- To commit: `git -C {wt_path} add -A && git -C {wt_path} commit -m '...'`
+"
+    "- To push: `git -C {wt_path} push origin HEAD`
+"
+    "- To pull latest: `git -C {wt_path} pull --ff-only origin {branch}`
+"
+)
+
 def gh(*args) -> subprocess.CompletedProcess:
     return run(["gh", *args])
 
@@ -350,6 +372,7 @@ def main():
 
             reattach_context = "\n".join(reattach_lines)
 
+            branch_name = existing_branch if existing_branch else f"{BRANCH_PREFIX}/{issue_num}-reattach"
             wt_path = None
             if existing_branch:
                 wt_path = create_worktree(issue_num, existing_branch, existing_branch=True)
@@ -371,7 +394,7 @@ def main():
                       f"Update the lock file at: {CLAIMS_DIR}/{issue_num}.lock with your conversation_id and PID.\n\n"
                       f"Continue from the best available state — DO NOT start over if there is existing progress.\n"
                       f"After opening the PR (with 'Closes #N' in the body), transition the issue to bug-fixer:architect:awaiting-review and delete the lock file.\n"
-                      f"This conversation handles ONE issue only.")
+                      f"This conversation handles ONE issue only.") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=branch_name)
 
             title = f"Fix #{issue_num}: {issue_title} (reattach)"
             model = get_default_engineering_model()
@@ -494,7 +517,7 @@ def main():
                       f"Work in: {wt_path}\n\n"
                       f"After pushing changes, remove the bug-fixer:engineer:needs-iteration label:\n"
                       f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label bug-fixer:engineer:needs-iteration\n\n"
-                      f"Architect comments:\n{comments_text}")
+                      f"Architect comments:\n{comments_text}") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=pr_branch)
 
             # Try to resume the existing developer conversation
             dev_conv_id_match = re.search(r"<!-- agy_dev_conv_id:\s*([a-zA-Z0-9-]+)\s*-->", pr_body)
@@ -530,7 +553,7 @@ def main():
                                f"(replace YOUR_CONVERSATION_ID with your actual conversation ID):\n"
                                f"  <!-- agy_dev_conv_id: YOUR_CONVERSATION_ID -->\n\n"
                                f"Architect comments:\n{comments_text}\n\n"
-                               f"Current PR diff for context:\n```diff\n{pr_diff}\n```")
+                               f"Current PR diff for context:\n```diff\n{pr_diff}\n```") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=pr_branch)
                 title = f"Fix PR #{pr_num} iteration (architect feedback)"
                 model = get_default_engineering_model()
                 new_r = run(["agentapi", "new-conversation", f"--model={model}", f"--title={title}", fresh_prompt])
@@ -642,7 +665,7 @@ def main():
                   f"The lock file is at: {lock_path} — update it with your conversation_id and PID.\n\n"
                   f"Start from Step 6 (Branch) in the skill — Steps 1-5 are already done by the dispatcher.\n"
                   f"After opening the PR (with 'Closes #N' in the body), transition the issue to bug-fixer:architect:awaiting-review and delete the lock file.\n"
-                  f"This conversation handles ONE issue only. Do not pick up additional issues.")
+                  f"This conversation handles ONE issue only. Do not pick up additional issues.") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=branch_name)
 
         title = f"Fix #{issue_num}: {issue_title}"
         model = get_model_for_issue(issue)
