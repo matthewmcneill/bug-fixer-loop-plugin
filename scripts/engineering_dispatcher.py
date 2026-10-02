@@ -42,24 +42,14 @@ def run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
 
 
 CONTAINMENT = (
-    "
-
-## CRITICAL: Working Directory Rules
-"
-    "- Your working directory is: {wt_path}
-"
-    "- ALL file reads, edits, and git operations MUST happen inside this directory
-"
-    "- NEVER run git commands against the main repo at {repo_dir}
-"
-    "- NEVER run `git checkout` or `git switch` outside your working directory
-"
-    "- To commit: `git -C {wt_path} add -A && git -C {wt_path} commit -m '...'`
-"
-    "- To push: `git -C {wt_path} push origin HEAD`
-"
-    "- To pull latest: `git -C {wt_path} pull --ff-only origin {branch}`
-"
+    "\n\n## CRITICAL: Working Directory Rules\n"
+    "- Your working directory is: {wt_path}\n"
+    "- ALL file reads, edits, and git operations MUST happen inside this directory\n"
+    "- NEVER run git commands against the main repo at {repo_dir}\n"
+    "- NEVER run `git checkout` or `git switch` outside your working directory\n"
+    "- To commit: `git -C {wt_path} add -A && git -C {wt_path} commit -m '...'`\n"
+    "- To push: `git -C {wt_path} push origin HEAD`\n"
+    "- To pull latest: `git -C {wt_path} pull --ff-only origin {branch}`\n"
 )
 
 def gh(*args) -> subprocess.CompletedProcess:
@@ -212,19 +202,20 @@ def get_model_for_issue(issue: dict) -> str:
 
 
 
-WORKTREE_FAILURES_FILE = STATE_DIR / "worktree_failures.json"
 MAX_WORKTREE_FAILURES = 3
 
 def _load_failures() -> dict:
-    if WORKTREE_FAILURES_FILE.exists():
+    failures_file = STATE_DIR / "worktree_failures.json"
+    if failures_file.exists():
         try:
-            return json.loads(WORKTREE_FAILURES_FILE.read_text())
+            return json.loads(failures_file.read_text())
         except json.JSONDecodeError:
             pass
     return {}
 
 def _save_failures(counts: dict):
-    WORKTREE_FAILURES_FILE.write_text(json.dumps(counts))
+    failures_file = STATE_DIR / "worktree_failures.json"
+    failures_file.write_text(json.dumps(counts))
 
 def _record_failure(branch: str) -> int:
     counts = _load_failures()
