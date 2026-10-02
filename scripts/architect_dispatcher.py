@@ -214,7 +214,7 @@ def main():
     # Step 1: Draft PR Polling Logic
     # ---------------------------------------------------------------------------
 
-    r = gh("pr", "list", "--repo", TARGET_REPO, "--label", "bug-fixer:system:pr",
+    r = gh("pr", "list", "--repo", TARGET_REPO, "--label", "bug-fixer:system:pr,bug-fixer:architect:awaiting-review",
            "--state", "open", "--draft",
            "--json", "number,title,labels,body")
 
@@ -277,7 +277,8 @@ def main():
             log(f"PR #{number} has reached {review_count} architect review rounds "
                 f"(max {MAX_REVIEW_ROUNDS}). Adding bug-fixer:human:needs-intervention label.")
             gh("pr", "edit", str(number), "--repo", TARGET_REPO,
-               "--add-label", "bug-fixer:human:needs-intervention")
+               "--add-label", "bug-fixer:human:needs-intervention",
+               "--remove-label", "bug-fixer:architect:awaiting-review")
             continue
 
         log(f"Processing PR #{number}: {title} (review round {review_count + 1}/{MAX_REVIEW_ROUNDS})")

@@ -492,6 +492,23 @@ def _recover(dispatch: dict, dispatches_dir: Path, target_repo: str,
     return summary
 
 
+
+def check_orphaned_prs(target_repo: str, log_fn):
+    """Warn on draft PRs matching the [BugFixer] Fix #N title convention that are missing system:pr."""
+    r = _gh("pr", "list", "--repo", target_repo, "--state", "open", "--draft", "--json", "number,title,labels")
+    if r.returncode != 0:
+        return
+    try:
+        prs = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return
+    for pr in prs:
+        title = pr.get("title", "")
+        if "[BugFixer]" in title:
+            labels = [label.get("name", "") for label in pr.get("labels", [])]
+            if "bug-fixer:system:pr" not in labels:
+                log_fn(f"DIAGNOSTIC WARN: PR #{pr.get('number')} matches bug-fixer title convention but is missing bug-fixer:system:pr label.")
+
 def sweep_dispatches(dispatches_dir: Path, target_repo: str,
                      log_fn, claims_dir: Path | None = None) -> list[dict]:
     """Main liveness sweep. Check all tracked dispatches for completion or stalls.
@@ -500,6 +517,7 @@ def sweep_dispatches(dispatches_dir: Path, target_repo: str,
 
     Returns list of recovery summaries for logging.
     """
+    check_orphaned_prs(target_repo, log_fn)
     if not dispatches_dir.exists():
         return []
 

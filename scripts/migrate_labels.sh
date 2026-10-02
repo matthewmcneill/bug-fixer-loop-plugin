@@ -85,3 +85,19 @@ done
 
 echo ""
 echo "Migration complete. Verify at: https://github.com/${TARGET_REPO}/labels"
+
+echo "Applying bug-fixer:architect:awaiting-review to open implicit PRs..."
+if [[ "$DRY_RUN" == "true" ]]; then
+  echo "[DRY RUN] Would query PRs and apply bug-fixer:architect:awaiting-review"
+else
+  PRS=$(gh pr list --repo "${TARGET_REPO}" --state open --draft --label "bug-fixer:system:pr" --json number,labels 2>/dev/null || echo "[]")
+  echo "$PRS" | jq -c '.[]' | while read -r pr; do
+    number=$(echo "$pr" | jq -r '.number')
+    labels=$(echo "$pr" | jq -r '.labels[].name')
+    
+    if ! echo "$labels" | grep -q "bug-fixer:architect:approved" && ! echo "$labels" | grep -q "bug-fixer:engineer:needs-iteration" && ! echo "$labels" | grep -q "bug-fixer:architect:awaiting-review"; then
+      echo "  Applying bug-fixer:architect:awaiting-review to PR #${number}"
+      gh pr edit "${number}" --repo "${TARGET_REPO}" --add-label "bug-fixer:architect:awaiting-review"
+    fi
+  done
+fi

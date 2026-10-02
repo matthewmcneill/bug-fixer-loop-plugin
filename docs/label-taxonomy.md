@@ -215,7 +215,7 @@ Each dispatcher queries specific labels as its **input** and applies labels as i
 |---|---|---|---|
 | `triage_dispatcher` | Issues with NO `bug-fixer:*` classification label | One of: `engineer:needs-fix`, `human:required`, `human:needs-approach-review`, `human:input-needed`, `human:project-candidate` + optionally `complexity:*` | — |
 | `engineering_dispatcher` | Issues: `engineer:needs-fix` (not `engineer:in-progress`). PRs: `system:pr` + `engineer:needs-iteration` | `engineer:in-progress` (claim), `system:pr` (on PR), `architect:awaiting-review` (done), `batch:<slug>` | `engineer:in-progress` (release), `engineer:needs-iteration` (after re-claim) |
-| `architect_dispatcher` | Draft PRs: `system:pr` (not `architect:approved`, not `engineer:needs-iteration`).<br/>Approved PRs: `system:pr` + `architect:approved` (conflict monitor) | One of: `architect:approved`, `engineer:needs-iteration` (changes requested or conflict detected), `human:needs-intervention`. Optionally files new issue with `triage:discovered-in-review` | `architect:approved` (when conflict detected) |
+| `architect_dispatcher` | PRs: `system:pr` (not `architect:approved`, not `engineer:needs-iteration`) | One of: `architect:approved`, `engineer:needs-iteration`, `human:needs-intervention`. Optionally files new issue with `triage:discovered-in-review` | — |
 | `trajectory_dispatcher` | Stale `engineer:in-progress`, repeated failures | `system:health` (alert issue), `human:required` (escalation) | `engineer:in-progress` (stale unclaim) |
 | `liveness` | `architect:awaiting-review` (success check), `engineer:needs-iteration` (iteration check) | — (monitoring only) | `engineer:in-progress` (stale recovery) |
 
@@ -263,3 +263,8 @@ When adding a new label to the bug-fixer system:
 6. **Add to `configure.sh`** — add colour and description in `LABELS_META`
 7. **Update dispatchers** — add queries/mutations in the relevant dispatcher
 8. **Update skills** — reference the new label in relevant skill SKILL.md files
+
+## Race Window & Label Transition Atomicity
+
+When transitioning labels (e.g., removing `bug-fixer:architect:awaiting-review` and adding `bug-fixer:engineer:needs-iteration`), there is a brief window where the PR has neither label due to the lack of atomic multi-label operations in the GitHub API. 
+The system mitigates this race window using dispatch-file guards in `DISPATCHES_DIR`. These dispatch files provide idempotency protection ensuring that dispatchers do not accidentally ignore or double-process a PR during this brief transition phase.
