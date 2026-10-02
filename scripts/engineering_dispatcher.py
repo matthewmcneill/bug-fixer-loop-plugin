@@ -605,6 +605,18 @@ def main():
         gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
            "--add-label", "bug-fixer:engineer:in-progress")
 
+        # Create worktree first
+        import re as re_mod
+        slug = re_mod.sub(r'[^a-z0-9]+', '-', issue_title.lower()).strip('-')[:40]
+        branch_name = f"{BRANCH_PREFIX}/issue-{issue_num}-{slug}"
+        
+        wt_path = create_worktree(issue_num, branch_name, existing_branch=False)
+        if not wt_path:
+            log(f"Failed to create worktree for #{issue_num}, skipping.")
+            gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
+               "--remove-label", "bug-fixer:engineer:in-progress")
+            continue
+
         # Write lock file
         CLAIMS_DIR.mkdir(parents=True, exist_ok=True)
         lock_path = CLAIMS_DIR / f"{issue_num}.lock"
@@ -617,16 +629,6 @@ def main():
         }))
 
         # Spawn LLM conversation — this shows up in the IDE
-        import re as re_mod
-        slug = re_mod.sub(r'[^a-z0-9]+', '-', issue_title.lower()).strip('-')[:40]
-        branch_name = f"{BRANCH_PREFIX}/issue-{issue_num}-{slug}"
-        
-        wt_path = create_worktree(issue_num, branch_name, existing_branch=False)
-        if not wt_path:
-            log(f"Failed to create worktree for #{issue_num}, skipping.")
-            gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
-               "--remove-label", "bug-fixer:engineer:in-progress")
-            continue
 
         prompt = (f"You are the bug-fixer agent. Fix issue #{issue_num} in repository {TARGET_REPO}.\n\n"
                   f"Issue title: {issue_title}\n\n"
