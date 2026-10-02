@@ -1,7 +1,6 @@
 {
   "target_repo": "matthewmcneill/bug-fixer-loop-plugin",
   "repo_dir": "/Users/mcneillm/Documents/Projects/bug-fixer-loop-plugin",
-  "worktree_path": "/Users/mcneillm/Documents/Projects/bug-fixer-loop-plugin-bug-fixer-worktree",
   "maintainer": "matthewmcneill",
   "spec_file_path": "docs/plugin-architecture.md",
   "test_command": "python3 -m unittest discover -s tests -v",
