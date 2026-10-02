@@ -323,14 +323,7 @@ def scan_repository(repo_dir: str, patterns: list[str], exclude_paths: list[str]
         if not rel_path or rel_path.startswith(".git/") or rel_path.startswith("_agents/"):
             continue
         
-        skip = False
-        if exclude_paths:
-            for ep in exclude_paths:
-                ep_norm = os.path.normpath(ep)
-                if rel_path == ep_norm or rel_path.startswith(ep_norm + "/"):
-                    skip = True
-                    break
-        if skip:
+        if exclude_paths and any(rel_path.startswith(ep) for ep in exclude_paths):
             continue
         full_path = os.path.join(repo_dir, rel_path)
         if not os.path.isfile(full_path):
@@ -338,8 +331,6 @@ def scan_repository(repo_dir: str, patterns: list[str], exclude_paths: list[str]
         try:
             with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
                 for lineno, line in enumerate(f, start=1):
-                    if "# nosec" in line or "# safe-ingest-test" in line:
-                        continue
                     for pat in compiled:
                         if pat.search(line):
                             violations.append(
@@ -436,6 +427,7 @@ def main() -> int:
     parser.add_argument("--stamp-pass", action="store_true", help="Alias for --stamp-receipt")
     parser.add_argument("--verify-receipt", action="store_true", help="Verify leak audit receipt matches staged tree")
     parser.add_argument("--git-hook", action="store_true", help="Run as git pre-commit/pre-push hook")
+    parser.add_argument("--exclude-pattern", action="append", default=[], help="Additional paths to exclude from leak scan")
 
     args = parser.parse_args()
 
@@ -470,6 +462,8 @@ def main() -> int:
             target_dir = os.path.abspath(target_dir)
         patterns = list(config.get("leak_patterns", []))
         exclude_paths = list(config.get("scan_exclude_paths", ["tests/"]))
+        if args.exclude_pattern:
+            exclude_paths.extend(args.exclude_pattern)
         violations = scan_repository(target_dir, patterns, exclude_paths)
         if violations:
             print(f"LEAK SCAN FAILED ({len(violations)} violation(s)):")
@@ -488,6 +482,8 @@ def main() -> int:
     if args.git_hook:
         patterns = list(config.get("leak_patterns", []))
         exclude_paths = list(config.get("scan_exclude_paths", ["tests/"]))
+        if args.exclude_pattern:
+            exclude_paths.extend(args.exclude_pattern)
         return run_git_hook(repo_dir, patterns, exclude_paths)
 
     if sys.stdin.isatty():
