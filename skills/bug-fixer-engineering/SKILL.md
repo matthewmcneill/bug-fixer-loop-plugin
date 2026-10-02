@@ -21,7 +21,7 @@ repository. This worktree persists across review iterations.
 2. **Never** run `git checkout`, `git switch`, or `git branch` in the main repo directory
 3. **Never** modify files outside your worktree path
 4. Use `git -C <your_worktree_path>` for all git commands
-5. Push with: `git -C <your_worktree_path> push origin HEAD`
+5. Push with: `git -C <your_worktree_path> push origin HEAD:<branch_name>`
 
 ### Why
 The main repo belongs to the user. Checking out a branch there will deadlock the

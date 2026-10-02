@@ -48,7 +48,7 @@ CONTAINMENT = (
     "- NEVER run git commands against the main repo at {repo_dir}\n"
     "- NEVER run `git checkout` or `git switch` outside your working directory\n"
     "- To commit: `git -C {wt_path} add -A && git -C {wt_path} commit -m '...'`\n"
-    "- To push: `git -C {wt_path} push origin HEAD`\n"
+    "- To push: `git -C {wt_path} push origin HEAD:{branch}`\n"
     "- To pull latest: `git -C {wt_path} pull --ff-only origin {branch}`\n"
 )
 
@@ -316,10 +316,10 @@ def ensure_worktree(branch_name: str, label: str = "") -> Path | None:
         _fetch_branch(branch_name)
         r = run(["git", "-C", str(REPO_DIR), "worktree", "add", "--detach", str(wt_path)])
         if r.returncode == 0:
-            checkout_r = run(["git", "-C", str(wt_path), "checkout", "-B", branch_name, f"origin/{branch_name}"])
+            checkout_r = run(["git", "-C", str(wt_path), "reset", "--hard", f"origin/{branch_name}"])
             if checkout_r.returncode == 0:
                 return wt_path
-            log(f"Failed to checkout {branch_name} in detached worktree: {checkout_r.stderr}")
+            log(f"Failed to reset {branch_name} in detached worktree: {checkout_r.stderr}")
             return None
         log(f"Failed to create detached worktree: {r.stderr}")
         return None
@@ -770,7 +770,7 @@ def main():
                 log(f"CIRCUIT BREAKER: {branch_name} failed {count} times. Escalating.")
                 gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
                    "--add-label", "bug-fixer:human:needs-intervention",
-                   "--remove-label", "bug-fixer:engineer:in-progress")
+                   "--remove-label", "bug-fixer:engineer:in-progress,bug-fixer:engineer:needs-fix")
             else:
                 gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
                    "--remove-label", "bug-fixer:engineer:in-progress")
