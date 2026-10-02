@@ -294,7 +294,7 @@ def get_tree_sha(repo_dir: str) -> str:
         return ""
 
 
-def scan_repository(repo_dir: str, patterns: list[str], exclude_paths: list[str] | None = None) -> list[str]:
+def scan_repository(repo_dir: str, patterns: list[str], exclude_paths: list[str] | None = None) -> tuple[list[str], int, int]:
     """Scans repository tracked and staged files for leak pattern violations."""
     violations: list[str] = []
     compiled: list[re.Pattern[str]] = []
@@ -306,7 +306,7 @@ def scan_repository(repo_dir: str, patterns: list[str], exclude_paths: list[str]
                 sys.stderr.write(f"WARNING: Invalid leak pattern regex '{pat}': {exc}\n")
 
     if not compiled:
-        return []
+        return [], 0, 0
 
     try:
         tracked = subprocess.check_output(
@@ -317,17 +317,21 @@ def scan_repository(repo_dir: str, patterns: list[str], exclude_paths: list[str]
         ).splitlines()
         files = sorted(set(tracked + staged))
     except Exception as exc:
-        return [f"Failed to list git files in {repo_dir}: {exc}"]
+        return [f"Failed to list git files in {repo_dir}: {exc}"], 0, 0
 
+    scanned_count = 0
+    excluded_count = 0
     for rel_path in files:
         if not rel_path or rel_path.startswith(".git/") or rel_path.startswith("_agents/"):
             continue
         
         if exclude_paths and any(rel_path.startswith(ep) for ep in exclude_paths):
+            excluded_count += 1
             continue
         full_path = os.path.join(repo_dir, rel_path)
         if not os.path.isfile(full_path):
             continue
+        scanned_count += 1
         try:
             with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
                 for lineno, line in enumerate(f, start=1):
@@ -339,7 +343,7 @@ def scan_repository(repo_dir: str, patterns: list[str], exclude_paths: list[str]
         except Exception:
             continue
 
-    return violations
+    return violations, scanned_count, excluded_count
 
 
 def stamp_receipt(repo_dir: str, status: str = "PASS") -> int:
@@ -405,7 +409,7 @@ def verify_receipt(repo_dir: str) -> int:
 
 def run_git_hook(repo_dir: str, patterns: list[str], exclude_paths: list[str] | None = None) -> int:
     """Executes pre-commit / pre-push git hook validation."""
-    violations = scan_repository(repo_dir, patterns, exclude_paths)
+    violations, _, _ = scan_repository(repo_dir, patterns, exclude_paths)
     if violations:
         sys.stderr.write(
             f"\n[Git Hook Blocked] Leak pattern violation(s) detected ({len(violations)}):\n"
@@ -464,13 +468,13 @@ def main() -> int:
         exclude_paths = list(config.get("scan_exclude_paths", ["tests/"]))
         if args.exclude_pattern:
             exclude_paths.extend(args.exclude_pattern)
-        violations = scan_repository(target_dir, patterns, exclude_paths)
+        violations, scanned_count, excluded_count = scan_repository(target_dir, patterns, exclude_paths)
         if violations:
             print(f"LEAK SCAN FAILED ({len(violations)} violation(s)):")
             for v in violations:
                 print(f"  - {v}")
             return 1
-        print(f"LEAK SCAN CLEAN (repo={target_dir})")
+        print(f"LEAK SCAN CLEAN (repo={target_dir}, {scanned_count} files scanned, {excluded_count} excluded by scan_exclude_paths)")
         return 0
 
     if args.stamp_receipt or args.stamp_pass:
