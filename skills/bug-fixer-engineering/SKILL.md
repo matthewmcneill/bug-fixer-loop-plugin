@@ -11,6 +11,22 @@ description: >-
 
 This skill executes one cycle of the autonomous bug fixer loop. It checks for review feedback and approved approaches, selects the highest-priority eligible bug-fixer:engineer:needs-fix issue (with milestone awareness), implements a fix, tests it, and opens a pull request.
 
+## Worktree Isolation
+
+You are working in a **git worktree** — an isolated checkout separate from the main
+repository. This worktree persists across review iterations.
+
+### Rules
+1. **All work happens in your worktree path** (provided in your prompt as "Work in: <path>")
+2. **Never** run `git checkout`, `git switch`, or `git branch` in the main repo directory
+3. **Never** modify files outside your worktree path
+4. Use `git -C <your_worktree_path>` for all git commands
+5. Push with: `git -C <your_worktree_path> push origin HEAD:<branch_name>`
+
+### Why
+The main repo belongs to the user. Checking out a branch there will deadlock the
+engineering dispatcher and potentially block all bug-fixer activity for hours.
+
 ## Workflow
 
 ## Step 0: Configuration Guard

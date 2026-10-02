@@ -72,9 +72,9 @@ bug-fixer:<segment>:<name>
 | `bug-fixer:engineer:needs-fix` | Engineer | Issue queued for automated fix | Triage dispatcher | Engineering dispatcher |
 | `bug-fixer:engineer:in-progress` | Engineer | Engineering has claimed this issue (lease) | Engineering dispatcher | Engineering dispatcher (re-entry guard) |
 | `bug-fixer:engineer:needs-iteration` | Engineer | PR needs engineering rework after review | Architect dispatcher | Engineering dispatcher |
-| `bug-fixer:system:pr` | Engineer | Marks a PR as bug-fixer-created | Engineering agent | Architect dispatcher, trajectory dispatcher |
+| `bug-fixer:system:pr` | System | Marks a PR as bug-fixer-created | Engineering agent | Architect dispatcher, trajectory dispatcher |
 | `bug-fixer:architect:awaiting-review` | Architect | PR ready for architect review | Engineering agent | Architect dispatcher |
-| `bug-fixer:architect:approved` | Architect | Architect approved the PR (terminal) | Architect agent | *(none — merge follows)* |
+| `bug-fixer:architect:approved` | Architect | Architect approved the PR (terminal unless conflict) | Architect agent | Architect dispatcher (conflict monitor) |
 | `bug-fixer:human:required` | Human | Issue requires full human handling (T5) | Triage dispatcher | Human operator |
 | `bug-fixer:human:needs-approach-review` | Human | Approach needs human review before fix (T2) | Triage dispatcher | Human operator |
 | `bug-fixer:human:input-needed` | Human | Issue needs more information from human (T3) | Triage dispatcher | Human operator |
@@ -147,6 +147,7 @@ stateDiagram-v2
     }
 
     architect_approved --> Merged : PR merged
+    architect_approved --> engineer_needs_iteration : Merge conflict detected
     human_needs_intervention --> HumanResolves : Human intervenes
 
     architect_awaiting : architect:awaiting-review
@@ -175,6 +176,7 @@ flowchart TD
     EIP -->|"spec mismatch"| HSC["<b>human:spec-change-request</b><br/>Human handles spec"]
 
     AAR -->|architect approves| AAP["<b>architect:approved</b> ✅<br/>Ready to merge"]
+    AAP -->|"merge conflict detected"| ENI
     AAR -->|needs changes| ENI["<b>engineer:needs-iteration</b><br/>Back to engineering"]
     AAR -->|escalate| HNI["<b>human:needs-intervention</b><br/>Human must resolve"]
     AAR -->|"tech debt found"| TDR["<b>triage:discovered-in-review</b><br/>New issue for triage"]

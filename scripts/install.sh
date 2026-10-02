@@ -277,9 +277,18 @@ echo "--> Step 3: Installing workspace-scoped rules..."
 
 if [[ -d "${TARGET_REPO_DIR}" ]]; then
   mkdir -p "${TARGET_REPO_DIR}/.agents/rules"
+  # Copy main safety rules
   repo_rule_file="${TARGET_REPO_DIR}/.agents/rules/bug-fixer-AGENTS.md"
   cp "${PLUGIN_DIR}/rules/AGENTS.md" "${repo_rule_file}"
   echo "    - Installed: ${repo_rule_file}"
+  # Copy supplementary rules (e.g. github-reads.md)
+  for rule_file in "${PLUGIN_DIR}/rules/"*.md; do
+    rule_base="$(basename "${rule_file}")"
+    if [[ "${rule_base}" != "AGENTS.md" ]]; then
+      cp "${rule_file}" "${TARGET_REPO_DIR}/.agents/rules/${rule_base}"
+      echo "    - Installed: ${TARGET_REPO_DIR}/.agents/rules/${rule_base}"
+    fi
+  done
 else
   echo "    - Skipped: target repo dir does not exist"
 fi

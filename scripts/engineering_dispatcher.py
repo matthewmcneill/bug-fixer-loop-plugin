@@ -40,6 +40,18 @@ def run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
 
+
+CONTAINMENT = (
+    "\n\n## CRITICAL: Working Directory Rules\n"
+    "- Your working directory is: {wt_path}\n"
+    "- ALL file reads, edits, and git operations MUST happen inside this directory\n"
+    "- NEVER run git commands against the main repo at {repo_dir}\n"
+    "- NEVER run `git checkout` or `git switch` outside your working directory\n"
+    "- To commit: `git -C {wt_path} add -A && git -C {wt_path} commit -m '...'`\n"
+    "- To push: `git -C {wt_path} push origin HEAD:{branch}`\n"
+    "- To pull latest: `git -C {wt_path} pull --ff-only origin {branch}`\n"
+)
+
 def gh(*args) -> subprocess.CompletedProcess:
     return run(["gh", *args])
 
@@ -190,20 +202,143 @@ def get_model_for_issue(issue: dict) -> str:
 
 
 
-def create_worktree(issue_num: int, branch_name: str, existing_branch: bool = False) -> Path | None:
-    wt_path = WORKTREES_DIR / f"issue-{issue_num}"
+MAX_WORKTREE_FAILURES = 3
+
+def _load_failures() -> dict:
+    failures_file = STATE_DIR / "worktree_failures.json"
+    if failures_file.exists():
+        try:
+            return json.loads(failures_file.read_text())
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+def _save_failures(counts: dict):
+    failures_file = STATE_DIR / "worktree_failures.json"
+    failures_file.write_text(json.dumps(counts))
+
+def _record_failure(branch: str) -> int:
+    counts = _load_failures()
+    counts[branch] = counts.get(branch, 0) + 1
+    _save_failures(counts)
+    return counts[branch]
+
+def _clear_failure(branch: str):
+    counts = _load_failures()
+    if branch in counts:
+        counts.pop(branch)
+        _save_failures(counts)
+
+def _branch_to_slug(branch_name: str) -> str:
+    for prefix in ["fix/", "feature/", "bugfix/"]:
+        if branch_name.startswith(prefix):
+            branch_name = branch_name[len(prefix):]
+            break
+    return re.sub(r'[^a-z0-9-]+', '-', branch_name.lower()).strip('-')[:60]
+
+
+def _cleanup_merged_worktrees():
+    """Delete worktrees and local branches for merged/closed bug-fixer PRs."""
+    for state in ["merged", "closed"]:
+        r = gh("pr", "list", "--repo", TARGET_REPO, "--state", state,
+               "--label", "bug-fixer:system:pr", "--json", "number,headRefName",
+               "--limit", "20")
+        if r.returncode != 0:
+            continue
+        try:
+            prs = json.loads(r.stdout)
+        except json.JSONDecodeError:
+            continue
+
+        for pr in prs:
+            branch = pr["headRefName"]
+            wt_path = _find_worktree_for_branch(branch)
+
+            if wt_path:
+                log(f"Cleaning up worktree for {state} PR #{pr['number']} (branch {branch})")
+                remove_worktree(wt_path)
+
+            # Prune local branch (safe — PR is done)
+            run(["git", "-C", str(REPO_DIR), "branch", "-D", branch], check=False)
+            _clear_failure(branch)
+
+def _find_worktree_for_branch(branch_name: str):
+    r = run(["git", "-C", str(REPO_DIR), "worktree", "list", "--porcelain"])
+    current_wt = None
+    for line in r.stdout.splitlines():
+        if line.startswith("worktree "):
+            current_wt = line.split(" ", 1)[1]
+        elif line.startswith("branch "):
+            ref = line.split(" ", 1)[1]
+            if ref == f"refs/heads/{branch_name}":
+                path = Path(current_wt)
+                if str(path).startswith(str(WORKTREES_DIR)):
+                    return path
+    return None
+
+def _branch_checked_out_at(branch_name: str) -> str | None:
+    r = run(["git", "-C", str(REPO_DIR), "worktree", "list", "--porcelain"])
+    current_wt = None
+    for line in r.stdout.splitlines():
+        if line.startswith("worktree "):
+            current_wt = line.split(" ", 1)[1]
+        elif line.startswith("branch "):
+            ref = line.split(" ", 1)[1]
+            if ref == f"refs/heads/{branch_name}":
+                return current_wt
+    return None
+
+def _remote_branch_exists(branch_name: str) -> bool:
+    r = run(["git", "-C", str(REPO_DIR), "ls-remote", "--heads", "origin", branch_name])
+    return bool(r.stdout.strip())
+
+def _fetch_branch(branch_name: str):
+    run(["git", "-C", str(REPO_DIR), "fetch", "origin", branch_name], check=False)
+
+def ensure_worktree(branch_name: str, label: str = "") -> Path | None:
+    existing_path = _find_worktree_for_branch(branch_name)
+    if existing_path:
+        run(["git", "-C", str(existing_path), "pull", "--ff-only", "origin", branch_name], check=False)
+        log(f"Reusing existing worktree at {existing_path} for {branch_name}")
+        return existing_path
+
+    slug = label or _branch_to_slug(branch_name)
+    wt_path = WORKTREES_DIR / slug
+    wt_path.parent.mkdir(parents=True, exist_ok=True)
+
     if wt_path.exists():
         remove_worktree(wt_path)
-    wt_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    if existing_branch:
+
+    checked_out_at = _branch_checked_out_at(branch_name)
+
+    if checked_out_at == str(REPO_DIR):
+        log(f"WARNING: {branch_name} is checked out in main repo. Creating worktree from remote ref.")
+        _fetch_branch(branch_name)
+        r = run(["git", "-C", str(REPO_DIR), "worktree", "add", "--detach", str(wt_path)])
+        if r.returncode == 0:
+            checkout_r = run(["git", "-C", str(wt_path), "reset", "--hard", f"origin/{branch_name}"])
+            if checkout_r.returncode == 0:
+                return wt_path
+            log(f"Failed to reset {branch_name} in detached worktree: {checkout_r.stderr}")
+            return None
+        log(f"Failed to create detached worktree: {r.stderr}")
+        return None
+    elif checked_out_at:
+        log(f"Branch {branch_name} unexpectedly at {checked_out_at}. Returning that path.")
+        return Path(checked_out_at)
+
+    branch_exists_remote = _remote_branch_exists(branch_name)
+    if branch_exists_remote:
+        _fetch_branch(branch_name)
         r = run(["git", "-C", str(REPO_DIR), "worktree", "add", str(wt_path), branch_name])
     else:
+        run(["git", "-C", str(REPO_DIR), "fetch", "origin", "main"], check=False)
         r = run(["git", "-C", str(REPO_DIR), "worktree", "add", "-b", branch_name, str(wt_path), "origin/main"])
-        
+
     if r.returncode == 0:
         return wt_path
-    log(f"Failed to create worktree for #{issue_num} on branch {branch_name}: {r.stderr or r.stdout}")
+
+    log(f"Failed to create worktree for {branch_name}: {r.stderr or r.stdout}")
     return None
 
 def remove_worktree(wt_path: Path):
@@ -254,6 +389,11 @@ def main():
 
 
     # ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
+    # Step 0.5b: Clean up merged PRs
+    # ---------------------------------------------------------------------------
+    _cleanup_merged_worktrees()
+
     # Step 0.5: Sweep stale worktrees
     # ---------------------------------------------------------------------------
     if WORKTREES_DIR and WORKTREES_DIR.exists():
@@ -350,15 +490,20 @@ def main():
 
             reattach_context = "\n".join(reattach_lines)
 
-            wt_path = None
-            if existing_branch:
-                wt_path = create_worktree(issue_num, existing_branch, existing_branch=True)
-            else:
-                wt_path = create_worktree(issue_num, f"{BRANCH_PREFIX}/{issue_num}-reattach", existing_branch=False)
+            branch_name = existing_branch if existing_branch else f"{BRANCH_PREFIX}/{issue_num}-reattach"
+            wt_path = ensure_worktree(branch_name, label=f"issue-{issue_num}")
             
             if not wt_path:
+                count = _record_failure(branch_name)
+                if count >= MAX_WORKTREE_FAILURES:
+                    log(f"CIRCUIT BREAKER: {branch_name} failed {count} times. Escalating.")
+                    gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
+                       "--add-label", "bug-fixer:human:needs-intervention",
+                       "--remove-label", "bug-fixer:engineer:in-progress")
                 log(f"Failed to create worktree for reattach #{issue_num}, skipping.")
                 continue
+            else:
+                _clear_failure(branch_name)
 
             prompt = (f"You are the bug-fixer agent. REATTACH to orphaned issue #{issue_num} in repository {TARGET_REPO}.\n\n"
                       f"Issue title: {issue_title}\n\n"
@@ -371,7 +516,7 @@ def main():
                       f"Update the lock file at: {CLAIMS_DIR}/{issue_num}.lock with your conversation_id and PID.\n\n"
                       f"Continue from the best available state — DO NOT start over if there is existing progress.\n"
                       f"After opening the PR (with 'Closes #N' in the body), transition the issue to bug-fixer:architect:awaiting-review and delete the lock file.\n"
-                      f"This conversation handles ONE issue only.")
+                      f"This conversation handles ONE issue only.") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=branch_name)
 
             title = f"Fix #{issue_num}: {issue_title} (reattach)"
             model = get_default_engineering_model()
@@ -479,12 +624,18 @@ def main():
                 log(f"Failed to get branch for PR #{pr_num}, skipping.")
                 continue
             pr_branch = pr_r.stdout.strip()
-            
-            # Use PR number as issue number for worktree dir naming
-            wt_path = create_worktree(pr_num, pr_branch, existing_branch=True)
+            wt_path = ensure_worktree(pr_branch, label=f"issue-{pr_num}")
             if not wt_path:
+                count = _record_failure(pr_branch)
+                if count >= MAX_WORKTREE_FAILURES:
+                    log(f"CIRCUIT BREAKER: {pr_branch} failed {count} times. Escalating.")
+                    gh("issue", "edit", str(pr_num), "--repo", TARGET_REPO,
+                       "--add-label", "bug-fixer:human:needs-intervention",
+                       "--remove-label", "bug-fixer:engineer:needs-iteration")
                 log(f"Failed to create worktree for PR #{pr_num}, skipping.")
                 continue
+            else:
+                _clear_failure(pr_branch)
 
             prompt = (f"The Architect has reviewed your PR #{pr_num} in repository {TARGET_REPO} "
                       f"and requested changes. Please fix the issues and push to the same PR branch.\n\n"
@@ -494,7 +645,7 @@ def main():
                       f"Work in: {wt_path}\n\n"
                       f"After pushing changes, remove the bug-fixer:engineer:needs-iteration label:\n"
                       f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label bug-fixer:engineer:needs-iteration\n\n"
-                      f"Architect comments:\n{comments_text}")
+                      f"Architect comments:\n{comments_text}") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=pr_branch)
 
             # Try to resume the existing developer conversation
             dev_conv_id_match = re.search(r"<!-- agy_dev_conv_id:\s*([a-zA-Z0-9-]+)\s*-->", pr_body)
@@ -530,7 +681,7 @@ def main():
                                f"(replace YOUR_CONVERSATION_ID with your actual conversation ID):\n"
                                f"  <!-- agy_dev_conv_id: YOUR_CONVERSATION_ID -->\n\n"
                                f"Architect comments:\n{comments_text}\n\n"
-                               f"Current PR diff for context:\n```diff\n{pr_diff}\n```")
+                               f"Current PR diff for context:\n```diff\n{pr_diff}\n```") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=pr_branch)
                 title = f"Fix PR #{pr_num} iteration (architect feedback)"
                 model = get_default_engineering_model()
                 new_r = run(["agentapi", "new-conversation", f"--model={model}", f"--title={title}", fresh_prompt])
@@ -612,12 +763,21 @@ def main():
         slug = re.sub(r'[^a-z0-9]+', '-', issue_title.lower()).strip('-')[:40]
         branch_name = f"{BRANCH_PREFIX}/issue-{issue_num}-{slug}"
         
-        wt_path = create_worktree(issue_num, branch_name, existing_branch=False)
+        wt_path = ensure_worktree(branch_name, label=f"issue-{issue_num}")
         if not wt_path:
+            count = _record_failure(branch_name)
+            if count >= MAX_WORKTREE_FAILURES:
+                log(f"CIRCUIT BREAKER: {branch_name} failed {count} times. Escalating.")
+                gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
+                   "--add-label", "bug-fixer:human:needs-intervention",
+                   "--remove-label", "bug-fixer:engineer:in-progress,bug-fixer:engineer:needs-fix")
+            else:
+                gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
+                   "--remove-label", "bug-fixer:engineer:in-progress")
             log(f"Failed to create worktree for #{issue_num}, skipping.")
-            gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
-               "--remove-label", "bug-fixer:engineer:in-progress")
             continue
+        else:
+            _clear_failure(branch_name)
 
         # Write lock file
         CLAIMS_DIR.mkdir(parents=True, exist_ok=True)
@@ -642,7 +802,7 @@ def main():
                   f"The lock file is at: {lock_path} — update it with your conversation_id and PID.\n\n"
                   f"Start from Step 6 (Branch) in the skill — Steps 1-5 are already done by the dispatcher.\n"
                   f"After opening the PR (with 'Closes #N' in the body), transition the issue to bug-fixer:architect:awaiting-review and delete the lock file.\n"
-                  f"This conversation handles ONE issue only. Do not pick up additional issues.")
+                  f"This conversation handles ONE issue only. Do not pick up additional issues.") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=branch_name)
 
         title = f"Fix #{issue_num}: {issue_title}"
         model = get_model_for_issue(issue)
