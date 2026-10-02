@@ -212,20 +212,113 @@ def get_model_for_issue(issue: dict) -> str:
 
 
 
-def create_worktree(issue_num: int, branch_name: str, existing_branch: bool = False) -> Path | None:
-    wt_path = WORKTREES_DIR / f"issue-{issue_num}"
+WORKTREE_FAILURES_FILE = STATE_DIR / "worktree_failures.json"
+MAX_WORKTREE_FAILURES = 3
+
+def _load_failures() -> dict:
+    if WORKTREE_FAILURES_FILE.exists():
+        try:
+            return json.loads(WORKTREE_FAILURES_FILE.read_text())
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+def _save_failures(counts: dict):
+    WORKTREE_FAILURES_FILE.write_text(json.dumps(counts))
+
+def _record_failure(branch: str) -> int:
+    counts = _load_failures()
+    counts[branch] = counts.get(branch, 0) + 1
+    _save_failures(counts)
+    return counts[branch]
+
+def _clear_failure(branch: str):
+    counts = _load_failures()
+    if branch in counts:
+        counts.pop(branch)
+        _save_failures(counts)
+
+def _branch_to_slug(branch_name: str) -> str:
+    for prefix in ["fix/", "feature/", "bugfix/"]:
+        if branch_name.startswith(prefix):
+            branch_name = branch_name[len(prefix):]
+            break
+    return re.sub(r'[^a-z0-9-]+', '-', branch_name.lower()).strip('-')[:60]
+
+def _find_worktree_for_branch(branch_name: str):
+    r = run(["git", "-C", str(REPO_DIR), "worktree", "list", "--porcelain"])
+    current_wt = None
+    for line in r.stdout.splitlines():
+        if line.startswith("worktree "):
+            current_wt = line.split(" ", 1)[1]
+        elif line.startswith("branch "):
+            ref = line.split(" ", 1)[1]
+            if ref == f"refs/heads/{branch_name}":
+                path = Path(current_wt)
+                if str(path).startswith(str(WORKTREES_DIR)):
+                    return path
+    return None
+
+def _branch_checked_out_at(branch_name: str) -> str | None:
+    r = run(["git", "-C", str(REPO_DIR), "worktree", "list", "--porcelain"])
+    current_wt = None
+    for line in r.stdout.splitlines():
+        if line.startswith("worktree "):
+            current_wt = line.split(" ", 1)[1]
+        elif line.startswith("branch "):
+            ref = line.split(" ", 1)[1]
+            if ref == f"refs/heads/{branch_name}":
+                return current_wt
+    return None
+
+def _remote_branch_exists(branch_name: str) -> bool:
+    r = run(["git", "-C", str(REPO_DIR), "ls-remote", "--heads", "origin", branch_name])
+    return bool(r.stdout.strip())
+
+def _fetch_branch(branch_name: str):
+    run(["git", "-C", str(REPO_DIR), "fetch", "origin", branch_name], check=False)
+
+def ensure_worktree(branch_name: str, label: str = "") -> Path | None:
+    existing_path = _find_worktree_for_branch(branch_name)
+    if existing_path:
+        run(["git", "-C", str(existing_path), "pull", "--ff-only", "origin", branch_name], check=False)
+        log(f"Reusing existing worktree at {existing_path} for {branch_name}")
+        return existing_path
+
+    slug = label or _branch_to_slug(branch_name)
+    wt_path = WORKTREES_DIR / slug
+    wt_path.parent.mkdir(parents=True, exist_ok=True)
+
     if wt_path.exists():
         remove_worktree(wt_path)
-    wt_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    if existing_branch:
+
+    checked_out_at = _branch_checked_out_at(branch_name)
+
+    if checked_out_at == str(REPO_DIR):
+        log(f"WARNING: {branch_name} is checked out in main repo. Creating worktree from remote ref.")
+        _fetch_branch(branch_name)
+        r = run(["git", "-C", str(REPO_DIR), "worktree", "add", "--detach", str(wt_path)])
+        if r.returncode == 0:
+            run(["git", "-C", str(wt_path), "checkout", "-B", branch_name, f"origin/{branch_name}"])
+            return wt_path
+        log(f"Failed to create detached worktree: {r.stderr}")
+        return None
+    elif checked_out_at:
+        log(f"Branch {branch_name} unexpectedly at {checked_out_at}. Returning that path.")
+        return Path(checked_out_at)
+
+    branch_exists_remote = _remote_branch_exists(branch_name)
+    if branch_exists_remote:
+        _fetch_branch(branch_name)
         r = run(["git", "-C", str(REPO_DIR), "worktree", "add", str(wt_path), branch_name])
     else:
+        run(["git", "-C", str(REPO_DIR), "fetch", "origin", "main"], check=False)
         r = run(["git", "-C", str(REPO_DIR), "worktree", "add", "-b", branch_name, str(wt_path), "origin/main"])
-        
+
     if r.returncode == 0:
         return wt_path
-    log(f"Failed to create worktree for #{issue_num} on branch {branch_name}: {r.stderr or r.stdout}")
+
+    log(f"Failed to create worktree for {branch_name}: {r.stderr or r.stdout}")
     return None
 
 def remove_worktree(wt_path: Path):
@@ -373,15 +466,18 @@ def main():
             reattach_context = "\n".join(reattach_lines)
 
             branch_name = existing_branch if existing_branch else f"{BRANCH_PREFIX}/{issue_num}-reattach"
-            wt_path = None
-            if existing_branch:
-                wt_path = create_worktree(issue_num, existing_branch, existing_branch=True)
-            else:
-                wt_path = create_worktree(issue_num, f"{BRANCH_PREFIX}/{issue_num}-reattach", existing_branch=False)
+            wt_path = ensure_worktree(branch_name, label=f"issue-{issue_num}")
             
             if not wt_path:
+                count = _record_failure(branch_name)
+                if count >= MAX_WORKTREE_FAILURES:
+                    log(f"CIRCUIT BREAKER: {branch_name} failed {count} times. Escalating.")
+                    gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
+                       "--add-label", "bug-fixer:human:needs-intervention")
                 log(f"Failed to create worktree for reattach #{issue_num}, skipping.")
                 continue
+            else:
+                _clear_failure(branch_name)
 
             prompt = (f"You are the bug-fixer agent. REATTACH to orphaned issue #{issue_num} in repository {TARGET_REPO}.\n\n"
                       f"Issue title: {issue_title}\n\n"
@@ -502,12 +598,17 @@ def main():
                 log(f"Failed to get branch for PR #{pr_num}, skipping.")
                 continue
             pr_branch = pr_r.stdout.strip()
-            
-            # Use PR number as issue number for worktree dir naming
-            wt_path = create_worktree(pr_num, pr_branch, existing_branch=True)
+            wt_path = ensure_worktree(pr_branch, label=f"issue-{pr_num}")
             if not wt_path:
+                count = _record_failure(pr_branch)
+                if count >= MAX_WORKTREE_FAILURES:
+                    log(f"CIRCUIT BREAKER: {pr_branch} failed {count} times. Escalating.")
+                    gh("issue", "edit", str(pr_num), "--repo", TARGET_REPO,
+                       "--add-label", "bug-fixer:human:needs-intervention")
                 log(f"Failed to create worktree for PR #{pr_num}, skipping.")
                 continue
+            else:
+                _clear_failure(pr_branch)
 
             prompt = (f"The Architect has reviewed your PR #{pr_num} in repository {TARGET_REPO} "
                       f"and requested changes. Please fix the issues and push to the same PR branch.\n\n"
@@ -635,12 +736,21 @@ def main():
         slug = re.sub(r'[^a-z0-9]+', '-', issue_title.lower()).strip('-')[:40]
         branch_name = f"{BRANCH_PREFIX}/issue-{issue_num}-{slug}"
         
-        wt_path = create_worktree(issue_num, branch_name, existing_branch=False)
+        wt_path = ensure_worktree(branch_name, label=f"issue-{issue_num}")
         if not wt_path:
+            count = _record_failure(branch_name)
+            if count >= MAX_WORKTREE_FAILURES:
+                log(f"CIRCUIT BREAKER: {branch_name} failed {count} times. Escalating.")
+                gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
+                   "--add-label", "bug-fixer:human:needs-intervention",
+                   "--remove-label", "bug-fixer:engineer:in-progress")
+            else:
+                gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
+                   "--remove-label", "bug-fixer:engineer:in-progress")
             log(f"Failed to create worktree for #{issue_num}, skipping.")
-            gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
-               "--remove-label", "bug-fixer:engineer:in-progress")
             continue
+        else:
+            _clear_failure(branch_name)
 
         # Write lock file
         CLAIMS_DIR.mkdir(parents=True, exist_ok=True)
