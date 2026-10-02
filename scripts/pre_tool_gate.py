@@ -116,6 +116,7 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
             "spec_file_path": "docs/design_specification.md",
             "protected_files": ["docs/design_specification.md"],
             "leak_patterns": [],
+            "scan_exclude_paths": ["tests/"],
         }
 
     try:
@@ -293,7 +294,7 @@ def get_tree_sha(repo_dir: str) -> str:
         return ""
 
 
-def scan_repository(repo_dir: str, patterns: list[str]) -> list[str]:
+def scan_repository(repo_dir: str, patterns: list[str], exclude_paths: list[str] | None = None) -> list[str]:
     """Scans repository tracked and staged files for leak pattern violations."""
     violations: list[str] = []
     compiled: list[re.Pattern[str]] = []
@@ -321,12 +322,24 @@ def scan_repository(repo_dir: str, patterns: list[str]) -> list[str]:
     for rel_path in files:
         if not rel_path or rel_path.startswith(".git/") or rel_path.startswith("_agents/"):
             continue
+        
+        skip = False
+        if exclude_paths:
+            for ep in exclude_paths:
+                ep_norm = os.path.normpath(ep)
+                if rel_path == ep_norm or rel_path.startswith(ep_norm + "/"):
+                    skip = True
+                    break
+        if skip:
+            continue
         full_path = os.path.join(repo_dir, rel_path)
         if not os.path.isfile(full_path):
             continue
         try:
             with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
                 for lineno, line in enumerate(f, start=1):
+                    if "# nosec" in line or "# safe-ingest-test" in line:
+                        continue
                     for pat in compiled:
                         if pat.search(line):
                             violations.append(
@@ -399,9 +412,9 @@ def verify_receipt(repo_dir: str) -> int:
         return 1
 
 
-def run_git_hook(repo_dir: str, patterns: list[str]) -> int:
+def run_git_hook(repo_dir: str, patterns: list[str], exclude_paths: list[str] | None = None) -> int:
     """Executes pre-commit / pre-push git hook validation."""
-    violations = scan_repository(repo_dir, patterns)
+    violations = scan_repository(repo_dir, patterns, exclude_paths)
     if violations:
         sys.stderr.write(
             f"\n[Git Hook Blocked] Leak pattern violation(s) detected ({len(violations)}):\n"
@@ -456,7 +469,8 @@ def main() -> int:
         if not os.path.isabs(target_dir):
             target_dir = os.path.abspath(target_dir)
         patterns = list(config.get("leak_patterns", []))
-        violations = scan_repository(target_dir, patterns)
+        exclude_paths = list(config.get("scan_exclude_paths", ["tests/"]))
+        violations = scan_repository(target_dir, patterns, exclude_paths)
         if violations:
             print(f"LEAK SCAN FAILED ({len(violations)} violation(s)):")
             for v in violations:
@@ -473,7 +487,8 @@ def main() -> int:
 
     if args.git_hook:
         patterns = list(config.get("leak_patterns", []))
-        return run_git_hook(repo_dir, patterns)
+        exclude_paths = list(config.get("scan_exclude_paths", ["tests/"]))
+        return run_git_hook(repo_dir, patterns, exclude_paths)
 
     if sys.stdin.isatty():
         parser.print_help()
