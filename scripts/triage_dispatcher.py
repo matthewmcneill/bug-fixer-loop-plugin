@@ -98,6 +98,11 @@ if TRIAGE_COOLDOWN_FILE.exists():
     except (json.JSONDecodeError, OSError):
         TRIAGE_COOLDOWN_FILE.unlink(missing_ok=True)
 
+from liveness import agentapi_is_reachable
+if not agentapi_is_reachable():
+    log("TRIAGE_EXIT: agentapi is unreachable — skipping this cycle.")
+    sys.exit(0)
+
 log(f"Checking {TARGET_REPO} for untriaged issues")
 
 

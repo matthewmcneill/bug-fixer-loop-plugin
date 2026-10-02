@@ -90,6 +90,11 @@ for _f in WORKSPACE_TMP_DIR.iterdir():
 if _purged:
     log(f"Purged {_purged} stale tmp file(s) older than 12h.")
 
+from liveness import agentapi_is_reachable
+if not agentapi_is_reachable():
+    log("TRAJECTORY_EXIT: agentapi is unreachable — skipping this cycle.")
+    sys.exit(0)
+
 log(f"Checking for recent bug-fixer activity in {TARGET_REPO}")
 
 
