@@ -609,8 +609,7 @@ def main():
            "--add-label", "bug-fixer:engineer:in-progress")
 
         # Create worktree first
-        import re as re_mod
-        slug = re_mod.sub(r'[^a-z0-9]+', '-', issue_title.lower()).strip('-')[:40]
+        slug = re.sub(r'[^a-z0-9]+', '-', issue_title.lower()).strip('-')[:40]
         branch_name = f"{BRANCH_PREFIX}/issue-{issue_num}-{slug}"
         
         wt_path = create_worktree(issue_num, branch_name, existing_branch=False)
