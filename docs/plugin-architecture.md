@@ -462,7 +462,7 @@ Understanding sidecar failure modes is essential for debugging:
 |---------|:---------------:|--------|-------------|
 | `bug-fixer-engineering-loop` | `*/10 * * * *` | `engineering_dispatcher.py` | Checks for `bug-fixer:engineer:needs-fix` issues, claims them, spawns fix conversations |
 | `bug-fixer-triage-loop` | `0 * * * *` | `triage_dispatcher.py` | Checks for unlabelled issues, spawns triage conversations to classify them |
-| `bug-fixer-pr-review-loop` | `<architect_cron>` | `architect_dispatcher.py` | Polls for un-reviewed draft PRs, spawns architect review conversations |
+| `bug-fixer-pr-review-loop` | `<architect_cron>` | `architect_dispatcher.py` | Monitors approved PRs for merge conflicts, polls for un-reviewed draft PRs, spawns architect review conversations |
 | `bug-fixer-trajectory-loop` | `0 18 * * *` | `trajectory_dispatcher.py` | Reviews recent bug-fixer transcripts for quality, posts trajectory analysis |
 
 ---
