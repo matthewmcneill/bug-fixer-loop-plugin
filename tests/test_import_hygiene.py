@@ -10,6 +10,54 @@ from pathlib import Path
 import unittest
 
 
+class FunctionScopedImportVisitor(ast.NodeVisitor):
+    """Linear-time AST visitor that detects import statements inside functions."""
+
+    def __init__(self, filename: str):
+        super().__init__()
+        self.filename = filename
+        self.function_depth = 0
+        self.current_function_names: list[str] = []
+        self.violations: list[str] = []
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.function_depth += 1
+        self.current_function_names.append(node.name)
+        try:
+            self.generic_visit(node)
+        finally:
+            self.current_function_names.pop()
+            self.function_depth -= 1
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.function_depth += 1
+        self.current_function_names.append(node.name)
+        try:
+            self.generic_visit(node)
+        finally:
+            self.current_function_names.pop()
+            self.function_depth -= 1
+
+    def visit_Import(self, node: ast.Import) -> None:
+        if self.function_depth > 0:
+            names = ", ".join(alias.name for alias in node.names)
+            func = " -> ".join(self.current_function_names)
+            self.violations.append(
+                f"{self.filename}:{node.lineno} inside '{func}': {names}"
+            )
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if self.function_depth > 0:
+            mod = node.module or ""
+            names = f"from {mod} import " + ", ".join(alias.name for alias in node.names)
+            func = " -> ".join(self.current_function_names)
+            self.violations.append(
+                f"{self.filename}:{node.lineno} inside '{func}': {names}"
+            )
+        self.generic_visit(node)
+
+
 class TestImportHygiene(unittest.TestCase):
     def setUp(self):
         self.repo_root = Path(__file__).resolve().parent.parent
@@ -17,7 +65,7 @@ class TestImportHygiene(unittest.TestCase):
 
     def test_no_function_scoped_imports_in_scripts(self):
         """Verify no script files define imports inside function or method bodies."""
-        violations = []
+        all_violations = []
         py_files = sorted(self.scripts_dir.glob("*.py"))
         self.assertTrue(len(py_files) > 0, "No script files found to check")
 
@@ -26,27 +74,32 @@ class TestImportHygiene(unittest.TestCase):
             content = py_file.read_text(encoding="utf-8")
             tree = ast.parse(content, filename=str(py_file))
 
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    for child in ast.walk(node):
-                        if isinstance(child, (ast.Import, ast.ImportFrom)):
-                            if isinstance(child, ast.Import):
-                                names = ", ".join(alias.name for alias in child.names)
-                            else:
-                                mod = child.module or ""
-                                names = f"from {mod} import " + ", ".join(
-                                    alias.name for alias in child.names
-                                )
-                            violations.append(
-                                f"{rel_path}:{child.lineno} inside '{node.name}': {names}"
-                            )
+            visitor = FunctionScopedImportVisitor(str(rel_path))
+            visitor.visit(tree)
+            all_violations.extend(visitor.violations)
 
         self.assertEqual(
-            violations,
+            all_violations,
             [],
             "Found function-scoped imports in scripts (violates PLC0415, risks UnboundLocalError):\n"
-            + "\n".join(f"  - {v}" for v in violations),
+            + "\n".join(f"  - {v}" for v in all_violations),
         )
+
+    def test_visitor_detects_nested_import_without_duplicates(self):
+        """Ensure visitor handles nested functions in linear time without duplicate reports."""
+        sample_code = (
+            "import os\n"
+            "\n"
+            "def outer():\n"
+            "    def inner():\n"
+            "        import sys\n"
+            "        pass\n"
+        )
+        tree = ast.parse(sample_code, filename="dummy.py")
+        visitor = FunctionScopedImportVisitor("dummy.py")
+        visitor.visit(tree)
+        self.assertEqual(len(visitor.violations), 1)
+        self.assertIn("inside 'outer -> inner': sys", visitor.violations[0])
 
     def test_all_scripts_compile(self):
         """Verify all python scripts in scripts/ compile without syntax errors."""
