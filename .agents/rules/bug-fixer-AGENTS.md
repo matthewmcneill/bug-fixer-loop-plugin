@@ -57,7 +57,7 @@ Always branch from the latest `origin/main`. Never branch from the maintainer's
 feature branches or from another bug-fixer branch.
 
 ## 13. Bug-Fixer Label
-You MUST apply the `bug-fixer:engineer:pr` label to every PR you create. This distinguishes
+You MUST apply the `bug-fixer:system:pr` label to every PR you create. This distinguishes
 agent-authored PRs from human PRs.
 
 ## 14. Milestone Inheritance

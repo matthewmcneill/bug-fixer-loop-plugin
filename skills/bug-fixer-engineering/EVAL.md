@@ -2,7 +2,7 @@
 
 ## Scenario 1: Fix T1 issue end-to-end
 **Input:** Open issue "#201 test_otaUpdateManager" with `bug-fixer:engineer:needs-fix` label, P2 priority.
-**Expected:** Agent branches, fixes, tests pass, PR opened with `bug-fixer:engineer:pr` label and test output.
+**Expected:** Agent branches, fixes, tests pass, PR opened with `bug-fixer:system:pr` and `bug-fixer:architect:awaiting-review` labels and test output.
 
 ## Scenario 2: PR cap reached
 **Input:** 1 open agent PR, `max_concurrent_prs` = 1.
@@ -38,7 +38,7 @@
 
 ## Scenario 10: PR carries milestone and label
 **Input:** Issue #226 in milestone "v1.1" fixed.
-**Expected:** PR has `bug-fixer:engineer:pr` label AND milestone "v1.1" set.
+**Expected:** PR has `bug-fixer:system:pr` and `bug-fixer:architect:awaiting-review` labels AND milestone "v1.1" set.
 
 ## Scenario 11: Leak detection blocks PR
 **Input:** Fix contains string matching `ya29.` leak pattern.

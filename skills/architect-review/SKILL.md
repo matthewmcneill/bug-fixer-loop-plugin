@@ -86,7 +86,7 @@ Identify the target PR number:
 - Provided via dispatcher prompt or user argument: `<pr_number>`.
 - If unprovided, find the oldest open draft PR with label `bug-fixer`:
   ```bash
-  gh pr list --repo <target_repo> --state open --draft --label "bug-fixer:engineer:pr" --json number,title,createdAt --jq 'sort_by(.createdAt) | .[0].number'
+  gh pr list --repo <target_repo> --state open --draft --label "bug-fixer:system:pr" --json number,title,createdAt --jq 'sort_by(.createdAt) | .[0].number'
   ```
 
 ---
@@ -155,9 +155,9 @@ If the PR is architecturally sound, introduces zero technical debt, has verified
    gh pr ready <pr_number> --repo <target_repo>
    ```
 
-3. **Remove `bug-fixer:engineer:needs-iteration` label (if previously present):**
+3. **Remove `bug-fixer:engineer:needs-iteration` and `bug-fixer:architect:awaiting-review` labels:**
    ```bash
-   gh pr edit <pr_number> --repo <target_repo> --remove-label "bug-fixer:engineer:needs-iteration" 2>/dev/null || true
+   gh pr edit <pr_number> --repo <target_repo> --remove-label "bug-fixer:engineer:needs-iteration,bug-fixer:architect:awaiting-review" 2>/dev/null || true
    ```
 
 4. **Post Approval Review Comment:**
@@ -182,9 +182,9 @@ If ANY architectural flaws, technical debt, pointer instability, memory leaks, o
    gh pr edit <pr_number> --repo <target_repo> --add-label "bug-fixer:engineer:needs-iteration"
    ```
 
-2. **Remove `bug-fixer:architect:approved` label (if present):**
+2. **Remove `bug-fixer:architect:approved` and `bug-fixer:architect:awaiting-review` labels:**
    ```bash
-   gh pr edit <pr_number> --repo <target_repo> --remove-label "bug-fixer:architect:approved" 2>/dev/null || true
+   gh pr edit <pr_number> --repo <target_repo> --remove-label "bug-fixer:architect:approved,bug-fixer:architect:awaiting-review" 2>/dev/null || true
    ```
 
 3. **Add Review Comment Detailing Required Fixes:**

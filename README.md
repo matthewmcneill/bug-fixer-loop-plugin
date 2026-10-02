@@ -219,7 +219,7 @@ Configuration is managed in `config.json` at the root of the plugin or target re
 | `max_concurrent_prs` | `integer` | Maximum concurrent open agent PRs allowed | `1` |
 | `exclusion_labels` | `array[string]` | Issue labels that immediately disqualify from auto-fix | `["bug-fixer:human:required", "P1-blocker", "hardware-required"]` |
 | `auto_fixable_labels` | `array[string]` | Labels identifying issues triaged for autonomous fixing | `["bug-fixer:engineer:needs-fix"]` |
-| `required_labels` | `array[string]` | Standard label taxonomy maintained in target repository | `["bug-fixer:engineer:needs-fix", "bug-fixer:human:required", "bug-fixer:human:needs-approach-review", "bug-fixer:human:project-candidate", "bug-fixer:human:input-needed", "bug-fixer:engineer:in-progress", "bug-fixer:engineer:pr", "bug-fixer:system:health", "bug-fixer:human:spec-change-request"]` |
+| `required_labels` | `array[string]` | Standard label taxonomy maintained in target repository | `["bug-fixer:engineer:needs-fix", "bug-fixer:human:required", "bug-fixer:human:needs-approach-review", "bug-fixer:human:project-candidate", "bug-fixer:human:input-needed", "bug-fixer:engineer:in-progress", "bug-fixer:system:pr", "bug-fixer:system:health", "bug-fixer:human:spec-change-request"]` |
 | `auto_fixable_max_priority` | `string` | Priority ceiling for automated fixes | `"P3-docs-dx"` |
 | `test_command` | `string` | Test command that must pass before any PR is opened | `"pio test -e native"` |
 | `lint_command` | `string` | Optional linter command to run before PR | `""` |

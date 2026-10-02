@@ -339,7 +339,7 @@ declare -A LABELS_META=(
   ["bug-fixer:human:project-candidate"]="5319E7:Large multi-step initiative candidate"
   ["bug-fixer:human:input-needed"]="D4C5F9:Waiting for human input or clarification"
   ["bug-fixer:engineer:in-progress"]="1D76DB:Currently being worked on by an agent or human"
-  ["bug-fixer:engineer:pr"]="0075CA:Managed by autonomous bug-fixer loop"
+  ["bug-fixer:system:pr"]="0075CA:Managed by autonomous bug-fixer loop"
   ["bug-fixer:system:health"]="C5DEF5:Bug fixer health, metrics, or diagnostic report"
   ["bug-fixer:human:spec-change-request"]="F9D0C4:Proposed modification to design specification"
   ["bug-fixer:engineer:needs-iteration"]="E4E669:PR needs engineering rework after architect review"
@@ -356,7 +356,7 @@ REQUIRED_LABELS=(
   "bug-fixer:human:project-candidate"
   "bug-fixer:human:input-needed"
   "bug-fixer:engineer:in-progress"
-  "bug-fixer:engineer:pr"
+  "bug-fixer:system:pr"
   "bug-fixer:system:health"
   "bug-fixer:human:spec-change-request"
   "bug-fixer:engineer:needs-iteration"
@@ -421,7 +421,7 @@ req_labels = [
     "bug-fixer:human:project-candidate",
     "bug-fixer:human:input-needed",
     "bug-fixer:engineer:in-progress",
-    "bug-fixer:engineer:pr",
+    "bug-fixer:system:pr",
     "bug-fixer:system:health",
     "bug-fixer:human:spec-change-request",
     "bug-fixer:engineer:needs-iteration",

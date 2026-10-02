@@ -428,7 +428,7 @@ def main():
     # ---------------------------------------------------------------------------
 
     r_prs = gh("pr", "list", "--repo", TARGET_REPO,
-               "--label", "bug-fixer:engineer:pr,bug-fixer:engineer:needs-iteration", "--state", "open",
+               "--label", "bug-fixer:system:pr,bug-fixer:engineer:needs-iteration", "--state", "open",
                "--json", "number,body,url")
 
     if r_prs.returncode == 0:

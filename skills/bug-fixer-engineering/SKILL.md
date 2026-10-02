@@ -342,7 +342,7 @@ Instead, include a structured discovery section in your **PR body** (Step 11), a
       - **Batch context (if batch):** `**Batch:** \`batch:<slug>\` — <count> issues` with a brief table listing each issue number, title, and what was changed for it.
       - Issue tier: `**Classification:** T1 (engineer:needs-fix)` or `T2 (approach approved by @maintainer)`
       - Milestone: `**Milestone:** <name>` if applicable
-      - The `bug-fixer:engineer:pr` label must be listed (e.g., `**Labels:** bug-fixer`)
+      - The `bug-fixer:system:pr` label must be listed (e.g., `**Labels:** bug-fixer`)
       - What was changed and why it was changed (for batches, organise by issue)
       - **Design review note** from Step 7.5.6
       - **Platform-gap warning** (if applicable): If the fix moves work between execution contexts (e.g. main loop ↔ event callback, timer, ISR, or background task), include: `⚠️ This fix changes execution context. Native tests cannot validate stack limits or async dispatch timing. Hardware testing recommended.`
@@ -350,9 +350,9 @@ Instead, include a structured discovery section in your **PR body** (Step 11), a
       - Leak scan result
       - **Discoveries (Out-of-Scope)** section from Step 7.8 (if any discoveries were flagged)
       - The agent MUST include the following HTML comment at the very end of the body: `<!-- agy_dev_conv_id: <this_conversation_id> -->`. Note: `<this_conversation_id>` must be replaced by its actual Conversation ID.
-    - Apply `bug-fixer:engineer:pr` label to the PR:
+    - Apply `bug-fixer:system:pr` and `bug-fixer:architect:awaiting-review` labels to the PR:
       ```bash
-      gh pr edit <pr_number> --repo <target_repo> --add-label bug-fixer
+      gh pr edit <pr_number> --repo <target_repo> --add-label bug-fixer:system:pr,bug-fixer:architect:awaiting-review
       ```
     - Carry over milestone: If the resolved issues belong to a milestone, set the same milestone on the PR:
       ```bash
