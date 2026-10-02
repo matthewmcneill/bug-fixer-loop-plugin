@@ -40,7 +40,7 @@ class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
         self.assertEqual(call_1_args, (
             "pr", "list",
             "--repo", self.target_repo,
-            "--label", "bug-fixer:engineer:pr",
+            "--label", "bug-fixer:system:pr",
             "--label", "bug-fixer:architect:approved",
             "--state", "open",
             "--json", "number,title,mergeable",

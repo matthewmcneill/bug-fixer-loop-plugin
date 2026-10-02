@@ -72,7 +72,7 @@ bug-fixer:<segment>:<name>
 | `bug-fixer:engineer:needs-fix` | Engineer | Issue queued for automated fix | Triage dispatcher | Engineering dispatcher |
 | `bug-fixer:engineer:in-progress` | Engineer | Engineering has claimed this issue (lease) | Engineering dispatcher | Engineering dispatcher (re-entry guard) |
 | `bug-fixer:engineer:needs-iteration` | Engineer | PR needs engineering rework after review | Architect dispatcher | Engineering dispatcher |
-| `bug-fixer:engineer:pr` | Engineer | Marks a PR as bug-fixer-created | Engineering agent | Architect dispatcher, trajectory dispatcher |
+| `bug-fixer:system:pr` | System | Marks a PR as bug-fixer-created | Engineering agent | Architect dispatcher, trajectory dispatcher |
 | `bug-fixer:architect:awaiting-review` | Architect | PR ready for architect review | Engineering agent | Architect dispatcher |
 | `bug-fixer:architect:approved` | Architect | Architect approved the PR (terminal unless conflict) | Architect agent | Architect dispatcher (conflict monitor) |
 | `bug-fixer:human:required` | Human | Issue requires full human handling (T5) | Triage dispatcher | Human operator |
@@ -133,7 +133,7 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    [*] --> architect_awaiting : PR created with engineer:pr
+    [*] --> architect_awaiting : PR created with system:pr
 
     state "Architect Review" as review {
         architect_awaiting --> architect_approved : Approve
@@ -171,7 +171,7 @@ flowchart TD
 
     ENQ -->|"engineering_dispatcher<br/>claims lease"| EIP["<b>engineer:in-progress</b><br/>Engineering working"]
 
-    EIP -->|"PR created +<br/>engineer:pr"| AAR["<b>architect:awaiting-review</b><br/>Architect reviews PR"]
+    EIP -->|"PR created +<br/>system:pr"| AAR["<b>architect:awaiting-review</b><br/>Architect reviews PR"]
 
     EIP -->|"spec mismatch"| HSC["<b>human:spec-change-request</b><br/>Human handles spec"]
 
@@ -214,8 +214,8 @@ Each dispatcher queries specific labels as its **input** and applies labels as i
 | Dispatcher | Input (queries for) | Output (applies) | Removes |
 |---|---|---|---|
 | `triage_dispatcher` | Issues with NO `bug-fixer:*` classification label | One of: `engineer:needs-fix`, `human:required`, `human:needs-approach-review`, `human:input-needed`, `human:project-candidate` + optionally `complexity:*` | — |
-| `engineering_dispatcher` | Issues: `engineer:needs-fix` (not `engineer:in-progress`). PRs: `engineer:pr` + `engineer:needs-iteration` | `engineer:in-progress` (claim), `engineer:pr` (on PR), `architect:awaiting-review` (done), `batch:<slug>` | `engineer:in-progress` (release), `engineer:needs-iteration` (after re-claim) |
-| `architect_dispatcher` | Draft PRs: `engineer:pr` (not `architect:approved`, not `engineer:needs-iteration`).<br/>Approved PRs: `engineer:pr` + `architect:approved` (conflict monitor) | One of: `architect:approved`, `engineer:needs-iteration` (changes requested or conflict detected), `human:needs-intervention`. Optionally files new issue with `triage:discovered-in-review` | `architect:approved` (when conflict detected) |
+| `engineering_dispatcher` | Issues: `engineer:needs-fix` (not `engineer:in-progress`). PRs: `system:pr` + `engineer:needs-iteration` | `engineer:in-progress` (claim), `system:pr` (on PR), `architect:awaiting-review` (done), `batch:<slug>` | `engineer:in-progress` (release), `engineer:needs-iteration` (after re-claim) |
+| `architect_dispatcher` | Draft PRs: `system:pr` (not `architect:approved`, not `engineer:needs-iteration`).<br/>Approved PRs: `system:pr` + `architect:approved` (conflict monitor) | One of: `architect:approved`, `engineer:needs-iteration` (changes requested or conflict detected), `human:needs-intervention`. Optionally files new issue with `triage:discovered-in-review` | `architect:approved` (when conflict detected) |
 | `trajectory_dispatcher` | Stale `engineer:in-progress`, repeated failures | `system:health` (alert issue), `human:required` (escalation) | `engineer:in-progress` (stale unclaim) |
 | `liveness` | `architect:awaiting-review` (success check), `engineer:needs-iteration` (iteration check) | — (monitoring only) | `engineer:in-progress` (stale recovery) |
 

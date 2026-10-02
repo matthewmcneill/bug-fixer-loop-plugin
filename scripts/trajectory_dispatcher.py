@@ -159,7 +159,7 @@ in_progress_count = int(r.stdout.strip() or "0")
 
 # Quick check: any recent PRs from the bug-fixer?
 r = run(["gh", "pr", "list", "--repo", TARGET_REPO,
-         "--label", "bug-fixer:engineer:pr", "--state", "all",
+         "--label", "bug-fixer:system:pr", "--state", "all",
          "--json", "number", "--jq", "length"])
 recent_prs = int(r.stdout.strip() or "0")
 

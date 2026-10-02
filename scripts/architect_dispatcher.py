@@ -87,7 +87,7 @@ def inject_conv_tag(pr_number: int, tag_name: str, conv_id: str) -> bool:
 def check_merge_conflicts(target_repo: str | None = None) -> None:
     """Step 0.5: Merge Conflict Monitor for Approved PRs.
 
-    Queries open PRs with labels bug-fixer:engineer:pr + bug-fixer:architect:approved.
+    Queries open PRs with labels bug-fixer:system:pr + bug-fixer:architect:approved.
     For each, checks GitHub's mergeable status via the JSON API:
       - CONFLICTING: posts [ARCHITECT] comment, removes bug-fixer:architect:approved,
         adds bug-fixer:engineer:needs-iteration, converts back to draft (gh pr ready --undo)
@@ -101,7 +101,7 @@ def check_merge_conflicts(target_repo: str | None = None) -> None:
 
     log(f"Checking merge conflict status for approved PRs in {repo}")
     r = gh("pr", "list", "--repo", repo,
-           "--label", "bug-fixer:engineer:pr",
+           "--label", "bug-fixer:system:pr",
            "--label", "bug-fixer:architect:approved",
            "--state", "open",
            "--json", "number,title,mergeable")
@@ -214,7 +214,7 @@ def main():
     # Step 1: Draft PR Polling Logic
     # ---------------------------------------------------------------------------
 
-    r = gh("pr", "list", "--repo", TARGET_REPO, "--label", "bug-fixer:engineer:pr",
+    r = gh("pr", "list", "--repo", TARGET_REPO, "--label", "bug-fixer:system:pr",
            "--state", "open", "--draft",
            "--json", "number,title,labels,body")
 

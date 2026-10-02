@@ -176,7 +176,7 @@ DEFAULTS = {
         "bug-fixer:human:project-candidate",
         "bug-fixer:human:input-needed",
         "bug-fixer:engineer:in-progress",
-        "bug-fixer:engineer:pr",
+        "bug-fixer:system:pr",
         "bug-fixer:system:health",
         "bug-fixer:human:spec-change-request",
         "bug-fixer:engineer:needs-iteration",

@@ -86,7 +86,7 @@ Identify the target PR number:
 - Provided via dispatcher prompt or user argument: `<pr_number>`.
 - If unprovided, find the oldest open draft PR with label `bug-fixer`:
   ```bash
-  gh pr list --repo <target_repo> --state open --draft --label "bug-fixer:engineer:pr" --json number,title,createdAt --jq 'sort_by(.createdAt) | .[0].number'
+  gh pr list --repo <target_repo> --state open --draft --label "bug-fixer:system:pr" --json number,title,createdAt --jq 'sort_by(.createdAt) | .[0].number'
   ```
 
 ---

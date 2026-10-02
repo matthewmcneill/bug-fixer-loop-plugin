@@ -241,7 +241,7 @@ def _cleanup_merged_worktrees():
     """Delete worktrees and local branches for merged/closed bug-fixer PRs."""
     for state in ["merged", "closed"]:
         r = gh("pr", "list", "--repo", TARGET_REPO, "--state", state,
-               "--label", "bug-fixer:engineer:pr", "--json", "number,headRefName",
+               "--label", "bug-fixer:system:pr", "--json", "number,headRefName",
                "--limit", "20")
         if r.returncode != 0:
             continue
@@ -573,7 +573,7 @@ def main():
     # ---------------------------------------------------------------------------
 
     r_prs = gh("pr", "list", "--repo", TARGET_REPO,
-               "--label", "bug-fixer:engineer:pr,bug-fixer:engineer:needs-iteration", "--state", "open",
+               "--label", "bug-fixer:system:pr,bug-fixer:engineer:needs-iteration", "--state", "open",
                "--json", "number,body,url")
 
     if r_prs.returncode == 0:
