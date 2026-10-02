@@ -256,7 +256,6 @@ def main():
         if CLAIMS_DIR.exists():
             for lf in CLAIMS_DIR.glob("*.lock"):
                 try:
-                    import json
                     c = json.loads(lf.read_text())
                     if "worktree_path" in c:
                         active_wts.add(c["worktree_path"])
@@ -265,7 +264,6 @@ def main():
         if DISPATCHES_DIR.exists():
             for df in DISPATCHES_DIR.glob("*.json"):
                 try:
-                    import json
                     d = json.loads(df.read_text())
                     if "worktree_path" in d:
                         active_wts.add(d["worktree_path"])
