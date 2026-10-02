@@ -241,7 +241,7 @@ def _cleanup_merged_worktrees():
     """Delete worktrees and local branches for merged/closed bug-fixer PRs."""
     for state in ["merged", "closed"]:
         r = gh("pr", "list", "--repo", TARGET_REPO, "--state", state,
-               "--label", "bug-fixer", "--json", "number,headRefName",
+               "--label", "bug-fixer:engineer:pr", "--json", "number,headRefName",
                "--limit", "20")
         if r.returncode != 0:
             continue
@@ -316,8 +316,11 @@ def ensure_worktree(branch_name: str, label: str = "") -> Path | None:
         _fetch_branch(branch_name)
         r = run(["git", "-C", str(REPO_DIR), "worktree", "add", "--detach", str(wt_path)])
         if r.returncode == 0:
-            run(["git", "-C", str(wt_path), "checkout", "-B", branch_name, f"origin/{branch_name}"])
-            return wt_path
+            checkout_r = run(["git", "-C", str(wt_path), "checkout", "-B", branch_name, f"origin/{branch_name}"])
+            if checkout_r.returncode == 0:
+                return wt_path
+            log(f"Failed to checkout {branch_name} in detached worktree: {checkout_r.stderr}")
+            return None
         log(f"Failed to create detached worktree: {r.stderr}")
         return None
     elif checked_out_at:
@@ -495,7 +498,8 @@ def main():
                 if count >= MAX_WORKTREE_FAILURES:
                     log(f"CIRCUIT BREAKER: {branch_name} failed {count} times. Escalating.")
                     gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
-                       "--add-label", "bug-fixer:human:needs-intervention")
+                       "--add-label", "bug-fixer:human:needs-intervention",
+                       "--remove-label", "bug-fixer:engineer:in-progress")
                 log(f"Failed to create worktree for reattach #{issue_num}, skipping.")
                 continue
             else:
@@ -626,7 +630,8 @@ def main():
                 if count >= MAX_WORKTREE_FAILURES:
                     log(f"CIRCUIT BREAKER: {pr_branch} failed {count} times. Escalating.")
                     gh("issue", "edit", str(pr_num), "--repo", TARGET_REPO,
-                       "--add-label", "bug-fixer:human:needs-intervention")
+                       "--add-label", "bug-fixer:human:needs-intervention",
+                       "--remove-label", "bug-fixer:engineer:needs-iteration")
                 log(f"Failed to create worktree for PR #{pr_num}, skipping.")
                 continue
             else:
