@@ -13,6 +13,7 @@ No-op conditions (exit silently):
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone, timedelta
@@ -82,7 +83,6 @@ for _f in WORKSPACE_TMP_DIR.iterdir():
             if _f.is_file():
                 _f.unlink()
             elif _f.is_dir():
-                import shutil
                 shutil.rmtree(_f, ignore_errors=True)
             _purged += 1
     except OSError:
