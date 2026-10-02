@@ -18,6 +18,8 @@ import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+from liveness import agentapi_is_reachable
+
 
 def log(msg: str):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -90,7 +92,6 @@ for _f in WORKSPACE_TMP_DIR.iterdir():
 if _purged:
     log(f"Purged {_purged} stale tmp file(s) older than 12h.")
 
-from liveness import agentapi_is_reachable
 if not agentapi_is_reachable():
     log("TRAJECTORY_EXIT: agentapi is unreachable — skipping this cycle.")
     sys.exit(0)

@@ -30,7 +30,7 @@ def agentapi_is_reachable() -> bool:
     try:
         r = subprocess.run(["agentapi", "--help"], capture_output=True, timeout=AGENTAPI_TIMEOUT)
         return r.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except (subprocess.TimeoutExpired, OSError):
         return False
 
 

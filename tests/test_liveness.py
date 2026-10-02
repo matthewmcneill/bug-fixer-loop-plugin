@@ -39,6 +39,12 @@ class TestLiveness(unittest.TestCase):
         mock_run.side_effect = FileNotFoundError("No such file or directory: 'agentapi'")
         
         self.assertFalse(agentapi_is_reachable())
+        
+    @patch('subprocess.run')
+    def test_agentapi_is_reachable_permission_error(self, mock_run):
+        mock_run.side_effect = PermissionError("Permission denied: 'agentapi'")
+        
+        self.assertFalse(agentapi_is_reachable())
 
 if __name__ == '__main__':
     unittest.main()
