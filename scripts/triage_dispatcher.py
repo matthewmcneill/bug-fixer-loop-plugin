@@ -19,6 +19,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from liveness import agentapi_is_reachable
+
 CLASSIFICATION_LABELS = {
     "bug-fixer:engineer:needs-fix",
     "bug-fixer:human:needs-approach-review",
@@ -97,6 +99,10 @@ if TRIAGE_COOLDOWN_FILE.exists():
         TRIAGE_FAILURE_FILE.unlink(missing_ok=True)
     except (json.JSONDecodeError, OSError):
         TRIAGE_COOLDOWN_FILE.unlink(missing_ok=True)
+
+if not agentapi_is_reachable():
+    log("TRIAGE_EXIT: agentapi is unreachable — skipping this cycle.")
+    sys.exit(0)
 
 log(f"Checking {TARGET_REPO} for untriaged issues")
 

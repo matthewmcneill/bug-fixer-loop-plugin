@@ -112,7 +112,11 @@ STATE_DIR = CONFIG_FILE.parent
 REPO_DIR = STATE_DIR.parent.parent.parent
 DISPATCHES_DIR = STATE_DIR / "dispatches"
 
-from liveness import record_dispatch, sweep_dispatches
+from liveness import record_dispatch, sweep_dispatches, agentapi_is_reachable
+
+if not agentapi_is_reachable():
+    log("ARCHITECT_EXIT: agentapi is unreachable — skipping this cycle.")
+    sys.exit(0)
 
 log(f"Polling PRs in {TARGET_REPO}")
 

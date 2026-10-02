@@ -27,7 +27,8 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from liveness import (record_dispatch, sweep_dispatches,
-                      transcript_age_seconds, transcript_path, is_stalled)
+                      transcript_age_seconds, transcript_path, is_stalled,
+                      agentapi_is_reachable)
 
 
 def log(msg: str):
@@ -233,6 +234,10 @@ def main():
             FAILURE_COUNT_FILE.unlink(missing_ok=True)
         except (json.JSONDecodeError, OSError):
             COOLDOWN_FILE.unlink(missing_ok=True)
+
+    if not agentapi_is_reachable():
+        log("ENGINEERING_EXIT: agentapi is unreachable — skipping this cycle.")
+        sys.exit(0)
 
     log(f"Checking {TARGET_REPO} (max_concurrent={MAX_CONCURRENT})")
 

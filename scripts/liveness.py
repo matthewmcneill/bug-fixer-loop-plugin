@@ -23,6 +23,16 @@ BRAIN_DIR = Path.home() / ".gemini" / "antigravity" / "brain"
 STALE_THRESHOLD = 300       # seconds — transcript must be fresher than this
 DEFAULT_TIMEOUT = 45 * 60   # seconds — hard ceiling before forced recovery
 MAX_RESUME_ATTEMPTS = 2
+AGENTAPI_TIMEOUT = 5
+
+def agentapi_is_reachable() -> bool:
+    """Check if agentapi is reachable and responsive (side-effect-free probe)."""
+    try:
+        r = subprocess.run(["agentapi", "--help"], capture_output=True, timeout=AGENTAPI_TIMEOUT)
+        return r.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
 
 # Resume message for plan-gate stalls (Rule 17 override)
 RESUME_MSG_PLAN_GATE = (
