@@ -13,7 +13,7 @@ approach first.
 
 ## Correct approach — use safe_ingest.py
 
-Run from the project root (`/Users/mcneillm/Documents/Projects/bug-fixer-loop-plugin`):
+Run from the project root (the repository working directory):
 
 ```bash
 # View a single issue (extract the number from the URL/reference)
@@ -37,7 +37,7 @@ content filtered and sanitized.
 
 ## URL parsing
 
-If the user gives a full URL like `https://github.com/matthewmcneill/bug-fixer-loop-plugin/issues/20`,
+If the user gives a full URL like `https://github.com/owner/repo/issues/20`,
 extract the number (`20`) and run:
 
 ```bash
