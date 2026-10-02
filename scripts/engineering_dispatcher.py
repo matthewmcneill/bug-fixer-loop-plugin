@@ -245,6 +245,32 @@ def _branch_to_slug(branch_name: str) -> str:
             break
     return re.sub(r'[^a-z0-9-]+', '-', branch_name.lower()).strip('-')[:60]
 
+
+def _cleanup_merged_worktrees():
+    """Delete worktrees and local branches for merged/closed bug-fixer PRs."""
+    for state in ["merged", "closed"]:
+        r = gh("pr", "list", "--repo", TARGET_REPO, "--state", state,
+               "--label", "bug-fixer", "--json", "number,headRefName",
+               "--limit", "20")
+        if r.returncode != 0:
+            continue
+        try:
+            prs = json.loads(r.stdout)
+        except json.JSONDecodeError:
+            continue
+
+        for pr in prs:
+            branch = pr["headRefName"]
+            wt_path = _find_worktree_for_branch(branch)
+
+            if wt_path:
+                log(f"Cleaning up worktree for {state} PR #{pr['number']} (branch {branch})")
+                remove_worktree(wt_path)
+
+            # Prune local branch (safe — PR is done)
+            run(["git", "-C", str(REPO_DIR), "branch", "-D", branch], check=False)
+            _clear_failure(branch)
+
 def _find_worktree_for_branch(branch_name: str):
     r = run(["git", "-C", str(REPO_DIR), "worktree", "list", "--porcelain"])
     current_wt = None
@@ -369,6 +395,11 @@ def main():
 
 
     # ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
+    # Step 0.5b: Clean up merged PRs
+    # ---------------------------------------------------------------------------
+    _cleanup_merged_worktrees()
+
     # Step 0.5: Sweep stale worktrees
     # ---------------------------------------------------------------------------
     if WORKTREES_DIR and WORKTREES_DIR.exists():
