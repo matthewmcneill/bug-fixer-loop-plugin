@@ -97,9 +97,9 @@ If count >= `max_concurrent_prs`, output `ENGINEERING_EXIT: Active development c
    - Query comments and reviews via: `python3 ${PLUGIN_DIR}/scripts/safe_ingest.py pr-comments <number>`
    - Look for any unaddressed maintainer comments (comments from `maintainer` or `trusted_users` that do not have a subsequent `[BUG-FIXER]` reply).
    - If found: check out the PR branch, implement the requested changes, run tests, push the changes, reply with `[BUG-FIXER] Addressed review feedback in <sha>`, and exit this cycle.
-   - After pushing iteration changes, remove the `bug-fixer:engineer:needs-iteration` label:
+   - After pushing iteration changes, remove the `bug-fixer:engineer:needs-iteration` label and add `bug-fixer:architect:awaiting-review`:
      ```bash
-     gh pr edit <pr_number> --repo <target_repo> --remove-label bug-fixer:engineer:needs-iteration
+     gh pr edit <pr_number> --repo <target_repo> --remove-label bug-fixer:engineer:needs-iteration --add-label bug-fixer:architect:awaiting-review
      ```
 
 ### Step 3.5: Check for Approved Approaches
