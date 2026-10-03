@@ -340,7 +340,8 @@ Diff:
 
         if dispatch_conv_id:
             record_dispatch(DISPATCHES_DIR, dispatch_conv_id, "architect_review",
-                            pr_number=number, timeout_minutes=20)
+                            pr_number=number, timeout_minutes=20,
+                            model=config.get("architect_model", "pro"))
             # Ensure the PR body has the architect conversation tag so the next
             # review cycle can resume this conversation instead of spawning new.
             inject_conv_tag(number, "agy_arch_conv_id", dispatch_conv_id)
