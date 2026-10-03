@@ -7,7 +7,8 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from liveness import agentapi_is_reachable
+from liveness import agentapi_is_reachable, check_orphaned_prs
+import json
 
 class TestLiveness(unittest.TestCase):
     
@@ -45,6 +46,100 @@ class TestLiveness(unittest.TestCase):
         mock_run.side_effect = PermissionError("Permission denied: 'agentapi'")
         
         self.assertFalse(agentapi_is_reachable())
+
+    @patch("liveness._gh")
+    def test_check_orphaned_prs_auto_heals_missing_system_pr_and_awaiting_review(self, mock_gh):
+        mock_log = MagicMock()
+        prs_output = json.dumps([
+            {
+                "number": 101,
+                "title": "[BugFixer] Fix #42: Some bug",
+                "labels": [],
+            }
+        ])
+        mock_gh.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=prs_output, stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),  # add system:pr
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),  # add awaiting-review
+        ]
+
+        check_orphaned_prs("owner/repo", mock_log)
+
+        self.assertEqual(mock_gh.call_count, 3)
+        self.assertEqual(mock_gh.call_args_list[0][0], ("pr", "list", "--repo", "owner/repo", "--state", "open", "--draft", "--json", "number,title,labels"))
+        self.assertEqual(mock_gh.call_args_list[1][0], ("pr", "edit", "101", "--repo", "owner/repo", "--add-label", "bug-fixer:system:pr"))
+        self.assertEqual(mock_gh.call_args_list[2][0], ("pr", "edit", "101", "--repo", "owner/repo", "--add-label", "bug-fixer:architect:awaiting-review"))
+        self.assertEqual(mock_log.call_count, 2)
+
+    @patch("liveness._gh")
+    def test_check_orphaned_prs_auto_heals_missing_awaiting_review(self, mock_gh):
+        mock_log = MagicMock()
+        prs_output = json.dumps([
+            {
+                "number": 102,
+                "title": "[BugFixer] Fix #43: Another bug",
+                "labels": [{"name": "bug-fixer:system:pr"}],
+            }
+        ])
+        mock_gh.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=prs_output, stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),  # add awaiting-review
+        ]
+
+        check_orphaned_prs("owner/repo", mock_log)
+
+        self.assertEqual(mock_gh.call_count, 2)
+        self.assertEqual(mock_gh.call_args_list[1][0], ("pr", "edit", "102", "--repo", "owner/repo", "--add-label", "bug-fixer:architect:awaiting-review"))
+        self.assertEqual(mock_log.call_count, 1)
+
+    @patch("liveness._gh")
+    def test_check_orphaned_prs_skips_when_status_present(self, mock_gh):
+        mock_log = MagicMock()
+        prs_output = json.dumps([
+            {
+                "number": 103,
+                "title": "[BugFixer] Fix #44: Bug",
+                "labels": [{"name": "bug-fixer:system:pr"}, {"name": "bug-fixer:architect:awaiting-review"}],
+            },
+            {
+                "number": 104,
+                "title": "[BugFixer] Fix #45: Bug",
+                "labels": [{"name": "bug-fixer:system:pr"}, {"name": "bug-fixer:engineer:needs-iteration"}],
+            },
+            {
+                "number": 105,
+                "title": "[BugFixer] Fix #46: Bug",
+                "labels": [{"name": "bug-fixer:system:pr"}, {"name": "bug-fixer:architect:approved"}],
+            },
+            {
+                "number": 106,
+                "title": "[BugFixer] Fix #47: Bug",
+                "labels": [{"name": "bug-fixer:system:pr"}, {"name": "bug-fixer:human:needs-intervention"}],
+            },
+        ])
+        mock_gh.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=prs_output, stderr="")
+
+        check_orphaned_prs("owner/repo", mock_log)
+
+        self.assertEqual(mock_gh.call_count, 1)
+        mock_log.assert_not_called()
+
+    @patch("liveness._gh")
+    def test_check_orphaned_prs_skips_non_bug_fixer_prs(self, mock_gh):
+        mock_log = MagicMock()
+        prs_output = json.dumps([
+            {
+                "number": 107,
+                "title": "Feature: add new widget",
+                "labels": [{"name": "enhancement"}],
+            }
+        ])
+        mock_gh.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=prs_output, stderr="")
+
+        check_orphaned_prs("owner/repo", mock_log)
+
+        self.assertEqual(mock_gh.call_count, 1)
+        mock_log.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()

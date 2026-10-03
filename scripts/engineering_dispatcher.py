@@ -541,7 +541,10 @@ def main():
                       f"The issue is already claimed (bug-fixer:engineer:in-progress label applied).\n"
                       f"Update the lock file at: {CLAIMS_DIR}/{issue_num}.lock with your conversation_id and PID.\n\n"
                       f"Continue from the best available state — DO NOT start over if there is existing progress.\n"
-                      f"After opening the PR (with 'Closes #N' in the body), transition the issue to bug-fixer:architect:awaiting-review and delete the lock file.\n"
+                      f"After opening the PR (with 'Closes #{issue_num}' in the body):\n"
+                      f"1. Add labels to the PR:  gh pr edit <PR> --repo {TARGET_REPO} --add-label bug-fixer:system:pr,bug-fixer:architect:awaiting-review\n"
+                      f"2. Transition the issue: gh issue edit {issue_num} --repo {TARGET_REPO} --add-label bug-fixer:architect:awaiting-review --remove-label bug-fixer:engineer:in-progress\n"
+                      f"3. Delete the lock file.\n"
                       f"This conversation handles ONE issue only.") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=branch_name)
 
             title = f"Fix #{issue_num}: {issue_title} (reattach)"
@@ -670,8 +673,8 @@ def main():
                       f"Read config from: {CONFIG_FILE}\n"
                       f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
                       f"Work in: {wt_path}\n\n"
-                      f"After pushing changes, remove the bug-fixer:engineer:needs-iteration label:\n"
-                      f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label bug-fixer:engineer:needs-iteration\n\n"
+                      f"After pushing changes, remove the bug-fixer:engineer:needs-iteration label and add bug-fixer:architect:awaiting-review:\n"
+                      f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label bug-fixer:engineer:needs-iteration --add-label bug-fixer:architect:awaiting-review\n\n"
                       f"Architect comments:\n{comments_text}") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=pr_branch)
 
             # Try to resume the existing developer conversation
@@ -702,8 +705,8 @@ def main():
                                f"Work in: {wt_path}\n\n"
                                f"Apply the fixes requested below, run tests, "
                                f"and push to the same branch.\n\n"
-                               f"After pushing changes, remove the bug-fixer:engineer:needs-iteration label:\n"
-                               f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label bug-fixer:engineer:needs-iteration\n\n"
+                               f"After pushing changes, remove the bug-fixer:engineer:needs-iteration label and add bug-fixer:architect:awaiting-review:\n"
+                               f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label bug-fixer:engineer:needs-iteration --add-label bug-fixer:architect:awaiting-review\n\n"
                                f"IMPORTANT: After pushing, ensure the PR body ends with this HTML comment "
                                f"(replace YOUR_CONVERSATION_ID with your actual conversation ID):\n"
                                f"  <!-- agy_dev_conv_id: YOUR_CONVERSATION_ID -->\n\n"
@@ -839,7 +842,10 @@ def main():
                   f"The issue is already claimed (bug-fixer:engineer:in-progress label applied).\n"
                   f"The lock file is at: {lock_path} — update it with your conversation_id and PID.\n\n"
                   f"Start from Step 6 (Branch) in the skill — Steps 1-5 are already done by the dispatcher.\n"
-                  f"After opening the PR (with 'Closes #N' in the body), transition the issue to bug-fixer:architect:awaiting-review and delete the lock file.\n"
+                  f"After opening the PR (with 'Closes #{issue_num}' in the body):\n"
+                  f"1. Add labels to the PR:  gh pr edit <PR> --repo {TARGET_REPO} --add-label bug-fixer:system:pr,bug-fixer:architect:awaiting-review\n"
+                  f"2. Transition the issue: gh issue edit {issue_num} --repo {TARGET_REPO} --add-label bug-fixer:architect:awaiting-review --remove-label bug-fixer:engineer:in-progress\n"
+                  f"3. Delete the lock file.\n"
                   f"This conversation handles ONE issue only. Do not pick up additional issues.") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=branch_name)
 
         title = f"Fix #{issue_num}: {issue_title}"

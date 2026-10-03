@@ -691,7 +691,7 @@ def _recover(dispatch: dict, dispatches_dir: Path, target_repo: str,
 
 
 def check_orphaned_prs(target_repo: str, log_fn):
-    """Warn on draft PRs matching the [BugFixer] Fix #N title convention that are missing system:pr."""
+    """Warn on and auto-heal draft PRs matching the [BugFixer] convention that are missing required labels."""
     r = _gh("pr", "list", "--repo", target_repo, "--state", "open", "--draft", "--json", "number,title,labels")
     if r.returncode != 0:
         return
@@ -701,10 +701,28 @@ def check_orphaned_prs(target_repo: str, log_fn):
         return
     for pr in prs:
         title = pr.get("title", "")
-        if "[BugFixer]" in title:
-            labels = [label.get("name", "") for label in pr.get("labels", [])]
-            if "bug-fixer:system:pr" not in labels:
-                log_fn(f"DIAGNOSTIC WARN: PR #{pr.get('number')} matches bug-fixer title convention but is missing bug-fixer:system:pr label.")
+        pr_num = pr.get("number")
+        labels = [label.get("name", "") for label in pr.get("labels", [])]
+        is_bug_fixer = "[BugFixer]" in title or "bug-fixer:system:pr" in labels
+
+        if not is_bug_fixer:
+            continue
+
+        if "bug-fixer:system:pr" not in labels:
+            log_fn(f"DIAGNOSTIC WARN: PR #{pr_num} matches bug-fixer title convention but is missing bug-fixer:system:pr label. Auto-healing.")
+            _gh("pr", "edit", str(pr_num), "--repo", target_repo, "--add-label", "bug-fixer:system:pr")
+            labels.append("bug-fixer:system:pr")
+
+        # Check if draft PR is missing an active review state label (limbo prevention)
+        has_review_status = any(l in labels for l in (
+            "bug-fixer:architect:awaiting-review",
+            "bug-fixer:engineer:needs-iteration",
+            "bug-fixer:architect:approved",
+            "bug-fixer:human:needs-intervention",
+        ))
+        if not has_review_status:
+            log_fn(f"Auto-healing PR #{pr_num}: draft bug-fixer PR missing review status label. Adding bug-fixer:architect:awaiting-review.")
+            _gh("pr", "edit", str(pr_num), "--repo", target_repo, "--add-label", "bug-fixer:architect:awaiting-review")
 
 def sweep_dispatches(dispatches_dir: Path, target_repo: str,
                      log_fn, claims_dir: Path | None = None) -> list[dict]:
