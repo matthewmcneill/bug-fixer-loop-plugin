@@ -149,6 +149,29 @@ The security architecture provides three layers of defense against prompt inject
 
 ---
 
+## Consumer Hook Integration
+
+Consumer projects can differentiate between autonomous bug-fixer sessions and interactive human sessions in their PreToolUse hooks using `scripts/bugfixer_api.py`:
+
+```python
+from bugfixer_api import BugFixer
+
+ctx = BugFixer.get_session_context(payload.get("conversationId", ""))
+
+if ctx.is_autonomous:
+    # Autonomous mode — no human to approve exceptions
+    result = {"decision": "deny", "reason": f"Blocked in autonomous mode ({ctx.session_type})"}
+else:
+    # Interactive mode — let the human decide
+    result = {"decision": "force_ask"}
+```
+
+The `SessionContext` also provides `session_type`, `issue_number`, `pr_number`, `worktree_path`, `target_repo`, and the full plugin `config`.
+
+See [Consumer Hook API](docs/plugin-architecture.md#consumer-hook-api-bugfixer_apipy) in the architecture guide for full details.
+
+---
+
 ## Installation
 
 The plugin includes an installation script (`scripts/install.sh`) to link skills, agents, rules, and sidecars, followed by an interactive configuration wizard (`scripts/configure.sh`) that validates connectivity, creates GitHub labels, and configures the plugin.
