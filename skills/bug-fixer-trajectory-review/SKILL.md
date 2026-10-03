@@ -30,6 +30,10 @@ This skill performs a daily review of the bug-fixer's performance to catch recur
    - PRs merged
    - PRs rejected
    - Test pass rate
+   - **Architect Review Efficiency**: Read the `.agents/plugins/bug-fixer-loop-workspace/pr_completions.jsonl` ledger to calculate and report:
+     - Average architect review iterations per PR (total rounds before approval)
+     - Iteration count broken down by engineer model
+     - Human intervention rate (percentage of PRs needing intervention or rejected)
    Compare these metrics to the previous day if history exists.
 
 4. **Output Diagnostic Report:** 

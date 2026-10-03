@@ -570,7 +570,8 @@ def main():
                 "worktree_path": str(wt_path),
             }))
             record_dispatch(DISPATCHES_DIR, new_conv_id, "reattach",
-                            issue_number=issue_num, timeout_minutes=45, worktree_path=str(wt_path))
+                            issue_number=issue_num, timeout_minutes=45, worktree_path=str(wt_path),
+                            model=model)
             log(f"Reattached #{issue_num} → conversation {new_conv_id}")
             gh("issue", "comment", str(issue_num), "--repo", TARGET_REPO,
                "--body", f"[BUG-FIXER] Reattached to orphaned work from session {conv_id}. New session: {new_conv_id}.")
@@ -734,7 +735,8 @@ def main():
                 record_dispatch(DISPATCHES_DIR, dispatch_conv_id, "pr_iteration",
                                 pr_number=pr_num,
                                 labels_to_restore=["bug-fixer:engineer:needs-iteration"],
-                                timeout_minutes=30, worktree_path=str(wt_path))
+                                timeout_minutes=30, worktree_path=str(wt_path),
+                                model=get_default_engineering_model())
                 # Ensure the PR body has the dev conversation tag so the next
                 # iteration cycle can resume this conversation instead of
                 # spawning a new one.
@@ -871,7 +873,8 @@ def main():
             "worktree_path": str(wt_path),
         }))
         record_dispatch(DISPATCHES_DIR, new_conv_id, "fresh_fix",
-                        issue_number=issue_num, timeout_minutes=45, worktree_path=str(wt_path))
+                        issue_number=issue_num, timeout_minutes=45, worktree_path=str(wt_path),
+                            model=model)
         log(f"Spawned conversation {new_conv_id} for #{issue_num}")
         spawned += 1
 

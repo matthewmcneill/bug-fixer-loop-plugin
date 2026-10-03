@@ -12,3 +12,4 @@ build/
 *_triage_preview.json
 *_tick_preview.json
 *.workspace.json
+pr_completions.jsonl
