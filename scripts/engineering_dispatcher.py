@@ -874,7 +874,7 @@ def main():
         }))
         record_dispatch(DISPATCHES_DIR, new_conv_id, "fresh_fix",
                         issue_number=issue_num, timeout_minutes=45, worktree_path=str(wt_path),
-                            model=model)
+                        model=model)
         log(f"Spawned conversation {new_conv_id} for #{issue_num}")
         spawned += 1
 

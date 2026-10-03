@@ -725,7 +725,7 @@ def check_orphaned_prs(target_repo: str, log_fn):
             _gh("pr", "edit", str(pr_num), "--repo", target_repo, "--add-label", "bug-fixer:architect:awaiting-review")
 
 
-def _append_to_ledger(dispatch: dict, target_repo: str, dispatches_dir: Path):
+def _append_to_ledger(dispatch: dict, target_repo: str, dispatches_dir: Path, log_fn):
     try:
         pr_num = dispatch.get("pr_number")
         issue_num = dispatch.get("issue_number")
@@ -746,7 +746,6 @@ def _append_to_ledger(dispatch: dict, target_repo: str, dispatches_dir: Path):
             # Get PR details
             r = _gh("pr", "view", str(pr_num), "--repo", target_repo, "--comments", "--json", "state,labels,comments")
             if r.returncode == 0:
-                import json
                 try:
                     data = json.loads(r.stdout)
                     state = data.get("state", "")
@@ -782,7 +781,7 @@ def _append_to_ledger(dispatch: dict, target_repo: str, dispatches_dir: Path):
             f.write(json.dumps(entry) + "\n")
             
     except Exception as e:
-        print(f"Failed to append to ledger: {e}")
+        log_fn(f"Failed to append to ledger: {e}")
 
 def sweep_dispatches(dispatches_dir: Path, target_repo: str,
                      log_fn, claims_dir: Path | None = None) -> list[dict]:
@@ -813,7 +812,7 @@ def sweep_dispatches(dispatches_dir: Path, target_repo: str,
             wt_path = dispatch.get("worktree_path")
             if wt_path and Path(wt_path).exists():
                 _run(["git", "-C", str(Path(wt_path).parent.parent), "worktree", "remove", "-f", wt_path])
-            _append_to_ledger(dispatch, target_repo, dispatches_dir)
+            _append_to_ledger(dispatch, target_repo, dispatches_dir, log_fn)
             dispatch_file.unlink(missing_ok=True)
             continue
 
