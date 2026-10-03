@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from liveness import agentapi_is_reachable
+from liveness import agentapi_is_reachable, record_dispatch
 
 CLASSIFICATION_LABELS = {
     "bug-fixer:engineer:needs-fix",
@@ -87,6 +87,7 @@ TRIAGE_COOLDOWN_FILE = _TRIAGE_STATE_DIR / "triage_cooldown.json"
 TRIAGE_FAILURE_FILE = _TRIAGE_STATE_DIR / "triage_failure_count"
 MAX_TRIAGE_FAILURES = 3
 TRIAGE_COOLDOWN_SECONDS = 3600
+DISPATCHES_DIR = _TRIAGE_STATE_DIR / "dispatches"
 
 # Circuit breaker check
 if TRIAGE_COOLDOWN_FILE.exists():
@@ -168,6 +169,7 @@ try:
     result = json.loads(r.stdout)
     conv_id = result["response"]["newConversation"]["conversationId"]
     log(f"Spawned triage conversation {conv_id}")
+    record_dispatch(DISPATCHES_DIR, conv_id, "triage", timeout_minutes=30)
 except (json.JSONDecodeError, KeyError):
     log(f"Failed to spawn triage conversation: {r.stderr or r.stdout}")
 

@@ -292,6 +292,71 @@ The `pre_tool_gate.py` hook receives tool call details on stdin and returns a de
 
 ---
 
+### Consumer Hook API (`bugfixer_api.py`)
+
+Consumer projects that host the bug-fixer plugin often have their own PreToolUse hooks enforcing project-specific safety rules. These hooks may need to apply **different decisions** depending on whether the session is autonomous (bug-fixer cron) or interactive (human at the bench).
+
+The plugin provides `scripts/bugfixer_api.py` — a stable, namespaced API for consumer hooks:
+
+```python
+from bugfixer_api import BugFixer
+
+payload = json.loads(sys.stdin.read())
+ctx = BugFixer.get_session_context(payload.get("conversationId", ""))
+
+if ctx.is_autonomous:
+    # No human to approve — hard deny
+    print(json.dumps({"decision": "deny", "reason": "Blocked in autonomous mode"}))
+else:
+    # Interactive — let the human decide
+    print(json.dumps({"decision": "force_ask"}))
+```
+
+#### `SessionContext` Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `is_autonomous` | `bool` | `True` if spawned by a bug-fixer dispatcher |
+| `session_type` | `str \| None` | `'fresh_fix'`, `'reattach'`, `'pr_iteration'`, `'architect_review'`, `'triage'`, `'trajectory'` |
+| `issue_number` | `int \| None` | GitHub issue number, if applicable |
+| `pr_number` | `int \| None` | GitHub PR number, if applicable |
+| `worktree_path` | `str \| None` | Path to the git worktree |
+| `target_repo` | `str \| None` | GitHub `owner/repo` from config |
+| `config` | `dict` | Full `config.json` snapshot |
+
+#### `BugFixer` Methods
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `BugFixer.get_session_context(conv_id)` | `SessionContext` | Full session context lookup |
+| `BugFixer.is_autonomous(conv_id)` | `bool` | Convenience shorthand |
+| `BugFixer.get_config()` | `dict` | Plugin config without session lookup |
+
+#### How It Works
+
+The API reads existing dispatch tracking files (`STATE_DIR/dispatches/*.json`) written by all four dispatchers when they spawn conversations via `agentapi new-conversation`. No additional state files are created.
+
+#### Discovery
+
+`bugfixer_api.py` discovers the workspace directory automatically:
+
+1. `BUG_FIXER_CONFIG` env var → parent directory
+2. Script's own `__file__` location → sibling workspace (standard plugin layout)
+3. Relative from hook cwd (`.agents/`) → `plugins/bug-fixer-loop-workspace/`
+
+#### Consumer Hook Import Path
+
+Consumer hooks need `bugfixer_api` on `sys.path`. Add the plugin scripts directory via the hook command:
+
+```json
+{
+  "command": "PYTHONPATH=/path/to/bug-fixer-loop-plugin/scripts python3 /path/to/hooks/pio-cli-gate.py",
+  "timeout": 10
+}
+```
+
+---
+
 ## Rules
 
 Plugin rules live at `plugins/<name>/rules/AGENTS.md`. They are **generic** — applicable to any project using the plugin.

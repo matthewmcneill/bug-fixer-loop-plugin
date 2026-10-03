@@ -19,7 +19,7 @@ import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from liveness import agentapi_is_reachable
+from liveness import agentapi_is_reachable, record_dispatch
 
 
 def log(msg: str):
@@ -75,6 +75,7 @@ SAFE_INGEST = PLUGIN_DIR / "scripts/safe_ingest.py"
 # Workspace tmp directory — scratch space for spawned review conversations
 WORKSPACE_TMP_DIR = CONFIG_FILE.parent / "tmp"
 WORKSPACE_TMP_DIR.mkdir(parents=True, exist_ok=True)
+DISPATCHES_DIR = CONFIG_FILE.parent / "dispatches"
 
 # Purge stale tmp files (>12h old)
 _tmp_cutoff = datetime.now().timestamp() - 43200  # 12 hours
@@ -202,6 +203,7 @@ try:
     result = json.loads(r.stdout)
     conv_id = result["response"]["newConversation"]["conversationId"]
     log(f"Spawned trajectory review conversation {conv_id}")
+    record_dispatch(DISPATCHES_DIR, conv_id, "trajectory", timeout_minutes=30)
 except (json.JSONDecodeError, KeyError):
     log(f"Failed to spawn trajectory review: {r.stderr or r.stdout}")
     sys.exit(1)
