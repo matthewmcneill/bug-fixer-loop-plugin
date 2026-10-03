@@ -118,11 +118,11 @@ if brain_dir.exists():
         if transcript.stat().st_mtime < cutoff:
             continue
 
-        # Check if this is a bug-fixer conversation (check first few lines)
+        # Check if this is a bug-fixer conversation for this repo
         try:
             with open(transcript) as f:
                 head = f.read(2000)
-            if any(kw in head for kw in [
+            if TARGET_REPO in head and any(kw in head for kw in [
                 "bug-fixer-engineering", "bug-fixer-triage",
                 "Fix #", "Triage:", "bug-fixer:engineer:needs-fix",
                 "engineering_dispatcher", "triage_dispatcher",
@@ -134,7 +134,8 @@ if brain_dir.exists():
 # Also check the sidecar logs
 sidecar_log_dir = Path.home() / ".gemini/antigravity/sidecar_data"
 recent_sidecar_logs = []
-for sidecar_name in ["bug-fixer-engineering-loop", "bug-fixer-triage-loop"]:
+repo_slug = TARGET_REPO.split('/')[-1]
+for sidecar_name in [f"bug-fixer-engineering-loop--{repo_slug}", f"bug-fixer-triage-loop--{repo_slug}"]:
     log_file = sidecar_log_dir / sidecar_name / "logs/sidecar.log"
     if log_file.exists() and log_file.stat().st_mtime > cutoff:
         recent_sidecar_logs.append(str(log_file))
