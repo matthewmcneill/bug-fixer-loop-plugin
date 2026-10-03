@@ -37,7 +37,7 @@
     "bug-fixer:human:needs-intervention",
     "bug-fixer:triage:discovered-in-review"
   ],
-  "test_command": "",
+  "test_command": "python3 -m unittest discover -s tests -v",
   "lint_command": "",
   "pr_prefix": "[BugFixer]",
   "branch_prefix": "fix",
