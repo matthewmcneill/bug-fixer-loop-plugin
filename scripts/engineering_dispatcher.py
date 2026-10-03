@@ -28,7 +28,8 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from liveness import (record_dispatch, sweep_dispatches,
                       transcript_age_seconds, transcript_path, is_stalled,
-                      agentapi_is_reachable)
+                      is_in_error_loop, should_skip_issue_dispatch,
+                      clear_issue_dispatch_failure, agentapi_is_reachable)
 
 
 def log(msg: str):
@@ -426,6 +427,7 @@ def main():
     # ---------------------------------------------------------------------------
 
     reattach_count = 0
+    reattached_issues = set()  # Prevent duplicate reattach for same issue in one tick
 
     if CLAIMS_DIR.exists():
         for lockfile in CLAIMS_DIR.glob("*.lock"):
@@ -438,6 +440,23 @@ def main():
             issue_num = claim["issue"]
             conv_id = claim.get("conversation_id", "")
 
+            # Prevent duplicate reattach for the same issue in one cycle
+            if issue_num in reattached_issues:
+                log(f"Issue #{issue_num} — already reattached this cycle, skipping.")
+                continue
+
+            # Check per-issue dispatch failure history — skip if structurally blocked
+            skip, reason = should_skip_issue_dispatch(STATE_DIR, issue_num)
+            if skip:
+                log(f"Issue #{issue_num} — SKIPPING: {reason}")
+                lockfile.unlink(missing_ok=True)
+                gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
+                   "--add-label", "bug-fixer:human:needs-intervention",
+                   "--remove-label", "bug-fixer:engineer:in-progress")
+                gh("issue", "comment", str(issue_num), "--repo", TARGET_REPO,
+                   "--body", f"[BUG-FIXER] ⚠️ Escalating to human: {reason}")
+                continue
+
             # Get issue title for conversation naming
             r = gh("issue", "view", str(issue_num), "--repo", TARGET_REPO,
                    "--json", "title", "--jq", ".title")
@@ -448,7 +467,10 @@ def main():
             # PID, not the agent's, so it's always dead by the next tick.)
             age = transcript_age_seconds(conv_id)
 
-            if age is not None and age < 300 and not is_stalled(conv_id):
+            # Also check for error loop — agent may be "active" but stuck
+            error_loop = is_in_error_loop(conv_id) if conv_id else False
+
+            if age is not None and age < 300 and not is_stalled(conv_id) and not error_loop:
                 log(f"Issue #{issue_num} — conv {conv_id[:8]}... active ({age}s ago), skipping.")
                 continue
 
@@ -461,10 +483,14 @@ def main():
                 lockfile.unlink(missing_ok=True)
                 gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
                    "--remove-label", "bug-fixer:engineer:in-progress")
+                clear_issue_dispatch_failure(STATE_DIR, issue_num)
                 continue
 
             # --- ORPHANED: transcript stale, no PR opened ---
-            log(f"Issue #{issue_num} — ORPHANED (conv {conv_id[:8]}... stale).")
+            if error_loop:
+                log(f"Issue #{issue_num} — ERROR LOOP (conv {conv_id[:8]}... in death spiral).")
+            else:
+                log(f"Issue #{issue_num} — ORPHANED (conv {conv_id[:8]}... stale).")
 
             # Check for existing branch (durable code state)
             r = run(["git", "ls-remote", "origin", f"{BRANCH_PREFIX}/{issue_num}-*"],
@@ -546,6 +572,7 @@ def main():
             gh("issue", "comment", str(issue_num), "--repo", TARGET_REPO,
                "--body", f"[BUG-FIXER] Reattached to orphaned work from session {conv_id}. New session: {new_conv_id}.")
             reattach_count += 1
+            reattached_issues.add(issue_num)
 
 
     # ---------------------------------------------------------------------------
@@ -752,6 +779,17 @@ def main():
 
         issue_num = issue["number"]
         issue_title = issue["title"]
+
+        # Check per-issue dispatch failure history — skip if structurally blocked
+        skip, reason = should_skip_issue_dispatch(STATE_DIR, issue_num)
+        if skip:
+            log(f"Skipping #{issue_num}: {reason}")
+            gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
+               "--add-label", "bug-fixer:human:needs-intervention",
+               "--remove-label", "bug-fixer:engineer:needs-fix")
+            gh("issue", "comment", str(issue_num), "--repo", TARGET_REPO,
+               "--body", f"[BUG-FIXER] ⚠️ Escalating to human: {reason}")
+            continue
 
         log(f"Claiming #{issue_num}: {issue_title} (slot {spawned + 1}/{available_slots})")
 

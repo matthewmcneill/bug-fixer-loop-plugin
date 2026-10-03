@@ -120,6 +120,98 @@ def is_stalled(conv_id: str) -> bool:
     )
 
 
+ERROR_LOOP_THRESHOLD = 3  # consecutive ERROR_MESSAGE steps to declare death spiral
+
+
+def is_in_error_loop(conv_id: str) -> bool:
+    """Detect conversations stuck in ERROR_MESSAGE death spirals.
+
+    When an agent hits a terminal blocker (sandbox denial, forbidden command,
+    file-not-found after compaction), it enters a state of consecutive empty
+    ERROR_MESSAGE steps from which it cannot recover — even if a resume
+    message is injected.
+    """
+    p = transcript_path(conv_id)
+    if not p.exists():
+        return False
+    try:
+        with open(p, "rb") as f:
+            f.seek(0, 2)
+            pos = f.tell()
+            if pos == 0:
+                return False
+            read_size = min(pos, 65536)
+            f.seek(pos - read_size)
+            chunk = f.read(read_size).decode("utf-8", errors="replace")
+            lines = chunk.strip().split("\n")
+            # Count consecutive ERROR_MESSAGE steps from the end
+            consecutive_errors = 0
+            for line in reversed(lines):
+                try:
+                    step = json.loads(line)
+                except json.JSONDecodeError:
+                    break
+                if step.get("type") == "ERROR_MESSAGE":
+                    consecutive_errors += 1
+                else:
+                    break
+            return consecutive_errors >= ERROR_LOOP_THRESHOLD
+    except (OSError, IndexError):
+        return False
+
+
+# Blocker classification for recovery decisions
+BLOCKER_STRUCTURAL = "structural"  # Will recur on retry — do NOT re-dispatch
+BLOCKER_TRANSIENT = "transient"    # May succeed on retry
+
+
+# Phrases in transcript content that indicate structural blockers
+_STRUCTURAL_PHRASES = [
+    "tool call denied by pre-tool hook",
+    "user denied permission",
+    "permission check failed",
+    "Operation not permitted",
+]
+
+
+def classify_blocker(conv_id: str) -> str:
+    """Classify whether a stalled conversation's blocker is structural or transient.
+
+    Structural blockers (forbidden commands, sandbox denials) will recur on
+    every retry, so re-dispatching is wasteful. Transient blockers (plan-gate
+    stalls, generic timeouts) may succeed on retry.
+    """
+    # ERROR_MESSAGE death spiral is always structural — the agent can't recover
+    if is_in_error_loop(conv_id):
+        return BLOCKER_STRUCTURAL
+
+    p = transcript_path(conv_id)
+    if not p.exists():
+        return BLOCKER_TRANSIENT
+
+    try:
+        with open(p, "rb") as f:
+            f.seek(0, 2)
+            pos = f.tell()
+            if pos == 0:
+                return BLOCKER_TRANSIENT
+            # Read last 128KB for blocker signals
+            read_size = min(pos, 131072)
+            f.seek(pos - read_size)
+            chunk = f.read(read_size).decode("utf-8", errors="replace")
+
+        # Check for structural blocker phrases in the tail of the transcript
+        tail = chunk[-8000:]  # Last ~8KB is enough for recent steps
+        for phrase in _STRUCTURAL_PHRASES:
+            if phrase in tail:
+                return BLOCKER_STRUCTURAL
+
+    except OSError:
+        pass
+
+    return BLOCKER_TRANSIENT
+
+
 # ---------------------------------------------------------------------------
 # Context extraction from transcript
 # ---------------------------------------------------------------------------
@@ -348,6 +440,97 @@ def record_dispatch(dispatches_dir: Path, conv_id: str,
     (dispatches_dir / f"{conv_id}.json").write_text(json.dumps(data, indent=2))
 
 
+# ---------------------------------------------------------------------------
+# Per-issue dispatch failure tracking (prevents re-dispatch loops)
+# ---------------------------------------------------------------------------
+
+MAX_ISSUE_DISPATCH_FAILURES = 2  # escalate after this many failures for same issue
+
+
+def _issue_failures_path(state_dir: Path) -> Path:
+    return state_dir / "issue_dispatch_failures.json"
+
+
+def _load_issue_failures(state_dir: Path) -> dict:
+    p = _issue_failures_path(state_dir)
+    if p.exists():
+        try:
+            return json.loads(p.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _save_issue_failures(state_dir: Path, data: dict):
+    _issue_failures_path(state_dir).write_text(json.dumps(data, indent=2))
+
+
+def _record_issue_dispatch_failure(state_dir: Path, issue_num: int,
+                                    conv_id: str, blocker_type: str,
+                                    log_fn=print) -> int:
+    """Record a dispatch failure for an issue. Returns the new failure count."""
+    failures = _load_issue_failures(state_dir)
+    key = str(issue_num)
+    entry = failures.get(key, {"count": 0, "history": []})
+    entry["count"] = entry.get("count", 0) + 1
+    entry["history"] = entry.get("history", [])
+    entry["history"].append({
+        "conversation_id": conv_id,
+        "blocker_type": blocker_type,
+        "failed_at": datetime.now(timezone.utc).isoformat(),
+    })
+    # Keep last 5 entries to avoid unbounded growth
+    entry["history"] = entry["history"][-5:]
+    failures[key] = entry
+    _save_issue_failures(state_dir, failures)
+    log_fn(f"Issue #{issue_num}: dispatch failure #{entry['count']} "
+           f"(blocker={blocker_type}, conv={conv_id[:8]}...)")
+    return entry["count"]
+
+
+def should_skip_issue_dispatch(state_dir: Path, issue_num: int) -> tuple[bool, str]:
+    """Check whether an issue should be skipped due to repeated dispatch failures.
+
+    Returns (should_skip, reason).
+    """
+    failures = _load_issue_failures(state_dir)
+    key = str(issue_num)
+    entry = failures.get(key)
+    if not entry:
+        return False, ""
+
+    count = entry.get("count", 0)
+    if count < MAX_ISSUE_DISPATCH_FAILURES:
+        return False, ""
+
+    # Check if the most recent failures were structural
+    history = entry.get("history", [])
+    recent_structural = sum(
+        1 for h in history[-MAX_ISSUE_DISPATCH_FAILURES:]
+        if h.get("blocker_type") == BLOCKER_STRUCTURAL
+    )
+
+    if recent_structural > 0:
+        return True, (f"Issue #{issue_num} has {count} dispatch failure(s), "
+                      f"{recent_structural} structural — needs human intervention")
+
+    # Even transient failures: skip after too many
+    if count >= MAX_ISSUE_DISPATCH_FAILURES * 2:
+        return True, (f"Issue #{issue_num} has {count} dispatch failures "
+                      f"(all transient) — needs human intervention")
+
+    return False, ""
+
+
+def clear_issue_dispatch_failure(state_dir: Path, issue_num: int):
+    """Clear failure record for an issue (e.g. when it completes successfully)."""
+    failures = _load_issue_failures(state_dir)
+    key = str(issue_num)
+    if key in failures:
+        del failures[key]
+        _save_issue_failures(state_dir, failures)
+
+
 def _check_success(dispatch: dict, target_repo: str) -> bool:
     """Check whether the dispatched conversation achieved its goal."""
     dtype = dispatch["type"]
@@ -428,15 +611,24 @@ def _recover(dispatch: dict, dispatches_dir: Path, target_repo: str,
     dtype = dispatch["type"]
     dispatch_file = dispatches_dir / f"{conv_id}.json"
 
+    # Classify the blocker before attempting recovery
+    blocker_type = classify_blocker(conv_id)
+
     summary = {
         "conversation_id": conv_id,
         "type": dtype,
         "action": "unknown",
+        "blocker_type": blocker_type,
     }
 
-    # --- Step 1: Try to resume ---
+    # --- Step 1: Try to resume (skip if in error loop — resume is futile) ---
+    error_loop = is_in_error_loop(conv_id)
     attempts = dispatch.get("resume_attempts", 0)
-    if attempts < MAX_RESUME_ATTEMPTS:
+
+    if error_loop:
+        log_fn(f"Conversation {conv_id[:8]}... is in ERROR_MESSAGE death spiral — "
+               f"skipping resume (blocker={blocker_type}).")
+    elif attempts < MAX_RESUME_ATTEMPTS:
         last_step = read_last_transcript_step(conv_id)
         message = _choose_resume_message(dispatch, last_step)
 
@@ -468,7 +660,12 @@ def _recover(dispatch: dict, dispatches_dir: Path, target_repo: str,
             wt_path = dispatch.get("worktree_path")
             if wt_path and Path(wt_path).exists():
                 _run(["git", "-C", str(Path(wt_path).parent.parent), "worktree", "remove", "-f", wt_path])
-            summary["action"] = f"state dumped to issue #{issue_num}, unclaimed"
+
+            # Record per-issue failure for re-dispatch prevention
+            _record_issue_dispatch_failure(
+                dispatches_dir.parent, issue_num, conv_id, blocker_type, log_fn)
+
+            summary["action"] = f"state dumped to issue #{issue_num}, unclaimed (blocker={blocker_type})"
 
     elif dtype == "pr_iteration":
         pr_num = dispatch.get("pr_number")
@@ -544,8 +741,9 @@ def sweep_dispatches(dispatches_dir: Path, target_repo: str,
         # --- Check if conversation is still actively working ---
         age = transcript_age_seconds(conv_id)
         stalled = is_stalled(conv_id)
+        error_loop = is_in_error_loop(conv_id)
 
-        if age is not None and age < STALE_THRESHOLD and not stalled:
+        if age is not None and age < STALE_THRESHOLD and not stalled and not error_loop:
             continue  # Still working
 
         # --- Check timeout ---
@@ -558,11 +756,16 @@ def sweep_dispatches(dispatches_dir: Path, target_repo: str,
         except (ValueError, KeyError):
             pass
 
-        if not stalled and not timed_out:
-            continue  # Not stalled and not timed out — give it more time
+        if not stalled and not timed_out and not error_loop:
+            continue  # Not stalled, not timed out, not in error loop — give it more time
 
-        # --- Stalled or timed out: recover ---
-        reason = "stalled" if stalled else "timed out"
+        # --- Stalled, error loop, or timed out: recover ---
+        if error_loop:
+            reason = "stuck in ERROR_MESSAGE death spiral"
+        elif stalled:
+            reason = "stalled"
+        else:
+            reason = "timed out"
         log_fn(f"Dispatch {conv_id[:8]}... ({dispatch['type']}) {reason}. "
                f"Initiating recovery.")
         summary = _recover(dispatch, dispatches_dir, target_repo,
