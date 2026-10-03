@@ -141,5 +141,30 @@ class TestLiveness(unittest.TestCase):
         self.assertEqual(mock_gh.call_count, 1)
         mock_log.assert_not_called()
 
+    @patch("liveness.read_last_transcript_step")
+    def test_check_success_trajectory_and_triage(self, mock_read_last):
+        from liveness import _check_success
+        
+        # Test missing conv_id
+        dispatch = {"type": "trajectory"}
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+        
+        # Test no transcript step
+        dispatch = {"type": "triage", "conversation_id": "123"}
+        mock_read_last.return_value = None
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+        
+        # Test active step (has tool_calls)
+        mock_read_last.return_value = {"type": "PLANNER_RESPONSE", "tool_calls": [{"name": "foo"}]}
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+        
+        # Test idle step (no tool_calls)
+        mock_read_last.return_value = {"type": "PLANNER_RESPONSE"}
+        self.assertTrue(_check_success(dispatch, "owner/repo"))
+
+        # Test another step type
+        mock_read_last.return_value = {"type": "USER_INPUT"}
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+
 if __name__ == '__main__':
     unittest.main()
