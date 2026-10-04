@@ -27,7 +27,7 @@ Use the safe editing approach: write to temp, validate with py_compile, move if 
 
 ## Line-Item Instructions
 
-- [ ] `scripts/pre_tool_gate.py` — Update `load_config` or add a normalisation function `normalise_config(config: dict) -> dict` that reads both old and new formats:
+- [x] `scripts/pre_tool_gate.py` — Update `load_config` or add a normalisation function `normalise_config(config: dict) -> dict` that reads both old and new formats:
 
   **Old format (must continue to work):**
   ```json
@@ -74,15 +74,15 @@ Use the safe editing approach: write to temp, validate with py_compile, move if 
   - Always return a config dict where callers can access `config["scanning"]["secrets"]["patterns"]` etc.
   - The `$schema` field is informational — don't enforce version checks
 
-- [ ] `scripts/pre_tool_gate.py` — Update `resolve_backend()` to read from the normalised config:
+- [x] `scripts/pre_tool_gate.py` — Update `resolve_backend()` to read from the normalised config:
   - `config["scanning"]["secrets"]["backend"]` for backend name
   - `config["scanning"]["secrets"]["betterleaks"]["config_path"]` for betterleaks config
   - `config["scanning"]["secrets"]["patterns"]` for regex patterns (fallback)
   - Keep reading `config["leak_patterns"]` as a fallback for unnormalised configs
 
-- [ ] `scripts/pre_tool_gate.py` — Add `.betterleaks.toml` and `.betterleaksignore` to `protected_files` handling. In Gate A (`evaluate_gate_a`), add these files to the deny list alongside the existing protected files. These files can silence findings, so they need the same protection as config files.
+- [x] `scripts/pre_tool_gate.py` — Add `.betterleaks.toml` and `.betterleaksignore` to `protected_files` handling. In Gate A (`evaluate_gate_a`), add these files to the deny list alongside the existing protected files. These files can silence findings, so they need the same protection as config files.
 
-- [ ] `.agents/plugins/bug-fixer-loop-workspace/config.json` — Update to v2 format:
+- [x] `.agents/plugins/bug-fixer-loop-workspace/config.json` — Update to v2 format:
   ```json
   {
     "$schema": "bug-fixer-loop-config-v2",
@@ -112,7 +112,7 @@ Use the safe editing approach: write to temp, validate with py_compile, move if 
   ```
   Remove the old top-level `leak_patterns` key (since we're updating the actual config file).
 
-- [ ] `tests/test_pre_tool_gate.py` — Add tests:
+- [x] `tests/test_pre_tool_gate.py` — Add tests:
   1. Test `normalise_config()` with old v1 format produces correct `scanning.secrets.patterns`
   2. Test `normalise_config()` with new v2 format passes through correctly
   3. Test `resolve_backend()` reads from normalised v2 config
@@ -124,3 +124,28 @@ Run `python3 -m unittest discover -s tests -v` and confirm all tests pass.
 
 ## Issue Surfacing
 If you discover a defect, upstream bug, or concern *outside your boundary box*, surface it in your Completion Report below — do not file issues directly.
+
+## Completion Report
+- **Status**: Completed & Verified
+- **Completed At**: 2026-10-04T21:44:00Z
+- **Changes Made**:
+  1. `scripts/pre_tool_gate.py`:
+     - Added `normalise_config(config: dict) -> dict` handling both v1 (flat `leak_patterns` / `scan_exclude_paths`) and v2 (`scanning` namespace with `secrets` / `injection`). Callers can reliably access `config["scanning"]["secrets"]["patterns"]` etc., with backward compatibility mappings preserved for legacy readers (`config["leak_patterns"]`, `config["scan_exclude_paths"]`).
+     - Updated `load_config()` to return normalized configs.
+     - Updated `resolve_backend()` to read backend name from `config["scanning"]["secrets"]["backend"]`, config path from `config["scanning"]["secrets"]["betterleaks"]["config_path"]`, patterns from `config["scanning"]["secrets"]["patterns"]`, and fallback to `config["leak_patterns"]` for unnormalized configs.
+     - Added `SCANNER_PROTECTED_FILES = frozenset({".betterleaks.toml", ".betterleaksignore"})` and updated Gate A (`evaluate_gate_a`) to deny modifications to these scanner configuration files with `REASON_PROTECTED_FILE`.
+     - Preserved executable file mode `0o755` on `scripts/pre_tool_gate.py`.
+  2. `.agents/plugins/bug-fixer-loop-workspace/config.json`:
+     - Upgraded schema to `"bug-fixer-loop-config-v2"`.
+     - Removed old top-level `leak_patterns` key.
+     - Added `scanning` namespace configured with `secrets` (betterleaks backend, patterns, exclude_paths) and `injection` (model_armor disabled).
+  3. `tests/test_pre_tool_gate.py`:
+     - Added `test_normalise_config_v1_format`: Verifies normalization of v1 config into `scanning.secrets.patterns` and backward compatibility.
+     - Added `test_normalise_config_v2_format`: Verifies passthrough of v2 config structure.
+     - Added `test_resolve_backend_reads_normalised_v2_config`: Verifies backend resolution from v2 schema.
+     - Added `test_gate_a_deny_betterleaks_config_files`: Verifies Gate A denies modifications targeting `.betterleaks.toml` and `.betterleaksignore`.
+     - Added `test_v1_config_backward_compatibility_scan_repository`: Verifies backward compatibility of v1 config end-to-end with `scan_repository()`.
+- **Verification**:
+  - Ran `python3 -m unittest discover -s tests -v`: all 139 tests passed (134 existing + 5 new).
+  - Confirmed strict boundary box adhered to.
+- **Defects/Concerns Surfaced**: None.

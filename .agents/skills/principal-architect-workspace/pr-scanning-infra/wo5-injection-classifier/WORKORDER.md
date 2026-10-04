@@ -239,3 +239,11 @@ Run `python3 -m unittest discover -s tests -v` and confirm all tests pass. All t
 
 ## Issue Surfacing
 If you discover a defect, upstream bug, or concern *outside your boundary box*, surface it in your Completion Report below — do not file issues directly.
+
+## Completion Report
+
+- **`scripts/injection_scanner.py`**: Created new module containing `InjectionScanner`, `ModelArmorProvider`, and `CachedInjectionScanner`.
+- **GCP Authentication**: Implemented short-lived token minting using `gcloud auth print-access-token --impersonate-service-account` with in-memory caching to strictly adhere to the project's security constraints (no JSON keys).
+- **`scripts/triage_dispatcher.py`**: Integrated the `CachedInjectionScanner`. It now correctly asks `safe_ingest.py` for issue bodies, scans the text (title + body), and if an injection is found, applies the `security:prompt-injection` label and ignores the issue.
+- **Testing**: Added `tests/test_injection_scanner.py` with all 10 test conditions passing. All HTTP calls (Model Armor API) and shell executions (`gcloud`) are mocked appropriately to ensure successful offline verification.
+- **Issues/Defects**: No unexpected upstream bugs or issues were observed outside the designated boundary box. The changes perfectly align with Work Order 5.
