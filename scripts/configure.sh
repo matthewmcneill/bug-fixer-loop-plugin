@@ -347,6 +347,9 @@ declare -A LABELS_META=(
   ["bug-fixer:architect:awaiting-review"]="1D76DB:PR ready for architect review"
   ["bug-fixer:human:needs-intervention"]="FB8500:Architect escalated — needs human resolution"
   ["bug-fixer:triage:discovered-in-review"]="FFCDD2:Auto-filed during PR review, requires human approval before auto-fix"
+  ["bug-fixer:complexity:mechanical"]="E1BEE7:Model tier: rote/deterministic work"
+  ["bug-fixer:complexity:standard"]="BA68C8:Model tier: standard engineering work"
+  ["bug-fixer:complexity:architect"]="7B1FA2:Model tier: needs architect-grade reasoning"
 )
 
 REQUIRED_LABELS=(
@@ -364,6 +367,9 @@ REQUIRED_LABELS=(
   "bug-fixer:architect:awaiting-review"
   "bug-fixer:human:needs-intervention"
   "bug-fixer:triage:discovered-in-review"
+  "bug-fixer:complexity:mechanical"
+  "bug-fixer:complexity:standard"
+  "bug-fixer:complexity:architect"
 )
 
 for label in "${REQUIRED_LABELS[@]}"; do
@@ -428,7 +434,10 @@ req_labels = [
     "bug-fixer:architect:approved",
     "bug-fixer:architect:awaiting-review",
     "bug-fixer:human:needs-intervention",
-    "bug-fixer:triage:discovered-in-review"
+    "bug-fixer:triage:discovered-in-review",
+    "bug-fixer:complexity:mechanical",
+    "bug-fixer:complexity:standard",
+    "bug-fixer:complexity:architect"
 ]
 existing = config.get("required_labels", [])
 for lbl in req_labels:
