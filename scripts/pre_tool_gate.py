@@ -336,9 +336,12 @@ def scan_repository(repo_dir: str, patterns: list[str], exclude_paths: list[str]
             with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
                 for lineno, line in enumerate(f, start=1):
                     for pat in compiled:
-                        if pat.search(line):
+                        match = pat.search(line)
+                        if match:
+                            matched_text = match.group()
+                            redacted = matched_text[:4] + "…" if len(matched_text) > 4 else "****"
                             violations.append(
-                                f"{rel_path}:{lineno} [{pat.pattern}] -> {line.strip()[:100]}"
+                                f"{rel_path}:{lineno} [{pat.pattern}] -> {redacted}"
                             )
         except Exception:
             continue

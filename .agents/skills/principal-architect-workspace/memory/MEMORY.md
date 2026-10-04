@@ -1,16 +1,21 @@
 # Principal Architect Memory
-<!-- Last updated: 2026-10-01T19:10:00Z -->
+<!-- Last updated: 2026-10-04T19:35:00Z -->
+
+## Active Programs
+| Program | Plan | Status |
+|---|---|---|
 
 ## Active Projects
 
 | Project / PR | Status | Modules Touched | Context Link |
 | :--- | :--- | :--- | :--- |
-| `pr-label-namespace` | **5/5 COMPLETE** — ready for PR | config, install, setup, dispatchers, liveness, skills, evals, rules, docs, tests, migration | [PROJECT.md](../pr-label-namespace/PROJECT.md) |
+| `pr-scanning-infra` | **0/5** — awaiting human approval | pre_tool_gate, safe_ingest, config, tests | [PROJECT.md](../pr-scanning-infra/PROJECT.md) |
 
 ## Recently Completed (Last 5)
 
 | Project | Date Completed | Key Outcome |
 | :--- | :--- | :--- |
+| `pr-label-namespace` | 2026-10-01 | Migrated GitHub label taxonomy to routed-segment namespace. |
 | `pr-architect-review-loop` | 2026-09-29 | Implemented stateless, context-cached Architect Review Loop sidecar & skills. |
 
 *Note: Once this table exceeds 5 entries, graduate the oldest to `PROJECT_INDEX.md`.*
@@ -28,3 +33,4 @@
 *   `docs`: Documentation (`README.md`, `docs/`).
 *   `tests`: Test suite (`tests/`).
 *   `safe_ingest`: Security ingestion gate (`scripts/safe_ingest.py`).
+*   `pre_tool_gate`: PreToolUse gate & leak scanner (`scripts/pre_tool_gate.py`).
