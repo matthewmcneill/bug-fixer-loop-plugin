@@ -760,8 +760,9 @@ class TestPreToolGate(unittest.TestCase):
             '--analyze=false',
             '--redact',
             '--no-banner',
-            '--report-format', 'json',
-            '--exit-code', '0',
+            '-o', '-',
+            '--exit-code', '1',
+            '--ignore-file', '/dev/null',
             '--config', '/fake/path.toml'
         ]
         
@@ -776,15 +777,18 @@ class TestPreToolGate(unittest.TestCase):
         self.assertEqual(cmd_staged[:4], ['betterleaks', 'git', '--staged', '/repo'])
         
         cmd_tree = backend._build_cmd('/repo', ScanScope.TREE)
-        self.assertEqual(cmd_tree[:3], ['betterleaks', 'dir', '/repo'])
+        self.assertEqual(cmd_tree[:3], ['betterleaks', 'fs', '/repo'])
 
     @unittest.mock.patch('subprocess.check_output')
     def test_betterleaks_scan_parses_json(self, mock_check_output):
         from scripts.pre_tool_gate import BetterleaksBackend, ScanScope
-        mock_output = '''[
-            {"path": "src/main.py", "line": 10, "rule_id": "AWS_KEY", "redacted_match": "AKIA..."},
-            {"path": "src/test.py", "line": 20, "rule_id": "GCP_KEY", "redacted_match": "ya29..."}
-        ]'''
+        mock_output = '''{
+            "scan": {"state": "complete", "files_scanned": 12},
+            "findings": [
+                {"location": {"path": "src/main.py", "start_line": 10}, "rule_id": "AWS_KEY", "match": {"value": "AKIA..."}},
+                {"location": {"path": "src/test.py", "start_line": 20}, "rule_id": "GCP_KEY", "match": {"value": "ya29..."}}
+            ]
+        }'''
         mock_check_output.return_value = mock_output
         
         backend = BetterleaksBackend()
@@ -799,16 +803,16 @@ class TestPreToolGate(unittest.TestCase):
     @unittest.mock.patch('subprocess.check_output')
     def test_betterleaks_scan_no_raw_secret(self, mock_check_output):
         from scripts.pre_tool_gate import BetterleaksBackend, ScanScope
-        mock_output = '''[
-            {
-                "path": "secret.txt", 
-                "line": 1, 
-                "rule_id": "SECRET", 
-                "raw": "super_secret_raw_text", 
-                "match": "super_secret_raw_text",
-                "redacted_match": "supe..."
-            }
-        ]'''
+        mock_output = '''{
+            "scan": {"state": "complete", "files_scanned": 1},
+            "findings": [
+                {
+                    "location": {"path": "secret.txt", "start_line": 1}, 
+                    "rule_id": "SECRET", 
+                    "match": {"value": "supe..."}
+                }
+            ]
+        }'''
         mock_check_output.return_value = mock_output
         
         backend = BetterleaksBackend()
