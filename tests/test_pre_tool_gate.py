@@ -735,5 +735,120 @@ class TestPreToolGate(unittest.TestCase):
             self.assertIn("backend=regex (degraded)", proc.stdout)
 
 
+    # BetterleaksBackend Tests
+    def test_betterleaks_build_env_strips_vars(self):
+        from scripts.pre_tool_gate import BetterleaksBackend
+        import os
+        os.environ['BETTERLEAKS_VALIDATE'] = '1'
+        os.environ['BETTERLEAKS_SOMETHING'] = 'abc'
+        os.environ['OTHER_VAR'] = 'xyz'
+        
+        backend = BetterleaksBackend()
+        env = backend._build_env()
+        
+        self.assertNotIn('BETTERLEAKS_VALIDATE', env)
+        self.assertNotIn('BETTERLEAKS_SOMETHING', env)
+        self.assertIn('OTHER_VAR', env)
+
+    def test_betterleaks_build_cmd_flags(self):
+        from scripts.pre_tool_gate import BetterleaksBackend, ScanScope
+        backend = BetterleaksBackend(config_path='/fake/path.toml')
+        cmd = backend._build_cmd('/repo', ScanScope.TREE)
+        
+        expected_flags = [
+            '--validate=false',
+            '--analyze=false',
+            '--redact',
+            '--no-banner',
+            '--report-format', 'json',
+            '--exit-code', '0',
+            '--config', '/fake/path.toml'
+        ]
+        
+        for flag in expected_flags:
+            self.assertIn(flag, cmd)
+
+    def test_betterleaks_build_cmd_scopes(self):
+        from scripts.pre_tool_gate import BetterleaksBackend, ScanScope
+        backend = BetterleaksBackend()
+        
+        cmd_staged = backend._build_cmd('/repo', ScanScope.STAGED)
+        self.assertEqual(cmd_staged[:4], ['betterleaks', 'git', '--staged', '/repo'])
+        
+        cmd_tree = backend._build_cmd('/repo', ScanScope.TREE)
+        self.assertEqual(cmd_tree[:3], ['betterleaks', 'dir', '/repo'])
+
+    @unittest.mock.patch('subprocess.check_output')
+    def test_betterleaks_scan_parses_json(self, mock_check_output):
+        from scripts.pre_tool_gate import BetterleaksBackend, ScanScope
+        mock_output = '''[
+            {"path": "src/main.py", "line": 10, "rule_id": "AWS_KEY", "redacted_match": "AKIA..."},
+            {"path": "src/test.py", "line": 20, "rule_id": "GCP_KEY", "redacted_match": "ya29..."}
+        ]'''
+        mock_check_output.return_value = mock_output
+        
+        backend = BetterleaksBackend()
+        violations = backend.scan('/repo', ScanScope.TREE)
+        
+        self.assertEqual(len(violations), 2)
+        self.assertEqual(violations[0].path, "src/main.py")
+        self.assertEqual(violations[0].line, 10)
+        self.assertEqual(violations[0].rule, "AWS_KEY")
+        self.assertEqual(violations[0].redacted_match, "AKIA...")
+
+    @unittest.mock.patch('subprocess.check_output')
+    def test_betterleaks_scan_no_raw_secret(self, mock_check_output):
+        from scripts.pre_tool_gate import BetterleaksBackend, ScanScope
+        mock_output = '''[
+            {
+                "path": "secret.txt", 
+                "line": 1, 
+                "rule_id": "SECRET", 
+                "raw": "super_secret_raw_text", 
+                "match": "super_secret_raw_text",
+                "redacted_match": "supe..."
+            }
+        ]'''
+        mock_check_output.return_value = mock_output
+        
+        backend = BetterleaksBackend()
+        violations = backend.scan('/repo', ScanScope.TREE)
+        
+        self.assertEqual(len(violations), 1)
+        self.assertNotIn("super_secret_raw_text", violations[0].redacted_match)
+        self.assertNotIn("super_secret_raw_text", str(violations[0]))
+        self.assertEqual(violations[0].redacted_match, "supe...")
+
+    @unittest.mock.patch('subprocess.run')
+    def test_resolve_backend_fallback_to_regex(self, mock_run):
+        from scripts.pre_tool_gate import resolve_backend, RegexBackend
+        import subprocess
+        # Simulate betterleaks not found
+        mock_run.side_effect = FileNotFoundError()
+        
+        config = {"scanning": {"secrets": {"backend": "betterleaks"}}}
+        
+        import io, sys
+        with io.StringIO() as fake_stderr, unittest.mock.patch('sys.stderr', fake_stderr):
+            backend = resolve_backend(config)
+            warning_output = fake_stderr.getvalue()
+        
+        self.assertIsInstance(backend, RegexBackend)
+        self.assertIn("WARNING: betterleaks not found", warning_output)
+
+    @unittest.mock.patch('subprocess.run')
+    def test_resolve_backend_returns_betterleaks(self, mock_run):
+        from scripts.pre_tool_gate import resolve_backend
+        from scripts.pre_tool_gate import BetterleaksBackend
+        # Simulate betterleaks found
+        mock_run.return_value = None
+        
+        config = {"scanning": {"secrets": {"backend": "betterleaks", "config": "my.toml"}}}
+        backend = resolve_backend(config)
+        
+        self.assertIsInstance(backend, BetterleaksBackend)
+        self.assertEqual(backend.config_path, "my.toml")
+
+
 if __name__ == "__main__":
     unittest.main()

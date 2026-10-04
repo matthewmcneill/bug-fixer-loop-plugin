@@ -570,6 +570,123 @@ class RegexBackend:
         return violations
 
 
+
+class BetterleaksBackend:
+    name: str = "betterleaks"
+
+    def __init__(self, config_path: str | None = None) -> None:
+        self.config_path = config_path
+        self._version: str | None = None
+        self.scanned_count: int = 0
+        self.excluded_count: int = 0
+
+    @property
+    def version(self) -> str:
+        if self._version is not None:
+            return self._version
+        try:
+            out = subprocess.check_output(
+                ["betterleaks", "version"], stderr=subprocess.DEVNULL, text=True
+            ).strip()
+            self._version = out
+        except Exception:
+            self._version = "unknown"
+        return self._version
+
+    def _build_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        keys_to_remove = [k for k in env if k.startswith("BETTERLEAKS_")]
+        for k in keys_to_remove:
+            env.pop(k)
+        return env
+
+    def _build_cmd(self, repo_dir: str, scope: ScanScope) -> list[str]:
+        cmd = ["betterleaks"]
+        if scope == ScanScope.STAGED:
+            cmd.extend(["git", "--staged", repo_dir])
+        elif scope == ScanScope.TREE:
+            cmd.extend(["dir", repo_dir])
+        elif scope == ScanScope.HISTORY:
+            cmd.extend(["git", repo_dir])
+        else:
+            raise ValueError(f"Unknown scope: {scope}")
+            
+        cmd.extend([
+            "--validate=false",
+            "--analyze=false",
+            "--redact",
+            "--no-banner",
+            "--report-format", "json",
+            "--exit-code", "0"
+        ])
+        if self.config_path:
+            cmd.extend(["--config", self.config_path])
+        return cmd
+
+    def scan(
+        self,
+        repo_dir: str,
+        scope: ScanScope,
+        exclude_paths: list[str] | None = None,
+    ) -> list[ScanViolation]:
+        
+        if isinstance(scope, str):
+            scope = ScanScope(scope)
+            
+        self.scanned_count = 0
+        self.excluded_count = 0
+        cmd = self._build_cmd(repo_dir, scope)
+        env = self._build_env()
+        
+        try:
+            out = subprocess.check_output(
+                cmd, env=env, stderr=subprocess.DEVNULL, text=True
+            )
+        except subprocess.CalledProcessError as e:
+            out = e.stdout
+        except Exception:
+            return []
+
+        try:
+            data = json.loads(out)
+        except json.JSONDecodeError:
+            return []
+            
+        violations = []
+        for match in data:
+            path = match.get("path", "")
+            if not path or path.startswith(".git/") or path.startswith("_agents/"):
+                continue
+
+            if exclude_paths and any(path.startswith(ep) for ep in exclude_paths):
+                self.excluded_count += 1
+                continue
+                
+            self.scanned_count += 1
+            
+            redacted_match = match.get("redacted_match", match.get("redacted", ""))
+            
+            violations.append(
+                ScanViolation(
+                    path=path,
+                    line=match.get("line", 0),
+                    rule=match.get("rule_id", match.get("rule", "unknown")),
+                    redacted_match=redacted_match,
+                )
+            )
+            
+        return violations
+
+    def config_hash(self) -> str:
+        if not self.config_path or not os.path.isfile(self.config_path):
+            return hashlib.sha256(b"").hexdigest()
+        try:
+            with open(self.config_path, "rb") as f:
+                return hashlib.sha256(f.read()).hexdigest()
+        except Exception:
+            return hashlib.sha256(b"").hexdigest()
+
+
 def resolve_backend(
     config: dict[str, Any] | None = None,
     patterns: list[str] | None = None,
@@ -580,13 +697,36 @@ def resolve_backend(
 
     scanning_cfg = config.get("scanning") if isinstance(config.get("scanning"), dict) else {}
     secrets_cfg = scanning_cfg.get("secrets") if isinstance(scanning_cfg.get("secrets"), dict) else {}
-    backend_name = secrets_cfg.get("backend", "regex")
+    
+    if "scanning" in config:
+        backend_name = secrets_cfg.get("backend", "betterleaks")
+    else:
+        backend_name = secrets_cfg.get("backend", "regex")
 
     if patterns is None:
         patterns = list(config.get("leak_patterns", []))
 
+    if backend_name == "betterleaks":
+        try:
+            subprocess.run(
+                ["betterleaks", "version"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True
+            )
+            config_path = secrets_cfg.get("config_path", secrets_cfg.get("config"))
+            return BetterleaksBackend(config_path)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            sys.stderr.write("WARNING: betterleaks not found, falling back to regex (degraded)\n")
+            return RegexBackend(patterns)
+
     if backend_name == "regex":
         return RegexBackend(patterns)
+
+    sys.stderr.write(
+        f"WARNING: Unknown scan backend '{backend_name}', falling back to regex (degraded)\n"
+    )
+    return RegexBackend(patterns)
 
     sys.stderr.write(
         f"WARNING: Unknown scan backend '{backend_name}', falling back to regex (degraded)\n"
