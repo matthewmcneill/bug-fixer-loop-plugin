@@ -47,9 +47,12 @@ class TestInjectionScanner(unittest.TestCase):
         mock_response.read.return_value = json.dumps({
             "sanitizationResult": {
                 "filterResults": {
-                    "piAndJailbreakFilterResult": {
-                        "matchState": "MATCH_FOUND",
-                        "confidenceLevel": "CONFIDENCE_HIGH"
+                    "pi_and_jailbreak": {
+                        "executionState": "EXECUTION_SUCCESS",
+                        "piAndJailbreakFilterResult": {
+                            "matchState": "MATCH_FOUND",
+                            "confidenceLevel": "HIGH"
+                        }
                     }
                 }
             }
@@ -69,9 +72,12 @@ class TestInjectionScanner(unittest.TestCase):
         mock_response.read.return_value = json.dumps({
             "sanitizationResult": {
                 "filterResults": {
-                    "piAndJailbreakFilterResult": {
-                        "matchState": "MATCH_NOT_FOUND",
-                        "confidenceLevel": "CONFIDENCE_LOW"
+                    "pi_and_jailbreak": {
+                        "executionState": "EXECUTION_SUCCESS",
+                        "piAndJailbreakFilterResult": {
+                            "matchState": "MATCH_NOT_FOUND",
+                            "confidenceLevel": "LOW_AND_ABOVE"
+                        }
                     }
                 }
             }
@@ -105,19 +111,26 @@ class TestInjectionScanner(unittest.TestCase):
         with self.assertRaises(urllib.error.URLError):
             scanner.scan("some text")
 
+    @patch.object(CachedInjectionScanner, "_save_cache")
+    @patch.object(CachedInjectionScanner, "_load_cache", return_value={})
     @patch.object(InjectionScanner, "scan")
-    def test_cached_scanner_same_text(self, mock_scan):
+    def test_cached_scanner_same_text(self, mock_scan, mock_load, mock_save):
         mock_scan.return_value = InjectionResult(False, 0.0, "test")
         scanner = CachedInjectionScanner(InjectionScanner(self.config_enabled))
         
         res1 = scanner.scan("test text")
         res2 = scanner.scan("test text")
         
-        self.assertEqual(res1, res2)
+        self.assertEqual(res1.is_injection, res2.is_injection)
+        self.assertEqual(res1.confidence, res2.confidence)
+        self.assertEqual(res1.provider, res2.provider)
+        self.assertEqual(res1.details, res2.details)
         mock_scan.assert_called_once()
 
+    @patch.object(CachedInjectionScanner, "_save_cache")
+    @patch.object(CachedInjectionScanner, "_load_cache", return_value={})
     @patch.object(InjectionScanner, "scan")
-    def test_cached_scanner_different_text(self, mock_scan):
+    def test_cached_scanner_different_text(self, mock_scan, mock_load, mock_save):
         mock_scan.return_value = InjectionResult(False, 0.0, "test")
         scanner = CachedInjectionScanner(InjectionScanner(self.config_enabled))
         
@@ -157,9 +170,8 @@ class TestInjectionScanner(unittest.TestCase):
         config = copy.deepcopy(self.config_enabled)
         config["fail_open"] = False
         config["model_armor"]["project"] = ""
-        scanner = InjectionScanner(config)
         with self.assertRaises(ValueError):
-            scanner.scan("text")
+            scanner = InjectionScanner(config)
 
 if __name__ == '__main__':
     unittest.main()

@@ -75,6 +75,9 @@ REASON_EGRESS_LEAK = (
     "Egress leak blocked: Outbound GitHub command body contains content "
     "matching configured leak patterns. Content not sent."
 )
+REASON_UNSCANNABLE_STDIN = (
+    "Egress blocked: --body-file - reads from stdin which cannot be scanned for leaks."
+)
 
 # Command Protection Regexes
 AUTO_MERGE_REGEX = re.compile(r"(?:^|[;&|]\s*|\s)gh\s+(?:pr\s+merge|stack\s+merge)\b")
@@ -102,8 +105,8 @@ OUTBOUND_GH_CMD_REGEX = re.compile(
     r")\b"
 )
 
-HOST_SECURITY_SCRIPTS = frozenset({"pre_tool_gate.py", "safe_ingest.py"})
-SCANNER_PROTECTED_FILES = frozenset({".betterleaks.toml", ".betterleaksignore"})
+HOST_SECURITY_SCRIPTS = frozenset({"pre_tool_gate.py", "safe_ingest.py", "injection_scanner.py"})
+SCANNER_PROTECTED_FILES = frozenset({".betterleaks.toml", ".betterleaksignore", ".agents/plugins/bug-fixer-loop-workspace/config.json"})
 
 
 def normalise_config(config: dict[str, Any] | None) -> dict[str, Any]:
@@ -224,6 +227,10 @@ def check_shell_mutation(cmd: str, spec_file_path: str, protected_files: list[st
         watched.add(spec_file_path)
         watched.add(Path(spec_file_path).name)
     for pf in protected_files:
+        if pf:
+            watched.add(pf)
+            watched.add(Path(pf).name)
+    for pf in SCANNER_PROTECTED_FILES:
         if pf:
             watched.add(pf)
             watched.add(Path(pf).name)
@@ -405,6 +412,8 @@ def check_egress_leaks(cmd: str, leak_patterns: list[str]) -> bool:
     body = extract_outbound_body(cmd)
     if body is None:
         return False
+    if body == "[UNSCANNABLE_STDIN_BODY]":
+        return "UNSCANNABLE" 
 
     compiled: list[re.Pattern[str]] = []
     for pat in leak_patterns:
@@ -456,7 +465,10 @@ def evaluate_gate_b(
         return {"decision": "deny", "reason": REASON_SHELL_MUTATION}
 
     leak_patterns = list(config.get("leak_patterns", [])) if config else []
-    if check_egress_leaks(cmd, leak_patterns):
+    leak_res = check_egress_leaks(cmd, leak_patterns)
+    if leak_res == "UNSCANNABLE":
+        return {"decision": "deny", "reason": REASON_UNSCANNABLE_STDIN}
+    elif leak_res:
         return {"decision": "deny", "reason": REASON_EGRESS_LEAK}
 
     return {"decision": "allow"}
@@ -563,12 +575,18 @@ class RegexBackend:
         content = "\n".join(sorted(valid_patterns))
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
+    DEFAULT_REGEX_EXCLUDE_PATHS = ["tests/", ".agents/skills/principal-architect-workspace/"]
+
     def scan(
         self,
         repo_dir: str,
         scope: ScanScope,
         exclude_paths: list[str] | None = None,
     ) -> list[ScanViolation]:
+        if not exclude_paths:
+            exclude_paths = self.DEFAULT_REGEX_EXCLUDE_PATHS
+        else:
+            exclude_paths = [p for p in exclude_paths if p and p != "/"]
         if isinstance(scope, str):
             scope = ScanScope(scope)
 
@@ -690,12 +708,18 @@ class BetterleaksBackend:
             cmd.extend(["--config", self.config_path])
         return cmd
 
+    DEFAULT_REGEX_EXCLUDE_PATHS = ["tests/", ".agents/skills/principal-architect-workspace/"]
+
     def scan(
         self,
         repo_dir: str,
         scope: ScanScope,
         exclude_paths: list[str] | None = None,
     ) -> list[ScanViolation]:
+        if not exclude_paths:
+            exclude_paths = self.DEFAULT_REGEX_EXCLUDE_PATHS
+        else:
+            exclude_paths = [p for p in exclude_paths if p and p != "/"]
         if isinstance(scope, str):
             scope = ScanScope(scope)
             
@@ -726,14 +750,24 @@ class BetterleaksBackend:
         if scan_state != "complete":
             raise RuntimeError(f"Betterleaks scan did not complete (state={scan_state})")
         
-        self.scanned_count = data.get("scan", {}).get("files_scanned", 0)
+        self.last_config_hash = data.get("scan", {}).get("config_hash")
         findings = data.get("findings", [])
+        
+        if exclude_paths:
+            exclude_paths = [p for p in exclude_paths if p and p != "/"]
             
         violations = []
         for finding in findings:
             path = finding.get("location", {}).get("path", "")
             if not path or path.startswith(".git/") or path.startswith("_agents/"):
                 continue
+
+            # Betterleaks fs scans return absolute paths; make them relative
+            if os.path.isabs(path):
+                try:
+                    path = os.path.relpath(path, repo_dir)
+                except ValueError:
+                    pass
 
             if exclude_paths and any(path.startswith(ep) for ep in exclude_paths):
                 self.excluded_count += 1
@@ -755,6 +789,8 @@ class BetterleaksBackend:
         return violations
 
     def config_hash(self) -> str:
+        if getattr(self, "last_config_hash", None):
+            return self.last_config_hash
         if self.config_path and os.path.isfile(self.config_path):
             try:
                 with open(self.config_path, "rb") as f:
@@ -770,11 +806,6 @@ class BetterleaksBackend:
         except Exception:
             pass
         return hashlib.sha256(b"default-embedded-ruleset").hexdigest()
-        try:
-            with open(self.config_path, "rb") as f:
-                return hashlib.sha256(f.read()).hexdigest()
-        except Exception:
-            return hashlib.sha256(b"").hexdigest()
 
 
 def resolve_backend(
@@ -994,10 +1025,14 @@ def main() -> int:
             for v in violations:
                 print(f"  - {v}")
             return 1
-        backend_str = "regex (degraded)" if backend.name == "regex" else (
-            f"{backend.name} {backend.version}" if backend.version.startswith("v")
-            else f"{backend.name} v{backend.version}"
-        )
+        if backend.name == "regex":
+            backend_str = "regex (degraded)"
+        else:
+            ver = backend.version
+            if ver.startswith(backend.name):
+                backend_str = ver
+            else:
+                backend_str = f"{backend.name} {ver}" if ver.startswith("v") else f"{backend.name} v{ver}" 
         print(f"LEAK SCAN CLEAN (repo={target_dir}, backend={backend_str}, {scanned_count} files scanned, {excluded_count} excluded)")
         return 0
 

@@ -116,7 +116,7 @@ log(f"Checking {TARGET_REPO} for untriaged issues")
 r = run([sys.executable, str(SAFE_INGEST), "issue-list",
          "--repo", TARGET_REPO, "--state", "open",
          "--limit", "200",
-         "--json", "number,title,body,labels"])
+         "--json", "number,title,body,labels,comments"])
 
 try:
     issues = json.loads(r.stdout)
@@ -155,8 +155,10 @@ for issue in untriaged:
     if result.is_injection:
         log(f"INJECTION DETECTED on #{issue['number']}: "
             f"{result.provider} confidence={result.confidence}")
-        run(["gh", "issue", "edit", str(issue["number"]),
+        r_edit = run(["gh", "issue", "edit", str(issue["number"]),
              "--add-label", "security:prompt-injection"])
+        if r_edit.returncode != 0:
+            log(f"Failed to apply security label to #{issue['number']}: {r_edit.stderr}")
     else:
         safe_untriaged.append(issue)
 untriaged = safe_untriaged

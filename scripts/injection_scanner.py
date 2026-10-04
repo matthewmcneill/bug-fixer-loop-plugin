@@ -19,7 +19,7 @@ class ModelArmorProvider:
     """Google Cloud Model Armor injection classifier."""
     
     ENDPOINT = (
-        "https://modelarmor.{location}-aiplatform.googleapis.com/v1/"
+        "https://modelarmor.{location}.rep.googleapis.com/v1/"
         "projects/{project}/locations/{location}/templates/{template}:"
         "sanitizeUserPrompt"
     )
@@ -84,15 +84,21 @@ class ModelArmorProvider:
         # Parse Model Armor response
         sanitization = result.get("sanitizationResult", {})
         filter_results = sanitization.get("filterResults", {})
-        injection = filter_results.get("piAndJailbreakFilterResult", {})
+        pi_and_jailbreak = filter_results.get("pi_and_jailbreak", {})
+        injection = pi_and_jailbreak.get("piAndJailbreakFilterResult", {})
+        
+        execution_state = pi_and_jailbreak.get("executionState", "EXECUTION_UNSPECIFIED")
+        if execution_state != "EXECUTION_SUCCESS":
+            raise RuntimeError(f"Model Armor execution failed: {execution_state}")
+            
         match_state = injection.get("matchState", "MATCH_STATE_UNSPECIFIED")
         confidence = injection.get("confidenceLevel", "CONFIDENCE_UNSPECIFIED")
         
         is_injection = match_state == "MATCH_FOUND"
         conf_map = {
-            "CONFIDENCE_LOW": 0.3,
-            "CONFIDENCE_MEDIUM": 0.6,
-            "CONFIDENCE_HIGH": 0.9,
+            "LOW_AND_ABOVE": 0.3,
+            "MEDIUM_AND_ABOVE": 0.6,
+            "HIGH": 0.9,
             "CONFIDENCE_UNSPECIFIED": 0.0,
         }
         
@@ -111,6 +117,12 @@ class InjectionScanner:
         self.enabled = config.get("enabled", False)
         self.fail_open = config.get("fail_open", True)
         self.provider = config.get("provider", "model_armor")
+        
+        if self.enabled and self.provider == "model_armor":
+            ma_config = config.get("model_armor", {})
+            if not ma_config.get("project") or not ma_config.get("service_account"):
+                raise ValueError("Model Armor requires 'project' and 'service_account' in config")
+                
         self._provider_impl = self._resolve_provider(config)
     
     def _resolve_provider(self, config):
@@ -135,19 +147,56 @@ class InjectionScanner:
                                       f"error: {exc}")
             raise
 
+import os
 class CachedInjectionScanner:
     """Wraps InjectionScanner with SHA-256 content-hash cache."""
     
     def __init__(self, scanner: InjectionScanner, max_cache: int = 1000):
         self.scanner = scanner
-        self._cache: dict[str, InjectionResult] = {}
         self.max_cache = max_cache
+        self.cache_path = os.path.join(
+            os.getcwd(), ".agents", "plugins", "bug-fixer-loop-workspace", "injection_cache.json"
+        )
+        self._cache: dict[str, dict] = self._load_cache()
     
+    def _load_cache(self):
+        if os.path.exists(self.cache_path):
+            try:
+                with open(self.cache_path, "r") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+        
+    def _save_cache(self):
+        try:
+            os.makedirs(os.path.dirname(self.cache_path), exist_ok=True)
+            with open(self.cache_path, "w") as f:
+                json.dump(self._cache, f)
+        except Exception:
+            pass
+            
     def scan(self, text: str) -> InjectionResult:
         key = hashlib.sha256(text.encode()).hexdigest()
         if key in self._cache:
-            return self._cache[key]
+            cached = self._cache[key]
+            return InjectionResult(
+                is_injection=cached.get("is_injection", False),
+                confidence=cached.get("confidence", 0.0),
+                provider=cached.get("provider", ""),
+                details=cached.get("details", "")
+            )
+            
         result = self.scanner.scan(text)
-        if len(self._cache) < self.max_cache:
-            self._cache[key] = result
+        
+        if len(self._cache) >= self.max_cache:
+            self._cache.pop(next(iter(self._cache)))
+            
+        self._cache[key] = {
+            "is_injection": result.is_injection,
+            "confidence": result.confidence,
+            "provider": result.provider,
+            "details": result.details
+        }
+        self._save_cache()
         return result

@@ -572,5 +572,17 @@ class TestSafeIngest(unittest.TestCase):
         self.assertEqual(clean_ext["title"], "External Title ")
 
 
+
+    def test_load_config_v2_workspace(self):
+        """Test that load_config correctly loads the v2 workspace config and populates patterns."""
+        from scripts.safe_ingest import load_config
+        config = load_config(".agents/plugins/bug-fixer-loop-workspace/config.json")
+        self.assertIn("scanning", config)
+        self.assertIn("secrets", config["scanning"])
+        self.assertIn("patterns", config["scanning"]["secrets"])
+        self.assertTrue(isinstance(config["scanning"]["secrets"]["patterns"], list))
+        self.assertTrue(len(config["scanning"]["secrets"]["patterns"]) > 0)
+
 if __name__ == "__main__":
+
     unittest.main()

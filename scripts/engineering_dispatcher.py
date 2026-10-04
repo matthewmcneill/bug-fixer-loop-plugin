@@ -18,6 +18,7 @@ import re
 import signal
 import subprocess
 import sys
+from scripts.injection_scanner import CachedInjectionScanner, InjectionScanner
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -750,7 +751,7 @@ def main():
 
     r = run([sys.executable, str(SAFE_INGEST), "issue-list",
              "--repo", TARGET_REPO, "--label", "bug-fixer:engineer:needs-fix",
-             "--state", "open", "--json", "number,title,milestone,labels"])
+             "--state", "open", "--json", "number,title,body,milestone,labels,comments"])
 
     try:
         issues = json.loads(r.stdout)
@@ -759,10 +760,29 @@ def main():
         sys.exit(0)
 
     # Filter out issues already in-progress or awaiting review
-    eligible = [
+    raw_eligible = [
         i for i in issues
         if not any(l.get("name") in ("bug-fixer:engineer:in-progress", "bug-fixer:architect:awaiting-review") for l in i.get("labels", []))
     ]
+
+    # Injection Scan
+    injection_config = config.get("scanning", {}).get("injection", {})
+    scanner = CachedInjectionScanner(InjectionScanner(injection_config))
+
+    eligible = []
+    for issue in raw_eligible:
+        text_parts = [issue.get("title", ""), issue.get("body", "")]
+        for c in issue.get("comments", []):
+            text_parts.append(c.get("body", ""))
+        text = "\n".join(p for p in text_parts if p and p != "[REDACTED: UNAPPROVED EXTERNAL CONTENT]")
+        result = scanner.scan(text)
+        if result.is_injection:
+            log(f"INJECTION DETECTED on #{issue['number']}: {result.provider} confidence={result.confidence}")
+            r_edit = gh("issue", "edit", str(issue["number"]), "--repo", TARGET_REPO, "--add-label", "security:prompt-injection")
+            if r_edit.returncode != 0:
+                log(f"Failed to apply security label to #{issue['number']}: {r_edit.stderr}")
+        else:
+            eligible.append(issue)
 
     if not eligible:
         log("No eligible issues. Exiting.")

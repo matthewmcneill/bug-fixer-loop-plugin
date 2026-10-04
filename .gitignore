@@ -13,3 +13,4 @@ build/
 *_tick_preview.json
 *.workspace.json
 pr_completions.jsonl
+.agents/skills/principal-architect-workspace/

@@ -21,6 +21,7 @@ Security Policy:
 """
 
 from __future__ import annotations
+import copy
 
 import argparse
 import json
@@ -152,6 +153,30 @@ PRIORITY_RANK_BY_NAME: dict[str, tuple[str, int]] = {
 DEFAULT_UNSET_PRIORITY_RANK = 4
 
 
+def normalise_config(config: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalises config dictionary so callers can always access scanning namespace."""
+    if not isinstance(config, dict):
+        return {}
+    res = copy.deepcopy(config)
+    if "scanning" in res and isinstance(res["scanning"], dict):
+        scanning = res["scanning"]
+        if "secrets" not in scanning or not isinstance(scanning["secrets"], dict):
+            scanning["secrets"] = {}
+        secrets = scanning["secrets"]
+        if "patterns" not in secrets:
+            secrets["patterns"] = list(res.get("leak_patterns", []))
+        if "exclude_paths" not in secrets:
+            secrets["exclude_paths"] = list(res.get("scan_exclude_paths", []))
+    else:
+        res["scanning"] = {
+            "secrets": {
+                "patterns": list(res.get("leak_patterns", [])),
+                "exclude_paths": list(res.get("scan_exclude_paths", [])),
+            }
+        }
+    return res
+
+
 def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
     """Loads plugin config from an explicit path, BUG_FIXER_CONFIG env var, or standard locations."""
     target_path: Path | None = None
@@ -189,7 +214,7 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
             data = json.load(f)
             if not isinstance(data, dict):
                 raise ValueError(f"Config at {target_path} must be a JSON object, got {type(data).__name__}")
-            return data
+            return normalise_config(data)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON in config file {target_path}: {exc}") from exc
 
@@ -1404,7 +1429,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     bot_prefixes = tuple(config.get("bot_prefixes") or DEFAULT_BOT_PREFIXES)
-    leak_patterns = compile_leak_patterns(config.get("leak_patterns"))
+    leak_patterns = compile_leak_patterns(config.get("scanning", {}).get("secrets", {}).get("patterns", []))
 
     repo, _ = _extract_flag_value(passthrough, "--repo")
     if not repo:

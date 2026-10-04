@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+from scripts.injection_scanner import CachedInjectionScanner, InjectionScanner
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -232,6 +233,10 @@ def main():
         log("No bug-fixer PRs found. Exiting.")
         sys.exit(0)
 
+    # Init Injection Scanner
+    injection_config = config.get("scanning", {}).get("injection", {})
+    scanner = CachedInjectionScanner(InjectionScanner(injection_config))
+
     # Build set of PRs with active review dispatches
     active_review_dispatches = set()
     if DISPATCHES_DIR.exists():
@@ -279,6 +284,29 @@ def main():
             gh("pr", "edit", str(number), "--repo", TARGET_REPO,
                "--add-label", "bug-fixer:human:needs-intervention",
                "--remove-label", "bug-fixer:architect:awaiting-review")
+            continue
+
+        # Fetch comments for scanning
+        r_all_comments = run([sys.executable, str(SAFE_INGEST), "pr-view", str(number), "--repo", TARGET_REPO,
+                              "--comments", "--json", "comments"])
+        pr_comments = []
+        if r_all_comments.returncode == 0:
+            try:
+                pr_comments = json.loads(r_all_comments.stdout).get("comments", [])
+            except Exception:
+                pass
+
+        # Perform injection scan
+        text_parts = [title, body]
+        for c in pr_comments:
+            text_parts.append(c.get("body", ""))
+        text = "\n".join(p for p in text_parts if p and p != "[REDACTED: UNAPPROVED EXTERNAL CONTENT]")
+        result = scanner.scan(text)
+        if result.is_injection:
+            log(f"INJECTION DETECTED on PR #{number}: {result.provider} confidence={result.confidence}")
+            r_edit = gh("pr", "edit", str(number), "--repo", TARGET_REPO, "--add-label", "security:prompt-injection")
+            if r_edit.returncode != 0:
+                log(f"Failed to apply security label to PR #{number}: {r_edit.stderr}")
             continue
 
         log(f"Processing PR #{number}: {title} (review round {review_count + 1}/{MAX_REVIEW_ROUNDS})")

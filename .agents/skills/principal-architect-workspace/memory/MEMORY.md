@@ -9,7 +9,7 @@
 
 | Project / PR | Status | Modules Touched | Context Link |
 | :--- | :--- | :--- | :--- |
-| `pr-scanning-infra` | **0/5** — awaiting human approval | pre_tool_gate, safe_ingest, config, tests | [PROJECT.md](../pr-scanning-infra/PROJECT.md) |
+| `pr-scanning-infra` | **7/7 COMPLETE** — [PR #47](https://github.com/matthewmcneill/bug-fixer-loop-plugin/pull/47) (replaces #46) | pre_tool_gate, safe_ingest, config, tests, injection_scanner, triage_dispatcher | [PROJECT.md](../pr-scanning-infra/PROJECT.md) |
 
 ## Recently Completed (Last 5)
 
