@@ -90,7 +90,7 @@ echo "Applying bug-fixer:architect:awaiting-review to open implicit PRs..."
 if [[ "$DRY_RUN" == "true" ]]; then
   echo "[DRY RUN] Would query PRs and apply bug-fixer:architect:awaiting-review"
 else
-  PRS=$(gh pr list --repo "${TARGET_REPO}" --state open --draft --label "bug-fixer:system:pr" --json number,labels 2>/dev/null || echo "[]")
+  PRS=$(gh pr list --repo "${TARGET_REPO}" --state open --label "bug-fixer:system:pr" --json number,labels 2>/dev/null || echo "[]")
   echo "$PRS" | jq -c '.[]' | while read -r pr; do
     number=$(echo "$pr" | jq -r '.number')
     labels=$(echo "$pr" | jq -r '.labels[].name')
