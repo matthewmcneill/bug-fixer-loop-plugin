@@ -15,11 +15,11 @@
 ## Status
 
 - **Human approval of decomposition:** ✅ APPROVED (2026-10-04T20:05:07+01:00)
-- **Current WO:** WO0a
+- **Current WO:** WO0b
 
 ## Work Order Ledger
 
-- **[ ] [wo0a-redact-violations](wo0a-redact-violations/WORKORDER.md):** Redact matched secrets in `scan_repository()` violation output (~10 lines)
+- **[x] [wo0a-redact-violations](wo0a-redact-violations/WORKORDER.md):** Redact matched secrets in `scan_repository()` violation output (~10 lines) ✅
 - **[ ] [wo0b-content-normalisation](wo0b-content-normalisation/WORKORDER.md):** Raw-vs-rendered normalisation in `safe_ingest.evaluate_and_sanitize_item()` (~50 lines + tests)
 - **[ ] [wo1-egress-leak-gate](wo1-egress-leak-gate/WORKORDER.md):** Egress leak gate on outbound `gh` bodies in `pre_tool_gate` (~80 lines + tests)
 - **[ ] [wo2-scan-backend-interface](wo2-scan-backend-interface/WORKORDER.md):** `ScanBackend` interface with scope (`staged`/`tree`/`history`) + backend recorded in receipt (~100 lines)
