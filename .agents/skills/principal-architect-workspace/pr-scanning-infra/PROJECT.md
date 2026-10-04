@@ -15,13 +15,13 @@
 ## Status
 
 - **Human approval of decomposition:** ✅ APPROVED (2026-10-04T20:05:07+01:00)
-- **Current WO:** WO1
+- **Current WO:** WO2
 
 ## Work Order Ledger
 
 - **[x] [wo0a-redact-violations](wo0a-redact-violations/WORKORDER.md):** Redact matched secrets in `scan_repository()` violation output (~10 lines) ✅
 - **[x] [wo0b-content-normalisation](wo0b-content-normalisation/WORKORDER.md):** Raw-vs-rendered normalisation in `safe_ingest.evaluate_and_sanitize_item()` (~50 lines + tests) ✅
-- **[ ] [wo1-egress-leak-gate](wo1-egress-leak-gate/WORKORDER.md):** Egress leak gate on outbound `gh` bodies in `pre_tool_gate` (~80 lines + tests)
+- **[x] [wo1-egress-leak-gate](wo1-egress-leak-gate/WORKORDER.md):** Egress leak gate on outbound `gh` bodies in `pre_tool_gate` (~80 lines + tests) ✅
 - **[ ] [wo2-scan-backend-interface](wo2-scan-backend-interface/WORKORDER.md):** `ScanBackend` interface with scope (`staged`/`tree`/`history`) + backend recorded in receipt (~100 lines)
 - **[ ] [wo3-betterleaks-backend](wo3-betterleaks-backend/WORKORDER.md):** Betterleaks v2 backend + regex fallback with degraded-mode reporting (~80 lines + tests)
 

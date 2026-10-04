@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, datetime
+from enum import Enum
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -32,7 +34,7 @@ import re
 import shlex
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 # Gate Denial Reasons
 REASON_SPEC_IMMUTABLE = (
@@ -434,67 +436,191 @@ def get_tree_sha(repo_dir: str) -> str:
         return ""
 
 
-def scan_repository(repo_dir: str, patterns: list[str], exclude_paths: list[str] | None = None) -> tuple[list[str], int, int]:
-    """Scans repository tracked and staged files for leak pattern violations."""
-    violations: list[str] = []
-    compiled: list[re.Pattern[str]] = []
-    for pat in patterns:
-        if pat and isinstance(pat, str):
+class ScanScope(Enum):
+    STAGED = "staged"   # git diff --cached (pre-commit hook)
+    TREE = "tree"       # git ls-files (full working tree)
+    HISTORY = "history"  # git log (CI audit)
+
+
+class ScanViolation:
+    def __init__(self, path: str, line: int, rule: str, redacted_match: str):
+        self.path = path
+        self.line = line
+        self.rule = rule
+        self.redacted_match = redacted_match
+
+    def __str__(self) -> str:
+        return f"{self.path}:{self.line} [{self.rule}] -> {self.redacted_match}"
+
+    def __repr__(self) -> str:
+        return f"ScanViolation({self.path!r}, {self.line!r}, {self.rule!r}, {self.redacted_match!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, ScanViolation):
+            return (
+                self.path == other.path
+                and self.line == other.line
+                and self.rule == other.rule
+                and self.redacted_match == other.redacted_match
+            )
+        if isinstance(other, str):
+            return str(self) == other
+        return NotImplemented
+
+
+@runtime_checkable
+class ScanBackend(Protocol):
+    name: str       # e.g. "regex", "betterleaks"
+    version: str    # e.g. "builtin", "2.0.0"
+
+    def scan(
+        self,
+        repo_dir: str,
+        scope: ScanScope,
+        exclude_paths: list[str] | None = None,
+    ) -> list[ScanViolation]: ...
+
+    def config_hash(self) -> str: ...  # SHA-256 of the active ruleset/config
+
+
+class RegexBackend:
+    name: str = "regex"
+    version: str = "builtin"
+
+    def __init__(self, patterns: list[str] | None = None) -> None:
+        self.patterns: list[str] = list(patterns or [])
+        self.scanned_count: int = 0
+        self.excluded_count: int = 0
+
+    def config_hash(self) -> str:
+        valid_patterns = [p for p in self.patterns if isinstance(p, str)]
+        content = "\n".join(sorted(valid_patterns))
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def scan(
+        self,
+        repo_dir: str,
+        scope: ScanScope,
+        exclude_paths: list[str] | None = None,
+    ) -> list[ScanViolation]:
+        if isinstance(scope, str):
+            scope = ScanScope(scope)
+
+        self.scanned_count = 0
+        self.excluded_count = 0
+        violations: list[ScanViolation] = []
+
+        compiled: list[re.Pattern[str]] = []
+        for pat in self.patterns:
+            if pat and isinstance(pat, str):
+                try:
+                    compiled.append(re.compile(pat))
+                except re.error as exc:
+                    sys.stderr.write(f"WARNING: Invalid leak pattern regex '{pat}': {exc}\n")
+
+        if scope == ScanScope.HISTORY:
+            raise NotImplementedError("RegexBackend does not support history scanning")
+        elif scope not in (ScanScope.TREE, ScanScope.STAGED):
+            raise ValueError(f"Unknown scan scope: {scope}")
+
+        if not compiled:
+            return []
+
+        if scope == ScanScope.TREE:
+            raw_files = subprocess.check_output(
+                ["git", "ls-files"], cwd=repo_dir, stderr=subprocess.DEVNULL, text=True
+            ).splitlines()
+        else:
+            raw_files = subprocess.check_output(
+                ["git", "diff", "--cached", "--name-only"], cwd=repo_dir, stderr=subprocess.DEVNULL, text=True
+            ).splitlines()
+
+        files = sorted(set(raw_files))
+
+        for rel_path in files:
+            if not rel_path or rel_path.startswith(".git/") or rel_path.startswith("_agents/"):
+                continue
+
+            if exclude_paths and any(rel_path.startswith(ep) for ep in exclude_paths):
+                self.excluded_count += 1
+                continue
+            full_path = os.path.join(repo_dir, rel_path)
+            if not os.path.isfile(full_path):
+                continue
+            self.scanned_count += 1
             try:
-                compiled.append(re.compile(pat))
-            except re.error as exc:
-                sys.stderr.write(f"WARNING: Invalid leak pattern regex '{pat}': {exc}\n")
+                with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                    for lineno, line in enumerate(f, start=1):
+                        for pat in compiled:
+                            match = pat.search(line)
+                            if match:
+                                matched_text = match.group()
+                                redacted = matched_text[:4] + "…" if len(matched_text) > 4 else "****"
+                                violations.append(
+                                    ScanViolation(
+                                        path=rel_path,
+                                        line=lineno,
+                                        rule=pat.pattern,
+                                        redacted_match=redacted,
+                                    )
+                                )
+            except Exception:
+                continue
 
-    if not compiled:
-        return [], 0, 0
-
-    try:
-        tracked = subprocess.check_output(
-            ["git", "ls-files"], cwd=repo_dir, stderr=subprocess.DEVNULL, text=True
-        ).splitlines()
-        staged = subprocess.check_output(
-            ["git", "diff", "--cached", "--name-only"], cwd=repo_dir, stderr=subprocess.DEVNULL, text=True
-        ).splitlines()
-        files = sorted(set(tracked + staged))
-    except Exception as exc:
-        return [f"Failed to list git files in {repo_dir}: {exc}"], 0, 0
-
-    scanned_count = 0
-    excluded_count = 0
-    for rel_path in files:
-        if not rel_path or rel_path.startswith(".git/") or rel_path.startswith("_agents/"):
-            continue
-        
-        if exclude_paths and any(rel_path.startswith(ep) for ep in exclude_paths):
-            excluded_count += 1
-            continue
-        full_path = os.path.join(repo_dir, rel_path)
-        if not os.path.isfile(full_path):
-            continue
-        scanned_count += 1
-        try:
-            with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
-                for lineno, line in enumerate(f, start=1):
-                    for pat in compiled:
-                        match = pat.search(line)
-                        if match:
-                            matched_text = match.group()
-                            redacted = matched_text[:4] + "…" if len(matched_text) > 4 else "****"
-                            violations.append(
-                                f"{rel_path}:{lineno} [{pat.pattern}] -> {redacted}"
-                            )
-        except Exception:
-            continue
-
-    return violations, scanned_count, excluded_count
+        return violations
 
 
-def stamp_receipt(repo_dir: str, status: str = "PASS") -> int:
+def resolve_backend(
+    config: dict[str, Any] | None = None,
+    patterns: list[str] | None = None,
+) -> ScanBackend:
+    """Resolves and instantiates the configured ScanBackend."""
+    if config is None:
+        config = {}
+
+    scanning_cfg = config.get("scanning") if isinstance(config.get("scanning"), dict) else {}
+    secrets_cfg = scanning_cfg.get("secrets") if isinstance(scanning_cfg.get("secrets"), dict) else {}
+    backend_name = secrets_cfg.get("backend", "regex")
+
+    if patterns is None:
+        patterns = list(config.get("leak_patterns", []))
+
+    if backend_name == "regex":
+        return RegexBackend(patterns)
+
+    sys.stderr.write(
+        f"WARNING: Unknown scan backend '{backend_name}', falling back to regex (degraded)\n"
+    )
+    return RegexBackend(patterns)
+
+
+def scan_repository(
+    repo_dir: str,
+    patterns: list[str],
+    exclude_paths: list[str] | None = None,
+    config: dict[str, Any] | None = None,
+) -> tuple[list[str], int, int]:
+    """Scans repository tracked and staged files for leak pattern violations."""
+    backend = resolve_backend(config, patterns=patterns)
+    violations = backend.scan(repo_dir, ScanScope.TREE, exclude_paths=exclude_paths)
+    scanned_count = getattr(backend, "scanned_count", 0)
+    excluded_count = getattr(backend, "excluded_count", 0)
+    return [str(v) for v in violations], scanned_count, excluded_count
+
+
+def stamp_receipt(
+    repo_dir: str,
+    status: str = "PASS",
+    backend: ScanBackend | None = None,
+) -> int:
     """Stamps leak audit receipt into .git/leak_audit_receipt.json."""
     tree_sha = get_tree_sha(repo_dir)
     if not tree_sha:
         sys.stderr.write("ERROR: Could not compute git write-tree SHA.\n")
         return 1
+
+    if backend is None:
+        backend = resolve_backend()
 
     git_dir = get_git_dir(repo_dir)
     receipt_path = os.path.join(git_dir, "leak_audit_receipt.json")
@@ -502,6 +628,10 @@ def stamp_receipt(repo_dir: str, status: str = "PASS") -> int:
         "status": status,
         "tree_sha": tree_sha,
         "timestamp": datetime.now(UTC).isoformat(),
+        "backend": backend.name,
+        "backend_version": backend.version,
+        "config_hash": backend.config_hash(),
+        "validate": False,
     }
     try:
         os.makedirs(git_dir, exist_ok=True)
@@ -550,9 +680,17 @@ def verify_receipt(repo_dir: str) -> int:
         return 1
 
 
-def run_git_hook(repo_dir: str, patterns: list[str], exclude_paths: list[str] | None = None) -> int:
+def run_git_hook(
+    repo_dir: str,
+    patterns: list[str] | None = None,
+    exclude_paths: list[str] | None = None,
+    backend: ScanBackend | None = None,
+    config: dict[str, Any] | None = None,
+) -> int:
     """Executes pre-commit / pre-push git hook validation."""
-    violations, _, _ = scan_repository(repo_dir, patterns, exclude_paths)
+    if backend is None:
+        backend = resolve_backend(config, patterns=patterns)
+    violations = backend.scan(repo_dir, ScanScope.STAGED, exclude_paths=exclude_paths)
     if violations:
         sys.stderr.write(
             f"\n[Git Hook Blocked] Leak pattern violation(s) detected ({len(violations)}):\n"
@@ -611,17 +749,25 @@ def main() -> int:
         exclude_paths = list(config.get("scan_exclude_paths", ["tests/"]))
         if args.exclude_pattern:
             exclude_paths.extend(args.exclude_pattern)
-        violations, scanned_count, excluded_count = scan_repository(target_dir, patterns, exclude_paths)
+        backend = resolve_backend(config, patterns=patterns)
+        violations = backend.scan(target_dir, ScanScope.TREE, exclude_paths=exclude_paths)
+        scanned_count = getattr(backend, "scanned_count", 0)
+        excluded_count = getattr(backend, "excluded_count", 0)
         if violations:
             print(f"LEAK SCAN FAILED ({len(violations)} violation(s)):")
             for v in violations:
                 print(f"  - {v}")
             return 1
-        print(f"LEAK SCAN CLEAN (repo={target_dir}, {scanned_count} files scanned, {excluded_count} excluded by scan_exclude_paths)")
+        backend_str = "regex (degraded)" if backend.name == "regex" else (
+            f"{backend.name} {backend.version}" if backend.version.startswith("v")
+            else f"{backend.name} v{backend.version}"
+        )
+        print(f"LEAK SCAN CLEAN (repo={target_dir}, backend={backend_str}, {scanned_count} files scanned, {excluded_count} excluded)")
         return 0
 
     if args.stamp_receipt or args.stamp_pass:
-        return stamp_receipt(repo_dir, "PASS")
+        backend = resolve_backend(config)
+        return stamp_receipt(repo_dir, "PASS", backend=backend)
 
     if args.verify_receipt:
         return verify_receipt(repo_dir)
@@ -631,7 +777,8 @@ def main() -> int:
         exclude_paths = list(config.get("scan_exclude_paths", ["tests/"]))
         if args.exclude_pattern:
             exclude_paths.extend(args.exclude_pattern)
-        return run_git_hook(repo_dir, patterns, exclude_paths)
+        backend = resolve_backend(config, patterns=patterns)
+        return run_git_hook(repo_dir, patterns=patterns, exclude_paths=exclude_paths, backend=backend, config=config)
 
     if sys.stdin.isatty():
         parser.print_help()

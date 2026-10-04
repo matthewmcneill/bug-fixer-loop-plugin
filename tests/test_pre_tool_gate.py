@@ -1,3 +1,5 @@
+from contextlib import redirect_stderr
+import io
 import json
 import os
 from pathlib import Path
@@ -18,8 +20,16 @@ from scripts.pre_tool_gate import (
     REASON_SELF_APPROVAL,
     REASON_SHELL_MUTATION,
     REASON_SPEC_IMMUTABLE,
+    RegexBackend,
+    ScanBackend,
+    ScanScope,
+    ScanViolation,
     check_egress_leaks,
     extract_outbound_body,
+    resolve_backend,
+    scan_repository,
+    stamp_receipt,
+    verify_receipt,
 )
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
@@ -569,6 +579,160 @@ class TestPreToolGate(unittest.TestCase):
             self.assertEqual(res["reason"], REASON_EGRESS_LEAK)
         finally:
             os.unlink(temp_path)
+
+    # ScanBackend & WO2 Tests
+    def test_regex_backend_scan_tree_matches_scan_repository(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subprocess.run(["git", "init"], cwd=temp_dir, check=True, capture_output=True)
+            f1 = Path(temp_dir) / "file1.txt"
+            f1.write_text("clean line\n")
+            f2 = Path(temp_dir) / "file2.txt"
+            f2.write_text("aws_key = AKIAIOSFODNN7EXAMPLE\n")
+            subprocess.run(["git", "add", "file1.txt", "file2.txt"], cwd=temp_dir, check=True, capture_output=True)
+
+            patterns = TEST_CONFIG["leak_patterns"]
+            backend = RegexBackend(patterns)
+            backend_violations = backend.scan(temp_dir, ScanScope.TREE)
+
+            repo_violations, scanned, excluded = scan_repository(temp_dir, patterns)
+
+            self.assertEqual(len(backend_violations), len(repo_violations))
+            self.assertEqual([str(v) for v in backend_violations], repo_violations)
+            self.assertEqual(backend.scanned_count, scanned)
+            self.assertEqual(backend.excluded_count, excluded)
+
+    def test_regex_backend_scan_staged_only_scans_staged_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subprocess.run(["git", "init"], cwd=temp_dir, check=True, capture_output=True)
+            # Commit an initial file
+            init_file = Path(temp_dir) / "init.txt"
+            init_file.write_text("init\n")
+            subprocess.run(["git", "add", "init.txt"], cwd=temp_dir, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "initial commit"], cwd=temp_dir, check=True, capture_output=True)
+
+            # Modify init.txt with a leak but DO NOT stage it
+            init_file.write_text("modified_unstaged = AKIAIOSFODNN7EXAMPLE\n")
+
+            # Create staged.txt with a leak and stage it
+            staged_file = Path(temp_dir) / "staged.txt"
+            staged_file.write_text("staged = AKIAIOSFODNN7EXAMPLE\n")
+            subprocess.run(["git", "add", "staged.txt"], cwd=temp_dir, check=True, capture_output=True)
+
+            patterns = TEST_CONFIG["leak_patterns"]
+            backend = RegexBackend(patterns)
+
+            # Staged scan should ONLY find the staged file
+            staged_violations = backend.scan(temp_dir, ScanScope.STAGED)
+            self.assertEqual(len(staged_violations), 1)
+            self.assertEqual(staged_violations[0].path, "staged.txt")
+
+            # Tree scan should find both because init.txt is tracked and staged.txt is added
+            tree_violations = backend.scan(temp_dir, ScanScope.TREE)
+            self.assertEqual(len(tree_violations), 2)
+            tree_paths = {v.path for v in tree_violations}
+            self.assertEqual(tree_paths, {"init.txt", "staged.txt"})
+
+    def test_regex_backend_config_hash_consistency(self):
+        patterns1 = ["ya29\\.[A-Za-z0-9_-]+", "AKIA[0-9A-Z]{16}"]
+        patterns2 = ["AKIA[0-9A-Z]{16}", "ya29\\.[A-Za-z0-9_-]+"]
+
+        backend1 = RegexBackend(patterns1)
+        backend2 = RegexBackend(patterns2)
+
+        hash1 = backend1.config_hash()
+        hash2 = backend2.config_hash()
+
+        self.assertEqual(hash1, hash2)
+        self.assertEqual(len(hash1), 64)  # 64 hex characters for SHA-256
+
+        backend3 = RegexBackend(["DIFFERENT_PATTERN"])
+        self.assertNotEqual(hash1, backend3.config_hash())
+
+    def test_resolve_backend_returns_regex_for_regex_and_unknown(self):
+        # Default config without scanning block
+        b1 = resolve_backend({})
+        self.assertIsInstance(b1, RegexBackend)
+        self.assertEqual(b1.name, "regex")
+        self.assertEqual(b1.version, "builtin")
+
+        # Explicit regex backend
+        cfg_regex = {"scanning": {"secrets": {"backend": "regex"}}, "leak_patterns": ["pat1"]}
+        b2 = resolve_backend(cfg_regex)
+        self.assertIsInstance(b2, RegexBackend)
+        self.assertEqual(b2.name, "regex")
+        self.assertEqual(b2.patterns, ["pat1"])
+
+        # Unknown backend falls back to regex and prints warning to stderr
+        cfg_unknown = {"scanning": {"secrets": {"backend": "unknown_scanner"}}}
+        with io.StringIO() as fake_stderr, redirect_stderr(fake_stderr):
+            b3 = resolve_backend(cfg_unknown)
+            warning_output = fake_stderr.getvalue()
+
+        self.assertIsInstance(b3, RegexBackend)
+        self.assertEqual(b3.name, "regex")
+        self.assertIn(
+            "WARNING: Unknown scan backend 'unknown_scanner', falling back to regex (degraded)",
+            warning_output,
+        )
+
+    def test_receipt_includes_backend_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subprocess.run(["git", "init"], cwd=temp_dir, check=True, capture_output=True)
+            f = Path(temp_dir) / "main.cpp"
+            f.write_text("int x = 1;\n")
+            subprocess.run(["git", "add", "main.cpp"], cwd=temp_dir, check=True, capture_output=True)
+
+            backend = RegexBackend(["pat1", "pat2"])
+            ret = stamp_receipt(temp_dir, "PASS", backend=backend)
+            self.assertEqual(ret, 0)
+
+            receipt_file = Path(temp_dir) / ".git" / "leak_audit_receipt.json"
+            self.assertTrue(receipt_file.is_file())
+            data = json.loads(receipt_file.read_text(encoding="utf-8"))
+
+            self.assertEqual(data["status"], "PASS")
+            self.assertIn("tree_sha", data)
+            self.assertIn("timestamp", data)
+            self.assertEqual(data["backend"], "regex")
+            self.assertEqual(data["backend_version"], "builtin")
+            self.assertEqual(data["config_hash"], backend.config_hash())
+            self.assertIs(data["validate"], False)
+
+    def test_scan_violation_str_format(self):
+        violation = ScanViolation(
+            path="src/config.py",
+            line=42,
+            rule="AKIA[0-9A-Z]{16}",
+            redacted_match="AKIA…",
+        )
+        self.assertEqual(str(violation), "src/config.py:42 [AKIA[0-9A-Z]{16}] -> AKIA…")
+
+    def test_regex_backend_history_scope_raises_not_implemented(self):
+        backend = RegexBackend()
+        with self.assertRaises(NotImplementedError):
+            backend.scan(".", ScanScope.HISTORY)
+
+    def test_cli_scan_only_output_shows_backend(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subprocess.run(["git", "init"], cwd=temp_dir, check=True, capture_output=True)
+            clean_file = Path(temp_dir) / "hello.cpp"
+            clean_file.write_text("int main() { return 0; }\n")
+            subprocess.run(["git", "add", "hello.cpp"], cwd=temp_dir, check=True, capture_output=True)
+
+            cfg_file = Path(temp_dir) / "test_config.json"
+            cfg_file.write_text(json.dumps(TEST_CONFIG))
+
+            cmd = [
+                sys.executable,
+                str(GATE_SCRIPT),
+                "--scan-only",
+                temp_dir,
+                "--config",
+                str(cfg_file),
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0)
+            self.assertIn("backend=regex (degraded)", proc.stdout)
 
 
 if __name__ == "__main__":
