@@ -29,6 +29,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import unicodedata
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -256,6 +257,22 @@ def redact_leaks_from_item(
     return redacted
 
 
+def _strip_format_controls(text: str) -> str:
+    """Strip Unicode format-control characters (category Cf) except ZWJ between emoji."""
+    result = []
+    for i, ch in enumerate(text):
+        cat = unicodedata.category(ch)
+        if cat == "Cf":
+            if ch == '\u200d':
+                prev_ch = text[i-1] if i > 0 else ''
+                next_ch = text[i+1] if i < len(text)-1 else ''
+                if prev_ch and ord(prev_ch) > 0x2000 and next_ch and ord(next_ch) > 0x2000:
+                    result.append(ch)
+                    continue
+            continue
+        result.append(ch)
+    return ''.join(result)
+
 def normalise_visible_content(text: str) -> str:
     """Normalises visible content by stripping non-allowlisted HTML comments,
     Unicode tag characters (ASCII smuggling), zero-width characters, and bidi overrides.
@@ -264,11 +281,26 @@ def normalise_visible_content(text: str) -> str:
         return "" if text is None else str(text)
     if not text:
         return text
-    cleaned = HTML_COMMENT_REGEX.sub(
-        lambda m: m.group(0) if ALLOWLISTED_TAG_REGEX.match(m.group(0)) else "",
-        text,
-    )
-    return UNICODE_HIDDEN_REGEX.sub("", cleaned)
+
+    cleaned = text
+    idx = cleaned.find("<!--")
+    while idx != -1:
+        end_idx = cleaned.find("-->", idx)
+        if end_idx == -1:
+            cleaned = cleaned[:idx]
+            break
+        else:
+            comment = cleaned[idx:end_idx+3]
+            if ALLOWLISTED_TAG_REGEX.match(comment):
+                idx = cleaned.find("<!--", end_idx)
+            else:
+                cleaned = cleaned[:idx] + cleaned[end_idx+3:]
+                idx = cleaned.find("<!--", idx)
+
+    cleaned = re.sub(r"\[//\]:\s*#\s*\([^)]*\)", "", cleaned)
+    cleaned = re.sub(r"[\ufe00-\ufe0f\U000e0100-\U000e01ef]", "", cleaned)
+    
+    return _strip_format_controls(cleaned)
 
 
 def detect_hidden_content(raw: str, normalised: str) -> bool:
@@ -750,9 +782,9 @@ def sanitize_unapproved_item(
     if "body" in item:
         sanitized["body"] = REDACTED_PLACEHOLDER
     if "comments" in item:
-        sanitized["comments"] = [] if quarantined else filter_comments_list(item.get("comments") or [], trusted, None)
+        sanitized["comments"] = [] if quarantined else _apply_content_normalisation({"comments": filter_comments_list(item.get("comments") or [], trusted, None)})["comments"]
     if "reviews" in item:
-        sanitized["reviews"] = [] if quarantined else filter_comments_list(item.get("reviews") or [], trusted, None)
+        sanitized["reviews"] = [] if quarantined else _apply_content_normalisation({"reviews": filter_comments_list(item.get("reviews") or [], trusted, None)})["reviews"]
     return sanitized
 
 
@@ -826,6 +858,8 @@ def evaluate_and_sanitize_item(
         sanitized = _apply_content_normalisation(sanitized)
         if leak_patterns:
             sanitized = redact_leaks_from_item(sanitized, leak_patterns)
+        if sanitized.get("has_hidden_content"):
+            sanitized["approval_status"] = "HIDDEN_CONTENT"
         return True, "TRUSTED_AUTHOR", sanitized
 
     # External author: requires a valid maintainer 'approved' comment
@@ -893,6 +927,8 @@ def evaluate_and_sanitize_item(
     sanitized = _apply_content_normalisation(sanitized)
     if leak_patterns:
         sanitized = redact_leaks_from_item(sanitized, leak_patterns)
+    if sanitized.get("has_hidden_content"):
+        sanitized["approval_status"] = "HIDDEN_CONTENT"
     return True, "APPROVED_BY_MAINTAINER", sanitized
 
 
@@ -948,10 +984,14 @@ def sanitize_inline_pr_comments(
             if isinstance(c, dict) and "body" in c and isinstance(c["body"], str):
                 c_copy = dict(c)
                 c_copy["body"] = redact_leaks_from_text(c_copy["body"], leak_patterns)
+                c_copy["body"] = normalise_visible_content(c_copy["body"])
                 cleaned.append(c_copy)
             else:
                 cleaned.append(c)
         return cleaned
+    for c in res:
+        if isinstance(c, dict) and "body" in c and isinstance(c["body"], str):
+            c["body"] = normalise_visible_content(c["body"])
     return res
 
 
@@ -1304,7 +1344,10 @@ def _project_requested_fields(
 
     if not requested_fields:
         return item
-    return {k: item[k] for k in requested_fields if k in item}
+    res = {k: item[k] for k in requested_fields if k in item}
+    if item.get("has_hidden_content"):
+        res["has_hidden_content"] = True
+    return res
 
 
 def _extract_flag_value(args: Sequence[str], flag: str) -> tuple[str | None, list[str]]:

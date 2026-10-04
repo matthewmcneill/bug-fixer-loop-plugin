@@ -92,7 +92,13 @@ APPROVAL_ECHO_PIPE_REGEX = re.compile(
 )
 RAW_GH_READ_REGEX = re.compile(r"(?:^|[;&|]\s*|\$\(\s*|\s)gh\s+(?:issue|pr)\s+(?:list|view)\b")
 OUTBOUND_GH_CMD_REGEX = re.compile(
-    r"(?:^|[;&|]\s*|\s)gh\s+(?:issue\s+comment|pr\s+(?:create|edit|comment)|api)\b"
+    r"(?:^|[;&|]\s*|\s)gh\s+(?:"
+    r"issue\s+(?:create|edit|comment)"
+    r"|pr\s+(?:create|edit|comment|review)"
+    r"|gist\s+create"
+    r"|release\s+create"
+    r"|api"
+    r")\b"
 )
 
 HOST_SECURITY_SCRIPTS = frozenset({"pre_tool_gate.py", "safe_ingest.py"})
@@ -227,9 +233,43 @@ def _strip_quotes(s: str) -> str:
 
 
 def extract_outbound_body(cmd: str) -> str | None:
-    """Extracts outbound body content from gh commands."""
+    """Extracts outbound body/title content from gh commands."""
     if not cmd:
         return None
+        
+    extracted = []
+
+    m_pipe = re.search(r"""(?:^|[;&|]\s*)echo\s+(?:-[a-zA-Z]+\s+)*(?:(["'])(.*?)(?:\1|$)|(.*?))\s*\|\s*gh\b""", cmd, re.DOTALL)
+    if m_pipe:
+        val = m_pipe.group(2) if m_pipe.group(2) is not None else m_pipe.group(3)
+        extracted.append(_strip_quotes(val))
+
+    for m_body in re.finditer(r"""(?:--body|-b|--title|-t)(?:\s+|=)(?:(["'])(.*?)(?:\1|$)|(\S+))""", cmd, re.DOTALL):
+        val = m_body.group(2) if m_body.group(2) is not None else m_body.group(3)
+        extracted.append(_strip_quotes(val))
+
+    for m_field in re.finditer(r"""(?:-f|-F|--field|--raw-field)(?:\s+|=)?["']?body=(?:(["'])(.*?)(?:\1|$)|([^"'\s]+))""", cmd, re.DOTALL):
+        val = m_field.group(2) if m_field.group(2) is not None else m_field.group(3)
+        extracted.append(_strip_quotes(val))
+
+    m_file = re.search(r"""--body-file(?:\s+|=)(?:(["'])(.*?)(?:\1|$)|(\S+))""", cmd)
+    if m_file:
+        val = m_file.group(2) if m_file.group(2) is not None else m_file.group(3)
+        if val == "-":
+            extracted.append("[UNSCANNABLE_STDIN_BODY]")
+        elif val:
+            fpath = Path(_strip_quotes(val)).expanduser()
+            if not fpath.is_absolute():
+                fpath = Path.cwd() / fpath
+            try:
+                if fpath.is_file():
+                    extracted.append(fpath.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:
+                pass
+
+    if extracted:
+        return "\n".join(extracted)
+    return None
 
     try:
         tokens = shlex.split(cmd)
@@ -442,30 +482,17 @@ class ScanScope(Enum):
     HISTORY = "history"  # git log (CI audit)
 
 
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
 class ScanViolation:
-    def __init__(self, path: str, line: int, rule: str, redacted_match: str):
-        self.path = path
-        self.line = line
-        self.rule = rule
-        self.redacted_match = redacted_match
+    path: str
+    line: int
+    rule: str
+    redacted_match: str
 
     def __str__(self) -> str:
         return f"{self.path}:{self.line} [{self.rule}] -> {self.redacted_match}"
-
-    def __repr__(self) -> str:
-        return f"ScanViolation({self.path!r}, {self.line!r}, {self.rule!r}, {self.redacted_match!r})"
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, ScanViolation):
-            return (
-                self.path == other.path
-                and self.line == other.line
-                and self.rule == other.rule
-                and self.redacted_match == other.redacted_match
-            )
-        if isinstance(other, str):
-            return str(self) == other
-        return NotImplemented
 
 
 @runtime_checkable
@@ -605,7 +632,7 @@ class BetterleaksBackend:
         if scope == ScanScope.STAGED:
             cmd.extend(["git", "--staged", repo_dir])
         elif scope == ScanScope.TREE:
-            cmd.extend(["dir", repo_dir])
+            cmd.extend(["fs", repo_dir])
         elif scope == ScanScope.HISTORY:
             cmd.extend(["git", repo_dir])
         else:
@@ -616,8 +643,9 @@ class BetterleaksBackend:
             "--analyze=false",
             "--redact",
             "--no-banner",
-            "--report-format", "json",
-            "--exit-code", "0"
+            "-o", "-",
+            "--exit-code", "1",
+            "--ignore-file", "/dev/null"
         ])
         if self.config_path:
             cmd.extend(["--config", self.config_path])
@@ -629,7 +657,6 @@ class BetterleaksBackend:
         scope: ScanScope,
         exclude_paths: list[str] | None = None,
     ) -> list[ScanViolation]:
-        
         if isinstance(scope, str):
             scope = ScanScope(scope)
             
@@ -639,22 +666,33 @@ class BetterleaksBackend:
         env = self._build_env()
         
         try:
-            out = subprocess.check_output(
-                cmd, env=env, stderr=subprocess.DEVNULL, text=True
-            )
+            out = subprocess.check_output(cmd, env=env, stderr=subprocess.PIPE, text=True)
         except subprocess.CalledProcessError as e:
-            out = e.stdout
-        except Exception:
-            return []
+            if e.returncode == 1:
+                out = e.stdout
+            else:
+                raise RuntimeError(f"Betterleaks failed: {e.stderr}")
+
+        if not out.strip():
+            raise RuntimeError("Betterleaks produced unparseable output — failing closed")
 
         try:
             data = json.loads(out)
         except json.JSONDecodeError:
-            return []
+            raise RuntimeError("Betterleaks produced unparseable output — failing closed")
+            
+        if not isinstance(data, dict) or "findings" not in data:
+            raise RuntimeError("Betterleaks output missing expected envelope structure")
+        scan_state = data.get("scan", {}).get("state", "")
+        if scan_state != "complete":
+            raise RuntimeError(f"Betterleaks scan did not complete (state={scan_state})")
+        
+        self.scanned_count = data.get("scan", {}).get("files_scanned", 0)
+        findings = data.get("findings", [])
             
         violations = []
-        for match in data:
-            path = match.get("path", "")
+        for finding in findings:
+            path = finding.get("location", {}).get("path", "")
             if not path or path.startswith(".git/") or path.startswith("_agents/"):
                 continue
 
@@ -662,15 +700,15 @@ class BetterleaksBackend:
                 self.excluded_count += 1
                 continue
                 
-            self.scanned_count += 1
-            
-            redacted_match = match.get("redacted_match", match.get("redacted", ""))
+            line = finding.get("location", {}).get("start_line", 0)
+            rule = finding.get("rule_id", "unknown")
+            redacted_match = finding.get("match", {}).get("value", "")
             
             violations.append(
                 ScanViolation(
                     path=path,
-                    line=match.get("line", 0),
-                    rule=match.get("rule_id", match.get("rule", "unknown")),
+                    line=line,
+                    rule=rule,
                     redacted_match=redacted_match,
                 )
             )
@@ -678,8 +716,21 @@ class BetterleaksBackend:
         return violations
 
     def config_hash(self) -> str:
-        if not self.config_path or not os.path.isfile(self.config_path):
-            return hashlib.sha256(b"").hexdigest()
+        if self.config_path and os.path.isfile(self.config_path):
+            try:
+                with open(self.config_path, "rb") as f:
+                    return hashlib.sha256(f.read()).hexdigest()
+            except Exception:
+                pass
+        try:
+            out = subprocess.check_output(
+                ["betterleaks", "config", "hash"], stderr=subprocess.DEVNULL, text=True
+            ).strip()
+            if out:
+                return out
+        except Exception:
+            pass
+        return hashlib.sha256(b"default-embedded-ruleset").hexdigest()
         try:
             with open(self.config_path, "rb") as f:
                 return hashlib.sha256(f.read()).hexdigest()
@@ -698,13 +749,17 @@ def resolve_backend(
     scanning_cfg = config.get("scanning") if isinstance(config.get("scanning"), dict) else {}
     secrets_cfg = scanning_cfg.get("secrets") if isinstance(scanning_cfg.get("secrets"), dict) else {}
     
-    if "scanning" in config:
-        backend_name = secrets_cfg.get("backend", "betterleaks")
-    else:
-        backend_name = secrets_cfg.get("backend", "regex")
+    backend_name = secrets_cfg.get("backend", None)
 
     if patterns is None:
         patterns = list(config.get("leak_patterns", []))
+
+    if backend_name is None:
+        try:
+            subprocess.run(["betterleaks", "version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            backend_name = "betterleaks"
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            backend_name = "regex"
 
     if backend_name == "betterleaks":
         try:
@@ -727,12 +782,6 @@ def resolve_backend(
         f"WARNING: Unknown scan backend '{backend_name}', falling back to regex (degraded)\n"
     )
     return RegexBackend(patterns)
-
-    sys.stderr.write(
-        f"WARNING: Unknown scan backend '{backend_name}', falling back to regex (degraded)\n"
-    )
-    return RegexBackend(patterns)
-
 
 def scan_repository(
     repo_dir: str,
