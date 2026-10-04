@@ -28,6 +28,7 @@ from scripts.pre_tool_gate import (
     extract_outbound_body,
     resolve_backend,
     scan_repository,
+    normalise_config,
     stamp_receipt,
     verify_receipt,
 )
@@ -852,6 +853,172 @@ class TestPreToolGate(unittest.TestCase):
         
         self.assertIsInstance(backend, BetterleaksBackend)
         self.assertEqual(backend.config_path, "my.toml")
+
+    # WO4: Config v2 Scanning Namespace Tests
+    def test_normalise_config_v1_format(self):
+        v1_config = {
+            "$schema": "bug-fixer-loop-config-v1",
+            "leak_patterns": ["ya29\\.[A-Za-z0-9_-]+", "AKIA[0-9A-Z]{16}"],
+            "scan_exclude_paths": ["vendor/", "tests/"],
+        }
+        norm = normalise_config(v1_config)
+        self.assertIn("scanning", norm)
+        self.assertIn("secrets", norm["scanning"])
+        self.assertEqual(
+            norm["scanning"]["secrets"]["patterns"],
+            ["ya29\\.[A-Za-z0-9_-]+", "AKIA[0-9A-Z]{16}"],
+        )
+        self.assertEqual(
+            norm["scanning"]["secrets"]["exclude_paths"],
+            ["vendor/", "tests/"],
+        )
+        # Backwards compatibility checks
+        self.assertEqual(
+            norm["leak_patterns"],
+            ["ya29\\.[A-Za-z0-9_-]+", "AKIA[0-9A-Z]{16}"],
+        )
+        self.assertEqual(
+            norm["scan_exclude_paths"],
+            ["vendor/", "tests/"],
+        )
+
+    def test_normalise_config_v2_format(self):
+        v2_config = {
+            "$schema": "bug-fixer-loop-config-v2",
+            "scanning": {
+                "secrets": {
+                    "backend": "betterleaks",
+                    "patterns": ["ya29\\.[A-Za-z0-9_-]+"],
+                    "exclude_paths": ["vendor/"],
+                    "betterleaks": {
+                        "config_path": ".betterleaks.toml",
+                    },
+                    "trufflehog": {
+                        "verify": False,
+                    },
+                },
+                "injection": {
+                    "enabled": False,
+                    "provider": "model_armor",
+                    "fail_open": True,
+                    "model_armor": {
+                        "project": "",
+                        "location": "us-central1",
+                        "service_account": "",
+                    },
+                },
+            },
+        }
+        norm = normalise_config(v2_config)
+        self.assertEqual(norm["scanning"], v2_config["scanning"])
+        self.assertEqual(norm["scanning"]["secrets"]["backend"], "betterleaks")
+        self.assertEqual(norm["scanning"]["secrets"]["patterns"], ["ya29\\.[A-Za-z0-9_-]+"])
+        self.assertEqual(norm["scanning"]["secrets"]["exclude_paths"], ["vendor/"])
+        self.assertEqual(
+            norm["scanning"]["secrets"]["betterleaks"]["config_path"],
+            ".betterleaks.toml",
+        )
+        self.assertFalse(norm["scanning"]["secrets"]["trufflehog"]["verify"])
+        self.assertFalse(norm["scanning"]["injection"]["enabled"])
+
+    @unittest.mock.patch("subprocess.run")
+    def test_resolve_backend_reads_normalised_v2_config(self, mock_run):
+        from scripts.pre_tool_gate import BetterleaksBackend, RegexBackend, resolve_backend
+
+        mock_run.return_value = None
+
+        v2_config = {
+            "$schema": "bug-fixer-loop-config-v2",
+            "scanning": {
+                "secrets": {
+                    "backend": "betterleaks",
+                    "patterns": ["my-secret-pattern"],
+                    "betterleaks": {
+                        "config_path": ".betterleaks.toml",
+                    },
+                },
+            },
+        }
+        backend = resolve_backend(v2_config)
+        self.assertIsInstance(backend, BetterleaksBackend)
+        self.assertEqual(backend.config_path, ".betterleaks.toml")
+
+        # Fallback to regex when backend="regex" using v2 schema patterns
+        v2_regex_config = {
+            "scanning": {
+                "secrets": {
+                    "backend": "regex",
+                    "patterns": ["custom-regex-pattern"],
+                },
+            },
+        }
+        regex_backend = resolve_backend(v2_regex_config)
+        self.assertIsInstance(regex_backend, RegexBackend)
+        self.assertEqual(regex_backend.patterns, ["custom-regex-pattern"])
+
+    def test_gate_a_deny_betterleaks_config_files(self):
+        for target in (
+            ".betterleaks.toml",
+            ".betterleaksignore",
+            "sub/.betterleaks.toml",
+            "/abs/path/.betterleaksignore",
+        ):
+            payload_write = {
+                "toolCall": {
+                    "name": "write_to_file",
+                    "args": {"TargetFile": target},
+                }
+            }
+            res_write = self._run_gate_stdin(payload_write)
+            self.assertEqual(res_write["decision"], "deny")
+            self.assertEqual(res_write["reason"], REASON_PROTECTED_FILE)
+
+            payload_replace = {
+                "toolCall": {
+                    "name": "replace_file_content",
+                    "args": {"TargetFile": target},
+                }
+            }
+            res_replace = self._run_gate_stdin(payload_replace)
+            self.assertEqual(res_replace["decision"], "deny")
+            self.assertEqual(res_replace["reason"], REASON_PROTECTED_FILE)
+
+    def test_v1_config_backward_compatibility_scan_repository(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subprocess.run(["git", "init"], cwd=temp_dir, check=True, capture_output=True)
+
+            leak_file = Path(temp_dir) / "leak.txt"
+            leak_file.write_text("secret = AKIAIOSFODNN7EXAMPLE\n")
+
+            test_leak_file = Path(temp_dir) / "tests" / "test_leak.txt"
+            test_leak_file.parent.mkdir(parents=True, exist_ok=True)
+            test_leak_file.write_text("test_secret = AKIAIOSFODNN7EXAMPLE\n")
+
+            subprocess.run(
+                ["git", "add", "leak.txt", "tests/test_leak.txt"],
+                cwd=temp_dir,
+                check=True,
+                capture_output=True,
+            )
+
+            v1_config = {
+                "$schema": "bug-fixer-loop-config-v1",
+                "leak_patterns": ["AKIA[0-9A-Z]{16}"],
+                "scan_exclude_paths": ["tests/"],
+            }
+
+            import scripts.pre_tool_gate as pre_tool_gate
+
+            violations, scanned, excluded = pre_tool_gate.scan_repository(
+                temp_dir,
+                patterns=v1_config["leak_patterns"],
+                exclude_paths=v1_config["scan_exclude_paths"],
+                config=v1_config,
+            )
+            self.assertEqual(len(violations), 1)
+            self.assertIn("leak.txt", violations[0])
+            self.assertEqual(excluded, 1)
+            self.assertEqual(scanned, 1)
 
 
 if __name__ == "__main__":

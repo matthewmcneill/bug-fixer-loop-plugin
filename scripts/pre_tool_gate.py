@@ -24,6 +24,7 @@ Enforces safety, boundary, and immutability invariants:
 from __future__ import annotations
 
 import argparse
+import copy
 from datetime import UTC, datetime
 from enum import Enum
 import hashlib
@@ -102,6 +103,43 @@ OUTBOUND_GH_CMD_REGEX = re.compile(
 )
 
 HOST_SECURITY_SCRIPTS = frozenset({"pre_tool_gate.py", "safe_ingest.py"})
+SCANNER_PROTECTED_FILES = frozenset({".betterleaks.toml", ".betterleaksignore"})
+
+
+def normalise_config(config: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalises config dictionary so callers can always access scanning namespace.
+
+    Supports both v1 (flat leak_patterns/scan_exclude_paths) and v2 (scanning namespace) schemas.
+    """
+    if not isinstance(config, dict):
+        return {}
+    res = copy.deepcopy(config)
+    if "scanning" in res and isinstance(res["scanning"], dict):
+        scanning = res["scanning"]
+        if "secrets" not in scanning or not isinstance(scanning["secrets"], dict):
+            scanning["secrets"] = {}
+        secrets = scanning["secrets"]
+        if "patterns" not in secrets:
+            secrets["patterns"] = list(res.get("leak_patterns", []))
+        if "exclude_paths" not in secrets:
+            secrets["exclude_paths"] = list(res.get("scan_exclude_paths", []))
+    else:
+        res["scanning"] = {
+            "secrets": {
+                "patterns": list(res.get("leak_patterns", [])),
+                "exclude_paths": list(res.get("scan_exclude_paths", [])),
+            }
+        }
+
+    # Ensure backwards compatibility for legacy callers expecting top-level fields
+    secrets = res.get("scanning", {}).get("secrets", {})
+    if isinstance(secrets, dict):
+        if "leak_patterns" not in res and "patterns" in secrets:
+            res["leak_patterns"] = secrets["patterns"]
+        if "scan_exclude_paths" not in res and "exclude_paths" in secrets:
+            res["scan_exclude_paths"] = secrets["exclude_paths"]
+
+    return res
 
 
 def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
@@ -128,19 +166,19 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
                 break
 
     if target_path is None or not target_path.is_file():
-        return {
+        return normalise_config({
             "spec_file_path": "docs/design_specification.md",
             "protected_files": ["docs/design_specification.md"],
             "leak_patterns": [],
             "scan_exclude_paths": ["tests/"],
-        }
+        })
 
     try:
         with open(target_path, "r", encoding="utf-8") as f:
             data = json.load(f)
             if not isinstance(data, dict):
                 raise ValueError(f"Config at {target_path} must be a JSON object")
-            return data
+            return normalise_config(data)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON in config file {target_path}: {exc}") from exc
 
@@ -217,7 +255,8 @@ def evaluate_gate_a(
         return {"decision": "deny", "reason": REASON_HOST_SCRIPT}
     if spec_file_path and is_path_match(target_file, spec_file_path, repo_dir):
         return {"decision": "deny", "reason": REASON_SPEC_IMMUTABLE}
-    for pf in protected_files:
+    all_protected = list(protected_files) + sorted(SCANNER_PROTECTED_FILES)
+    for pf in all_protected:
         if pf and is_path_match(target_file, pf, repo_dir):
             return {"decision": "deny", "reason": REASON_PROTECTED_FILE}
 
@@ -748,11 +787,14 @@ def resolve_backend(
 
     scanning_cfg = config.get("scanning") if isinstance(config.get("scanning"), dict) else {}
     secrets_cfg = scanning_cfg.get("secrets") if isinstance(scanning_cfg.get("secrets"), dict) else {}
-    
+
     backend_name = secrets_cfg.get("backend", None)
 
     if patterns is None:
-        patterns = list(config.get("leak_patterns", []))
+        patterns = secrets_cfg.get("patterns")
+        if patterns is None:
+            patterns = config.get("leak_patterns", [])
+    patterns = list(patterns or [])
 
     if backend_name is None:
         try:
@@ -769,7 +811,12 @@ def resolve_backend(
                 stderr=subprocess.DEVNULL,
                 check=True
             )
-            config_path = secrets_cfg.get("config_path", secrets_cfg.get("config"))
+            betterleaks_cfg = secrets_cfg.get("betterleaks") if isinstance(secrets_cfg.get("betterleaks"), dict) else {}
+            config_path = (
+                betterleaks_cfg.get("config_path")
+                or secrets_cfg.get("config_path")
+                or secrets_cfg.get("config")
+            )
             return BetterleaksBackend(config_path)
         except (subprocess.CalledProcessError, FileNotFoundError):
             sys.stderr.write("WARNING: betterleaks not found, falling back to regex (degraded)\n")

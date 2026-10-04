@@ -1,5 +1,5 @@
 {
-  "$schema": "bug-fixer-loop-config-v1",
+  "$schema": "bug-fixer-loop-config-v2",
   "target_repo": "matthewmcneill/bug-fixer-loop-plugin",
   "maintainer": "matthewmcneill",
   "trusted_users": [],
@@ -7,11 +7,27 @@
   "protected_files": [
     "docs/design_specification.md"
   ],
-  "leak_patterns": [
-    "ya29\\.[A-Za-z0-9_-]+",
-    "AKIA[0-9A-Z]{16}",
-    "-----BEGIN (RSA |EC )?PRIVATE KEY-----"
-  ],
+  "scanning": {
+    "secrets": {
+      "backend": "betterleaks",
+      "patterns": [
+        "ya29\\.[A-Za-z0-9_-]+",
+        "AKIA[0-9A-Z]{16}",
+        "-----BEGIN (RSA |EC )?PRIVATE KEY-----"
+      ],
+      "exclude_paths": []
+    },
+    "injection": {
+      "enabled": false,
+      "provider": "model_armor",
+      "fail_open": true,
+      "model_armor": {
+        "project": "",
+        "location": "us-central1",
+        "service_account": ""
+      }
+    }
+  },
   "max_concurrent_prs": 4,
   "exclusion_labels": [
     "bug-fixer:human:required",
