@@ -691,8 +691,8 @@ def _recover(dispatch: dict, dispatches_dir: Path, target_repo: str,
 
 
 def check_orphaned_prs(target_repo: str, log_fn):
-    """Warn on and auto-heal draft PRs matching the [BugFixer] convention that are missing required labels."""
-    r = _gh("pr", "list", "--repo", target_repo, "--state", "open", "--draft", "--json", "number,title,labels")
+    """Warn on and auto-heal PRs matching the [BugFixer] convention that are missing required labels."""
+    r = _gh("pr", "list", "--repo", target_repo, "--state", "open", "--json", "number,title,labels")
     if r.returncode != 0:
         return
     try:
@@ -713,7 +713,7 @@ def check_orphaned_prs(target_repo: str, log_fn):
             _gh("pr", "edit", str(pr_num), "--repo", target_repo, "--add-label", "bug-fixer:system:pr")
             labels.append("bug-fixer:system:pr")
 
-        # Check if draft PR is missing an active review state label (limbo prevention)
+        # Check if PR is missing an active review state label (limbo prevention)
         has_review_status = any(l in labels for l in (
             "bug-fixer:architect:awaiting-review",
             "bug-fixer:engineer:needs-iteration",
@@ -721,7 +721,7 @@ def check_orphaned_prs(target_repo: str, log_fn):
             "bug-fixer:human:needs-intervention",
         ))
         if not has_review_status:
-            log_fn(f"Auto-healing PR #{pr_num}: draft bug-fixer PR missing review status label. Adding bug-fixer:architect:awaiting-review.")
+            log_fn(f"Auto-healing PR #{pr_num}: bug-fixer PR missing review status label. Adding bug-fixer:architect:awaiting-review.")
             _gh("pr", "edit", str(pr_num), "--repo", target_repo, "--add-label", "bug-fixer:architect:awaiting-review")
 
 
