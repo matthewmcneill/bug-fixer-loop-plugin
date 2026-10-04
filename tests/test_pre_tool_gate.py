@@ -10,6 +10,7 @@ from typing import Any
 from scripts.pre_tool_gate import (
     REASON_APPROVAL_INJECTION,
     REASON_AUTO_MERGE,
+    REASON_EGRESS_LEAK,
     REASON_HOST_SCRIPT,
     REASON_ISSUE_REOPEN,
     REASON_PROTECTED_FILE,
@@ -17,6 +18,8 @@ from scripts.pre_tool_gate import (
     REASON_SELF_APPROVAL,
     REASON_SHELL_MUTATION,
     REASON_SPEC_IMMUTABLE,
+    check_egress_leaks,
+    extract_outbound_body,
 )
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
@@ -427,6 +430,145 @@ class TestPreToolGate(unittest.TestCase):
             self.assertEqual(proc.returncode, 0)
             self.assertIn("LEAK SCAN CLEAN", proc.stdout)
             self.assertIn("1 excluded", proc.stdout)
+
+    # Egress Leak Gate Tests (WO1)
+    def test_egress_leak_deny_gh_issue_comment(self):
+        payload = {
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": 'gh issue comment 42 --body "contains AKIAIOSFODNN7EXAMPLE"'},
+            }
+        }
+        res = self._run_gate_stdin(payload)
+        self.assertEqual(res["decision"], "deny")
+        self.assertEqual(res["reason"], REASON_EGRESS_LEAK)
+
+    def test_egress_leak_allow_gh_pr_create_safe(self):
+        payload = {
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": 'gh pr create --body "safe content"'},
+            }
+        }
+        res = self._run_gate_stdin(payload)
+        self.assertEqual(res["decision"], "allow")
+
+    def test_egress_leak_deny_gh_pr_comment_flag_b(self):
+        payload = {
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": 'gh pr comment 5 -b "has ya29.token-here"'},
+            }
+        }
+        res = self._run_gate_stdin(payload)
+        self.assertEqual(res["decision"], "deny")
+        self.assertEqual(res["reason"], REASON_EGRESS_LEAK)
+
+    def test_egress_leak_deny_gh_api_field_body(self):
+        payload = {
+            "toolCall": {
+                "name": "run_command",
+                "args": {
+                    "CommandLine": 'gh api repos/owner/repo/issues/1/comments -f body="AKIA1234567890ABCDEF"'
+                },
+            }
+        }
+        res = self._run_gate_stdin(payload)
+        self.assertEqual(res["decision"], "deny")
+        self.assertEqual(res["reason"], REASON_EGRESS_LEAK)
+
+    def test_extract_outbound_body_forms(self):
+        self.assertEqual(
+            extract_outbound_body('gh issue comment 42 --body "hello world"'),
+            "hello world",
+        )
+        self.assertEqual(
+            extract_outbound_body("gh pr comment 5 -b 'short flag body'"),
+            "short flag body",
+        )
+        self.assertEqual(
+            extract_outbound_body('gh api repos/owner/repo/issues/1/comments -f body="api body"'),
+            "api body",
+        )
+        with tempfile.NamedTemporaryFile("w", delete=False) as tf:
+            tf.write("file content for body")
+            temp_path = tf.name
+        try:
+            self.assertEqual(
+                extract_outbound_body(f"gh issue comment 42 --body-file {temp_path}"),
+                "file content for body",
+            )
+            self.assertIsNone(
+                extract_outbound_body("gh issue comment 42 --body-file /nonexistent/file/path.txt")
+            )
+        finally:
+            os.unlink(temp_path)
+
+        # Pipe echo form
+        self.assertEqual(
+            extract_outbound_body('echo "piped message" | gh issue comment 42'),
+            "piped message",
+        )
+        # Command with no body
+        self.assertIsNone(extract_outbound_body("gh pr list"))
+
+    def test_egress_leak_allow_command_with_no_outbound_body(self):
+        # check_egress_leaks returns False for commands with no outbound body
+        self.assertFalse(check_egress_leaks("gh pr list", TEST_CONFIG["leak_patterns"]))
+        # Outbound gh command without a body is allowed through the gate
+        payload = {
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": "gh pr checkout 42"},
+            }
+        }
+        res = self._run_gate_stdin(payload)
+        self.assertEqual(res["decision"], "allow")
+
+    def test_egress_leak_non_gh_commands_unaffected(self):
+        # Non-gh commands containing secret-matching text are not affected
+        for cmd in (
+            'git commit -m "contains AKIAIOSFODNN7EXAMPLE"',
+            'echo "contains AKIAIOSFODNN7EXAMPLE"',
+            'grep "AKIAIOSFODNN7EXAMPLE" /path/to/file',
+        ):
+            self.assertFalse(check_egress_leaks(cmd, TEST_CONFIG["leak_patterns"]))
+            payload = {
+                "toolCall": {
+                    "name": "run_command",
+                    "args": {"CommandLine": cmd},
+                }
+            }
+            res = self._run_gate_stdin(payload)
+            self.assertEqual(res["decision"], "allow")
+
+    def test_egress_leak_deny_echo_pipe(self):
+        payload = {
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": 'echo "contains AKIAIOSFODNN7EXAMPLE" | gh issue comment 42'},
+            }
+        }
+        res = self._run_gate_stdin(payload)
+        self.assertEqual(res["decision"], "deny")
+        self.assertEqual(res["reason"], REASON_EGRESS_LEAK)
+
+    def test_egress_leak_deny_body_file(self):
+        with tempfile.NamedTemporaryFile("w", delete=False) as tf:
+            tf.write("leaked key AKIAIOSFODNN7EXAMPLE in file")
+            temp_path = tf.name
+        try:
+            payload = {
+                "toolCall": {
+                    "name": "run_command",
+                    "args": {"CommandLine": f"gh issue comment 42 --body-file {temp_path}"},
+                }
+            }
+            res = self._run_gate_stdin(payload)
+            self.assertEqual(res["decision"], "deny")
+            self.assertEqual(res["reason"], REASON_EGRESS_LEAK)
+        finally:
+            os.unlink(temp_path)
 
 
 if __name__ == "__main__":
