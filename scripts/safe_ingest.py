@@ -37,6 +37,14 @@ APPROVAL_COMMENT_REGEX = re.compile(r"^\s*/?approved?\s*[.!]*\s*$", re.IGNORECAS
 REPO_SLUG_REGEX = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GRAPHQL_PAGE_LIMIT = 100
 
+ALLOWLISTED_TAG_REGEX = re.compile(
+    r"^<!--\s*(?:agy_arch_conv_id|agy_dev_conv_id):\s*[a-zA-Z0-9_-]+\s*-->$"
+)
+HTML_COMMENT_REGEX = re.compile(r"<!--[\s\S]*?-->")
+UNICODE_HIDDEN_REGEX = re.compile(
+    r"[\U000e0000-\U000e007f\u200b-\u200d\ufeff\u202a-\u202e\u2066-\u2069]"
+)
+
 QUARANTINE_LABELS = frozenset({"security:prompt-injection"})
 REDACTED_PLACEHOLDER = "[REDACTED: UNAPPROVED EXTERNAL CONTENT]"
 
@@ -96,6 +104,7 @@ SAFE_STRUCTURAL_FIELDS = frozenset(
         "is_quarantined",
         "approval_status",
         "is_approved",
+        "has_hidden_content",
         "title",
         "body",
         "comments",
@@ -245,6 +254,84 @@ def redact_leaks_from_item(
                 new_reviews.append(r)
         redacted["reviews"] = new_reviews
     return redacted
+
+
+def normalise_visible_content(text: str) -> str:
+    """Normalises visible content by stripping non-allowlisted HTML comments,
+    Unicode tag characters (ASCII smuggling), zero-width characters, and bidi overrides.
+    """
+    if not isinstance(text, str):
+        return "" if text is None else str(text)
+    if not text:
+        return text
+    cleaned = HTML_COMMENT_REGEX.sub(
+        lambda m: m.group(0) if ALLOWLISTED_TAG_REGEX.match(m.group(0)) else "",
+        text,
+    )
+    return UNICODE_HIDDEN_REGEX.sub("", cleaned)
+
+
+def detect_hidden_content(raw: str, normalised: str) -> bool:
+    """Returns True if raw and normalised text differ materially (non-whitespace content stripped)."""
+    if not isinstance(raw, str) or not isinstance(normalised, str):
+        return False
+    return "".join(raw.split()) != "".join(normalised.split())
+
+
+def _apply_content_normalisation(sanitized: dict[str, Any]) -> dict[str, Any]:
+    """Applies visible content normalisation to title, body, comments, and reviews.
+
+    Sets 'has_hidden_content': True on sanitized if any hidden content was detected.
+    """
+    has_hidden = False
+    if "title" in sanitized and isinstance(sanitized["title"], str):
+        raw_title = sanitized["title"]
+        norm_title = normalise_visible_content(raw_title)
+        sanitized["title"] = norm_title
+        if detect_hidden_content(raw_title, norm_title):
+            has_hidden = True
+
+    if "body" in sanitized and isinstance(sanitized["body"], str):
+        raw_body = sanitized["body"]
+        norm_body = normalise_visible_content(raw_body)
+        sanitized["body"] = norm_body
+        if detect_hidden_content(raw_body, norm_body):
+            has_hidden = True
+
+    if "comments" in sanitized and isinstance(sanitized["comments"], list):
+        norm_comments = []
+        for c in sanitized["comments"]:
+            if isinstance(c, dict) and "body" in c and isinstance(c["body"], str):
+                c_copy = dict(c)
+                raw_c_body = c["body"]
+                norm_c_body = normalise_visible_content(raw_c_body)
+                c_copy["body"] = norm_c_body
+                norm_comments.append(c_copy)
+                if detect_hidden_content(raw_c_body, norm_c_body):
+                    has_hidden = True
+            else:
+                norm_comments.append(c)
+        sanitized["comments"] = norm_comments
+
+    if "reviews" in sanitized and isinstance(sanitized["reviews"], list):
+        norm_reviews = []
+        for r in sanitized["reviews"]:
+            if isinstance(r, dict) and "body" in r and isinstance(r["body"], str):
+                r_copy = dict(r)
+                raw_r_body = r["body"]
+                norm_r_body = normalise_visible_content(raw_r_body)
+                r_copy["body"] = norm_r_body
+                norm_reviews.append(r_copy)
+                if detect_hidden_content(raw_r_body, norm_r_body):
+                    has_hidden = True
+            else:
+                norm_reviews.append(r)
+        sanitized["reviews"] = norm_reviews
+
+    if has_hidden:
+        sanitized["has_hidden_content"] = True
+
+    return sanitized
 
 
 def is_valid_repo_slug(repo: str | None) -> bool:
@@ -736,6 +823,7 @@ def evaluate_and_sanitize_item(
             )
         if "reviews" in sanitized:
             sanitized["reviews"] = filter_comments_list(reviews, trusted_users, effective_approval_ts, comment_edit_map)
+        sanitized = _apply_content_normalisation(sanitized)
         if leak_patterns:
             sanitized = redact_leaks_from_item(sanitized, leak_patterns)
         return True, "TRUSTED_AUTHOR", sanitized
@@ -802,6 +890,7 @@ def evaluate_and_sanitize_item(
         sanitized["comments"] = filter_comments_list(comments, trusted_users, latest_approval_ts, comment_edit_map)
     if "reviews" in sanitized:
         sanitized["reviews"] = filter_comments_list(reviews, trusted_users, latest_approval_ts, comment_edit_map)
+    sanitized = _apply_content_normalisation(sanitized)
     if leak_patterns:
         sanitized = redact_leaks_from_item(sanitized, leak_patterns)
     return True, "APPROVED_BY_MAINTAINER", sanitized
