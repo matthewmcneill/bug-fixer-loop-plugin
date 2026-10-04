@@ -300,7 +300,24 @@ class TestPreToolGate(unittest.TestCase):
             proc = subprocess.run(cmd, capture_output=True, text=True)
             self.assertEqual(proc.returncode, 1)
             self.assertIn("LEAK SCAN FAILED", proc.stdout)
-            self.assertIn("AKIAIOSFODNN7EXAMPLE", proc.stdout)
+            self.assertNotIn("AKIAIOSFODNN7EXAMPLE", proc.stdout)
+            self.assertIn("AKIA…", proc.stdout)
+
+    def test_scan_repository_redacts_secrets(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subprocess.run(["git", "init"], cwd=temp_dir, check=True, capture_output=True)
+            leak_file = Path(temp_dir) / "secret.txt"
+            leak_file.write_text("secret is AKIAIOSFODNN7EXAMPLE\n")
+            subprocess.run(["git", "add", "secret.txt"], cwd=temp_dir, check=True, capture_output=True)
+
+            patterns = TEST_CONFIG["leak_patterns"]
+            import scripts.pre_tool_gate as pre_tool_gate
+            violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns)
+            self.assertEqual(len(violations), 1)
+            self.assertIn("secret.txt", violations[0])
+            self.assertIn("AKIA[0-9A-Z]{16}", violations[0])
+            self.assertNotIn("AKIAIOSFODNN7EXAMPLE", violations[0])
+            self.assertIn("AKIA…", violations[0])
 
     def test_cli_scan_only_passes_on_clean_directory(self):
         with tempfile.TemporaryDirectory() as temp_dir:
