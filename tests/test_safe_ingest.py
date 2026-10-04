@@ -67,7 +67,7 @@ class TestSafeIngest(unittest.TestCase):
     def test_load_config_default_resolution(self):
         # Config is no longer in plugin root; test via BUG_FIXER_CONFIG env var
         import tempfile
-        test_cfg = {"spec_file_path": "docs/design_specification.md", "leak_patterns": []}
+        test_cfg = {"spec_file_path": "docs/plugin-architecture.md", "leak_patterns": []}
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
             json.dump(test_cfg, tf)
             temp_path = tf.name

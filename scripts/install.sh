@@ -159,8 +159,8 @@ DEFAULTS = {
     "target_repo": "",
     "maintainer": "",
     "trusted_users": [],
-    "spec_file_path": "docs/design_specification.md",
-    "protected_files": ["docs/design_specification.md"],
+    "spec_file_path": "docs/plugin-architecture.md",
+    "protected_files": ["docs/plugin-architecture.md"],
     "leak_patterns": [
         "ya29\\\\.[A-Za-z0-9_-]+",
         "AKIA[0-9A-Z]{16}",

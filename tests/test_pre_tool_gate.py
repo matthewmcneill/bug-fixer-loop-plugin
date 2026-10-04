@@ -39,8 +39,8 @@ GATE_SCRIPT = PLUGIN_ROOT / "scripts" / "pre_tool_gate.py"
 
 # Test config (config.json no longer lives in plugin root — it's in the consumer workspace)
 TEST_CONFIG = {
-    "spec_file_path": "docs/design_specification.md",
-    "protected_files": ["docs/design_specification.md"],
+    "spec_file_path": "docs/plugin-architecture.md",
+    "protected_files": ["docs/plugin-architecture.md"],
     "leak_patterns": [
         "ya29\\.[A-Za-z0-9_-]+",
         "AKIA[0-9A-Z]{16}",
@@ -70,7 +70,7 @@ class TestPreToolGate(unittest.TestCase):
         payload = {
             "toolCall": {
                 "name": "write_to_file",
-                "args": {"TargetFile": "docs/design_specification.md"},
+                "args": {"TargetFile": "docs/plugin-architecture.md"},
             }
         }
         res = self._run_gate_stdin(payload)
@@ -80,7 +80,7 @@ class TestPreToolGate(unittest.TestCase):
         payload_replace = {
             "toolCall": {
                 "name": "replace_file_content",
-                "args": {"TargetFile": "/path/to/docs/design_specification.md"},
+                "args": {"TargetFile": "/path/to/docs/plugin-architecture.md"},
             }
         }
         res_replace = self._run_gate_stdin(payload_replace)
@@ -205,10 +205,10 @@ class TestPreToolGate(unittest.TestCase):
 
     def test_gate_b_deny_shell_mutation_of_spec_file(self):
         for cmd in (
-            "sed -i '' 's/old/new/' docs/design_specification.md",
-            "cat patch.txt > docs/design_specification.md",
-            "rm docs/design_specification.md",
-            "cp new.md docs/design_specification.md",
+            "sed -i '' 's/old/new/' docs/plugin-architecture.md",
+            "cat patch.txt > docs/plugin-architecture.md",
+            "rm docs/plugin-architecture.md",
+            "cp new.md docs/plugin-architecture.md",
         ):
             payload = {
                 "toolCall": {
@@ -276,7 +276,7 @@ class TestPreToolGate(unittest.TestCase):
         payload = {
             "toolCall": {
                 "name": "view_file",
-                "args": {"AbsolutePath": "/path/to/docs/design_specification.md"},
+                "args": {"AbsolutePath": "/path/to/docs/plugin-architecture.md"},
             }
         }
         res = self._run_gate_stdin(payload)
