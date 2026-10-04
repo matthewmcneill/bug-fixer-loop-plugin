@@ -29,6 +29,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 from typing import Any
@@ -67,6 +68,10 @@ REASON_SHELL_MUTATION = (
     "Protected file shell mutation blocked: Shell mutation targeting spec or "
     "protected files is prohibited."
 )
+REASON_EGRESS_LEAK = (
+    "Egress leak blocked: Outbound GitHub command body contains content "
+    "matching configured leak patterns. Content not sent."
+)
 
 # Command Protection Regexes
 AUTO_MERGE_REGEX = re.compile(r"(?:^|[;&|]\s*|\s)gh\s+(?:pr\s+merge|stack\s+merge)\b")
@@ -84,6 +89,9 @@ APPROVAL_ECHO_PIPE_REGEX = re.compile(
     re.IGNORECASE,
 )
 RAW_GH_READ_REGEX = re.compile(r"(?:^|[;&|]\s*|\$\(\s*|\s)gh\s+(?:issue|pr)\s+(?:list|view)\b")
+OUTBOUND_GH_CMD_REGEX = re.compile(
+    r"(?:^|[;&|]\s*|\s)gh\s+(?:issue\s+comment|pr\s+(?:create|edit|comment)|api)\b"
+)
 
 HOST_SECURITY_SCRIPTS = frozenset({"pre_tool_gate.py", "safe_ingest.py"})
 
@@ -208,11 +216,139 @@ def evaluate_gate_a(
     return {"decision": "allow"}
 
 
+def _strip_quotes(s: str) -> str:
+    """Strips matched outer single or double quotes."""
+    s = s.strip()
+    if len(s) >= 2 and ((s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'"))):
+        return s[1:-1]
+    return s
+
+
+def extract_outbound_body(cmd: str) -> str | None:
+    """Extracts outbound body content from gh commands."""
+    if not cmd:
+        return None
+
+    try:
+        tokens = shlex.split(cmd)
+    except Exception:
+        tokens = None
+
+    if tokens is not None:
+        if "|" in tokens:
+            pipe_idx = tokens.index("|")
+            left = tokens[:pipe_idx]
+            right = tokens[pipe_idx + 1:]
+            if left and left[0] == "echo" and "gh" in right:
+                idx = 1
+                while idx < len(left) and left[idx].startswith("-") and left[idx] != "-":
+                    idx += 1
+                return " ".join(left[idx:])
+
+        for i, tok in enumerate(tokens):
+            if tok in ("--body", "-b") and i + 1 < len(tokens):
+                return tokens[i + 1]
+            if tok.startswith(("--body=", "-b=")):
+                return tok.split("=", 1)[1]
+            if tok in ("-f", "--field") and i + 1 < len(tokens):
+                nxt = tokens[i + 1]
+                if nxt.startswith("body="):
+                    return _strip_quotes(nxt[len("body="):])
+            if tok.startswith("-fbody="):
+                return _strip_quotes(tok[len("-fbody="):])
+            if tok.startswith(("-f body=", "--field body=")):
+                return _strip_quotes(tok.split("body=", 1)[1])
+            if tok.startswith(("--field=body=", "-f=body=")):
+                return _strip_quotes(tok.split("body=", 1)[1])
+            if tok == "--body-file" and i + 1 < len(tokens):
+                fpath = Path(tokens[i + 1]).expanduser()
+                if not fpath.is_absolute():
+                    fpath = Path.cwd() / fpath
+                try:
+                    if fpath.is_file():
+                        return fpath.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    pass
+                return None
+            if tok.startswith("--body-file="):
+                fpath = Path(tok.split("=", 1)[1]).expanduser()
+                if not fpath.is_absolute():
+                    fpath = Path.cwd() / fpath
+                try:
+                    if fpath.is_file():
+                        return fpath.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    pass
+                return None
+
+    m_pipe = re.search(r"""(?:^|[;&|]\s*)echo\s+(?:-[a-zA-Z]+\s+)*(?:(["'])(.*?)(?:\1|$)|(.*?))\s*\|\s*gh\b""", cmd, re.DOTALL)
+    if m_pipe:
+        val = m_pipe.group(2) if m_pipe.group(2) is not None else m_pipe.group(3)
+        return _strip_quotes(val)
+
+    m_body = re.search(r"""(?:--body|-b)(?:\s+|=)(?:(["'])(.*?)(?:\1|$)|(\S+))""", cmd, re.DOTALL)
+    if m_body:
+        val = m_body.group(2) if m_body.group(2) is not None else m_body.group(3)
+        return _strip_quotes(val)
+
+    m_field = re.search(r"""(?:-f|--field)(?:\s+|=)?["']?body=(?:(["'])(.*?)(?:\1|$)|([^"'\s]+))""", cmd, re.DOTALL)
+    if m_field:
+        val = m_field.group(2) if m_field.group(2) is not None else m_field.group(3)
+        return _strip_quotes(val)
+
+    m_file = re.search(r"""--body-file(?:\s+|=)(?:(["'])(.*?)(?:\1|$)|(\S+))""", cmd)
+    if m_file:
+        val = m_file.group(2) if m_file.group(2) is not None else m_file.group(3)
+        if val:
+            fpath = Path(_strip_quotes(val)).expanduser()
+            if not fpath.is_absolute():
+                fpath = Path.cwd() / fpath
+            try:
+                if fpath.is_file():
+                    return fpath.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                pass
+        return None
+
+    return None
+
+
+def check_egress_leaks(cmd: str, leak_patterns: list[str]) -> bool:
+    """Scans outbound GitHub commands for leak patterns."""
+    if not cmd or not leak_patterns:
+        return False
+
+    if not OUTBOUND_GH_CMD_REGEX.search(cmd):
+        return False
+
+    body = extract_outbound_body(cmd)
+    if body is None:
+        return False
+
+    compiled: list[re.Pattern[str]] = []
+    for pat in leak_patterns:
+        if pat and isinstance(pat, str):
+            try:
+                compiled.append(re.compile(pat))
+            except re.error as exc:
+                sys.stderr.write(f"WARNING: Invalid leak pattern regex '{pat}': {exc}\n")
+
+    if not compiled:
+        return False
+
+    for pat in compiled:
+        if pat.search(body):
+            return True
+
+    return False
+
+
 def evaluate_gate_b(
     tool_name: str,
     args: dict[str, Any],
     spec_file_path: str,
     protected_files: list[str],
+    config: dict[str, Any] | None = None,
 ) -> dict[str, str] | None:
     """Gate B: Command Execution Protection."""
     if tool_name and tool_name != "run_command":
@@ -237,6 +373,10 @@ def evaluate_gate_b(
         return {"decision": "deny", "reason": REASON_RAW_GH}
     if check_shell_mutation(cmd, spec_file_path, protected_files):
         return {"decision": "deny", "reason": REASON_SHELL_MUTATION}
+
+    leak_patterns = list(config.get("leak_patterns", [])) if config else []
+    if check_egress_leaks(cmd, leak_patterns):
+        return {"decision": "deny", "reason": REASON_EGRESS_LEAK}
 
     return {"decision": "allow"}
 
@@ -266,7 +406,7 @@ def evaluate_pretool_call(payload: dict[str, Any], config: dict[str, Any]) -> di
     if decision_a is not None:
         return decision_a
 
-    decision_b = evaluate_gate_b(tool_name, args, spec_file_path, protected_files)
+    decision_b = evaluate_gate_b(tool_name, args, spec_file_path, protected_files, config)
     if decision_b is not None:
         return decision_b
 
