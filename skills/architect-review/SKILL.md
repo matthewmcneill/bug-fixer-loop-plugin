@@ -84,7 +84,7 @@ If `target_repo` is empty or the config file is missing, abort with:
 
 Identify the target PR number:
 - Provided via dispatcher prompt or user argument: `<pr_number>`.
-- If unprovided, find the oldest open draft PR with label `bug-fixer`:
+- If unprovided, find the oldest open PR with label `bug-fixer`:
   ```bash
   gh pr list --repo <target_repo> --state open --label "bug-fixer:system:pr" --json number,title,createdAt --jq 'sort_by(.createdAt) | .[0].number'
   ```
