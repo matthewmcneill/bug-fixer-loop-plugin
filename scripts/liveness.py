@@ -560,18 +560,15 @@ def _check_success(dispatch: dict, target_repo: str) -> bool:
         pr_num = dispatch.get("pr_number")
         if not pr_num:
             return False
-        # Ensure PR is still OPEN
-        state_chk = _gh("pr", "view", str(pr_num), "--repo", target_repo, "--json", "state", "--jq", ".state")
-        if state_chk.stdout.strip() != "OPEN":
-            return False
-        
-        # Check for [ARCHITECT] comment posted after spawn
+        # Check PR is OPEN and for [ARCHITECT] comment posted after spawn
         r = _gh("pr", "view", str(pr_num), "--repo", target_repo,
-                "--comments", "--json", "comments")
+                "--comments", "--json", "state,comments")
         if r.returncode != 0:
             return False
         try:
             data = json.loads(r.stdout)
+            if data.get("state") != "OPEN":
+                return False
             for c in data.get("comments", []):
                 if "[ARCHITECT]" in c.get("body", ""):
                     # Good enough — architect posted something
