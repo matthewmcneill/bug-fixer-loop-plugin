@@ -25,6 +25,32 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/mcneillm/Documents/Projects/bug-fixer-loop-plugin/scripts/integrity_monitor.py --post",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "bug-fixer-integrity-snapshot": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/mcneillm/Documents/Projects/bug-fixer-loop-plugin/scripts/integrity_monitor.py --pre",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   },
   "bug-fixer-url-gate": {

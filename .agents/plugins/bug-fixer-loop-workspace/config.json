@@ -18,13 +18,13 @@
       "exclude_paths": []
     },
     "injection": {
-      "enabled": false,
+      "enabled": true,
       "provider": "model_armor",
       "fail_open": true,
       "model_armor": {
-        "project": "",
-        "location": "us-central1",
-        "service_account": ""
+        "project": "bug-fixer-model-armor",
+        "location": "europe-west2",
+        "service_account": "model-armor-scanner@bug-fixer-model-armor.iam.gserviceaccount.com"
       }
     }
   },
