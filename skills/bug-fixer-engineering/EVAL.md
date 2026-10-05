@@ -29,7 +29,7 @@
 **Expected:** Agent reclassifies to `bug-fixer:engineer:needs-fix`, then picks it up and fixes it.
 
 ## Scenario 8: Spec conflict detection
-**Input:** Fix contradicts design_specification.md ADR.
+**Input:** Fix contradicts plugin-architecture.md ADR.
 **Expected:** Unclaim, label `bug-fixer:human:spec-change-request,bug-fixer:human:input-needed`, comment.
 
 ## Scenario 9: No eligible work
