@@ -540,26 +540,31 @@ def _check_success(dispatch: dict, target_repo: str) -> bool:
         issue_num = dispatch.get("issue_number")
         if not issue_num:
             return False
-        # Check if issue transitioned to awaiting-review
+        # Check if issue is OPEN and transitioned to awaiting-review
         r = _gh("issue", "view", str(issue_num), "--repo", target_repo,
-                "--json", "labels", "--jq",
-                '[.labels[].name] | any(. == "bug-fixer:architect:awaiting-review")')
+                "--json", "state,labels", "--jq",
+                '.state == "OPEN" and ([.labels[].name] | any(. == "bug-fixer:architect:awaiting-review"))')
         return r.stdout.strip() == "true"
 
     elif dtype == "pr_iteration":
         pr_num = dispatch.get("pr_number")
         if not pr_num:
             return False
-        # Check if bug-fixer:engineer:needs-iteration label is gone (agent removed it after pushing)
+        # Check if PR is OPEN and bug-fixer:engineer:needs-iteration label is gone (agent removed it after pushing)
         r = _gh("pr", "view", str(pr_num), "--repo", target_repo,
-                "--json", "labels", "--jq",
-                '[.labels[].name] | any(. == "bug-fixer:engineer:needs-iteration")')
-        return r.stdout.strip() == "false"
+                "--json", "state,labels", "--jq",
+                '.state == "OPEN" and ([.labels[].name] | any(. == "bug-fixer:engineer:needs-iteration") | not)')
+        return r.stdout.strip() == "true"
 
     elif dtype == "architect_review":
         pr_num = dispatch.get("pr_number")
         if not pr_num:
             return False
+        # Ensure PR is still OPEN
+        state_chk = _gh("pr", "view", str(pr_num), "--repo", target_repo, "--json", "state", "--jq", ".state")
+        if state_chk.stdout.strip() != "OPEN":
+            return False
+        
         # Check for [ARCHITECT] comment posted after spawn
         r = _gh("pr", "view", str(pr_num), "--repo", target_repo,
                 "--comments", "--json", "comments")
