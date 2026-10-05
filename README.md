@@ -137,6 +137,7 @@ The security architecture provides three layers of defense against prompt inject
    - **Host Script Self-Defense:** Blocks autonomous edits to the gate, ingestion, egress-proxy, scanner and parser scripts.
    - **Forbidden Command Interception:** Blocks merges (`gh pr merge`, REST/GraphQL merge endpoints, pushes to `main`/`master`), self-approval, issue reopening, raw GitHub reads (`gh issue/pr list|view|status`, `gh search`, `gh api` reads of issues/PRs/comments), gh aliases/extensions, and repository/account configuration changes.
    - **Fake Approval Injection Defense:** Blocks posting approval text (`approved`, `/approve`, `LGTM`) from literal bodies, files and stdin.
+   - **URL Fetch Gate (`github_url_gate.py`):** Redirects GitHub issue/PR page fetches to `safe_ingest.py` and blocks fetching any URL whose raw or percent-decoded form contains a leak-pattern match (a fetched URL is itself an outbound request).
    - **Egress Leak Gate:** Scans outbound GitHub content (bodies, titles, fields, `@file`/`--input`/gist/release files, stdin) and network tools (`curl`, `scp`, `nc`, …) against built-in plus configured leak patterns; content the gate cannot see at check time is refused.
 
 2. **Deterministic Safe Ingestion (`safe_ingest.py`)**:

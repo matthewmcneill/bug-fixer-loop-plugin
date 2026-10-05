@@ -173,6 +173,8 @@ def _attacks(rt: str) -> list[str]:
         "echo x > .betterleaksignore",
         "sed -i 's/x/y/' docs/design_specification.md",
         "rm scripts/safe_ingest.py",
+        "echo x > scripts/github_url_gate.py",
+        "sed -i 's/deny/allow/' scripts/github_url_gate.py",
         f"git checkout -- {WS}/config.json",
         "cp scripts/safe_post.py /tmp/p.py",
         "cat scripts/safe_post.py > /tmp/p.py",

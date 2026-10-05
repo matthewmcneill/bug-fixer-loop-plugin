@@ -146,6 +146,7 @@ HOST_SECURITY_SCRIPTS = frozenset(
         "safe_post.py",
         "injection_scanner.py",
         "shell_analysis.py",
+        "github_url_gate.py",
     }
 )
 # Protected workspace paths are derived at runtime from the config that
