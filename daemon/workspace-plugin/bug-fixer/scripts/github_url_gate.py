@@ -54,9 +54,9 @@ def url_leaks(url: str, leak_patterns: list[str] | None = None) -> bool:
     return any(p.search(form) for form in _decoded_forms(url) for p in patterns)
 
 
-def _configured_patterns() -> list[str]:
+def _configured_patterns(workspace_paths: list[str]) -> list[str]:
     try:
-        return list(load_config().get("leak_patterns") or [])
+        return list(load_config(None, workspace_paths=workspace_paths).get("leak_patterns") or [])
     except Exception:  # noqa: BLE001 - the built-in floor still applies
         return []
 
@@ -67,15 +67,21 @@ def main() -> int:
         return 0
 
     raw = sys.stdin.read().strip()
-    if not raw:
+    stdin_data = {}
+    if raw:
+        try:
+            raw_json = json.loads(raw)
+            if isinstance(raw_json, dict):
+                stdin_data = raw_json
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    if not stdin_data:
         print(json.dumps({"decision": "allow"}))
         return 0
 
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        print(json.dumps({"decision": "allow"}))
-        return 0
+    payload = stdin_data
+    workspace_paths = stdin_data.get("workspacePaths", [])
 
     # Extract the URL from the tool call args
     tool_call = payload.get("toolCall", {})
@@ -86,7 +92,7 @@ def main() -> int:
 
     if url and GITHUB_ISSUE_PR_URL.search(url):
         print(json.dumps({"decision": "deny", "reason": REASON}))
-    elif url and url_leaks(url, _configured_patterns()):
+    elif url and url_leaks(url, _configured_patterns(workspace_paths)):
         print(json.dumps({"decision": "deny", "reason": REASON_URL_LEAK}))
     else:
         print(json.dumps({"decision": "allow"}))

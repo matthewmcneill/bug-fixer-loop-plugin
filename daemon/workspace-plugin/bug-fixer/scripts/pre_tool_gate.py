@@ -135,16 +135,11 @@ BUILTIN_LEAK_PATTERNS = (
     r"github_pat_[A-Za-z0-9_]{22,}",
 )
 
-HOST_SECURITY_SCRIPTS = frozenset(
-    {
-        "pre_tool_gate.py",
-        "safe_ingest.py",
-        "safe_post.py",
-        "injection_scanner.py",
-        "shell_analysis.py",
-        "github_url_gate.py",
-    }
-)
+HOST_SECURITY_SCRIPTS = frozenset({
+    "pre_tool_gate.py", "safe_ingest.py", "safe_post.py",
+    "injection_scanner.py", "shell_analysis.py", "github_url_gate.py",
+    "integrity_monitor.py",
+})
 # Protected workspace paths are derived at runtime from the config that
 # was actually loaded (which lives in the TARGET repo's workspace, not
 # necessarily the plugin repo). Static scanner files are always protected.
@@ -155,6 +150,24 @@ _STATIC_PROTECTED = frozenset(
     }
 )
 
+def _find_daemon_dir(script_dir: Path) -> Path | None:
+    """Find the daemon plugin root by matching name == 'bug-fixer-daemon'.
+
+    Must check the manifest name, not just existence, because the workspace
+    plugin also has a plugin.json (name: 'bug-fixer').
+    """
+    for ancestor in [script_dir.parent, script_dir.parent.parent,
+                     script_dir.parent.parent.parent]:
+        manifest = ancestor / "plugin.json"
+        if manifest.is_file():
+            try:
+                data = json.loads(manifest.read_text())
+                if data.get("name") == "bug-fixer-daemon":
+                    return ancestor
+            except (json.JSONDecodeError, OSError):
+                continue
+    return None
+
 
 def _derive_workspace_paths(loaded_config_path: Path | None = None) -> frozenset[str]:
     """Build the full SCANNER_PROTECTED_FILES set.
@@ -164,17 +177,36 @@ def _derive_workspace_paths(loaded_config_path: Path | None = None) -> frozenset
     Falls back to cwd-based derivation.
     """
     protected = set(_STATIC_PROTECTED)
+
+    # Protect the loaded config's directory
     if loaded_config_path:
         ws_dir = loaded_config_path.resolve().parent
-    else:
-        # Fallback: derive from cwd (the repo being operated on)
-        ws_dir = Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace"
-    # Absolute paths for exact matching
-    protected.add(str(ws_dir / "config.json"))
-    protected.add(str(ws_dir / "injection_cache.json"))
-    # Relative paths for shell command matching (agents write relative)
+        protected.add(str(ws_dir / "config.json"))
+        protected.add(str(ws_dir / "injection_cache.json"))
+        protected.add(str(ws_dir / ".integrity_snapshot.json"))
+        protected.add(str(ws_dir / "sidecar.json"))
+
+    # Legacy relative paths
     protected.add(".agents/plugins/bug-fixer-loop-workspace/config.json")
     protected.add(".agents/plugins/bug-fixer-loop-workspace/injection_cache.json")
+
+    # Protect .agents/plugins.json (both absolute and relative)
+    protected.add(".agents/plugins.json")
+    if loaded_config_path:
+        repo_dir_str = None
+        try:
+            data = json.loads(loaded_config_path.read_text())
+            repo_dir_str = data.get("repo_dir")
+        except (json.JSONDecodeError, OSError):
+            pass
+        if repo_dir_str:
+            protected.add(str(Path(repo_dir_str) / ".agents" / "plugins.json"))
+
+    # Prefix-protect the entire daemon install directory
+    daemon_dir = _find_daemon_dir(Path(__file__).resolve().parent)
+    if daemon_dir:
+        protected.add(f"PREFIX:{daemon_dir}/")  # trailing slash prevents matching bug-fixer-daemon2/
+
     return frozenset(protected)
 
 
@@ -218,7 +250,10 @@ def normalise_config(config: dict[str, Any] | None) -> dict[str, Any]:
     return res
 
 
-def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
+def load_config(
+    config_path: str | Path | None = None,
+    workspace_paths: list[str] | None = None,
+) -> dict[str, Any]:
     """Loads plugin config from explicit path, BUG_FIXER_CONFIG env var, or candidates."""
     target_path: Path | None = None
     if config_path:
@@ -232,11 +267,37 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
         target_path = env_path
     else:
         script_dir = Path(__file__).resolve().parent
-        plugin_dir = script_dir.parent
-        for cand in [
-            plugin_dir.parent / "bug-fixer-loop-workspace" / "config.json",
-            Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace" / "config.json",
-        ]:
+        daemon_dir = _find_daemon_dir(script_dir)
+        
+        cands = []
+        if daemon_dir and workspace_paths:
+            sidecars_dir = daemon_dir / "sidecars"
+            if sidecars_dir.is_dir():
+                for sidecar_sub in sidecars_dir.iterdir():
+                    if not sidecar_sub.is_dir():
+                        continue
+                    cand_conf = sidecar_sub / "config.json"
+                    if cand_conf.is_file():
+                        try:
+                            c_data = json.loads(cand_conf.read_text())
+                            r_dir = c_data.get("repo_dir")
+                            if r_dir:
+                                r_path = Path(r_dir)
+                                for wp in workspace_paths:
+                                    if r_path.is_relative_to(Path(wp)):
+                                        cands.append(cand_conf)
+                                        break
+                        except (json.JSONDecodeError, OSError):
+                            pass
+        
+        # Legacy fallback
+        for wp in (workspace_paths or []):
+            legacy = Path(wp) / ".agents" / "plugins" / "bug-fixer-loop-workspace" / "config.json"
+            cands.append(legacy)
+            
+        cands.append(Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace" / "config.json")
+        
+        for cand in cands:
             if cand.is_file():
                 target_path = cand
                 break
@@ -321,7 +382,19 @@ def evaluate_gate_a(
         return {"decision": "deny", "reason": REASON_SPEC_IMMUTABLE}
     all_protected = list(protected_files) + sorted(SCANNER_PROTECTED_FILES)
     for pf in all_protected:
-        if pf and is_path_match(target_file, pf, repo_dir):
+        if pf.startswith("PREFIX:"):
+            prefix = pf[7:]
+            target_res = os.path.normpath(os.path.realpath(os.path.expanduser(target_file)))
+            if target_res.startswith(prefix):
+                rel = target_res[len(prefix):]
+                parts = rel.split("/")
+                if len(parts) >= 3 and parts[0] == "sidecars" and parts[2] == "state":
+                    basename = os.path.basename(target_res)
+                    if basename in ("injection_cache.json", ".integrity_snapshot.json"):
+                        return {"decision": "deny", "reason": REASON_PROTECTED_FILE}
+                    continue
+                return {"decision": "deny", "reason": REASON_PROTECTED_FILE}
+        elif pf and is_path_match(target_file, pf, repo_dir):
             return {"decision": "deny", "reason": REASON_PROTECTED_FILE}
 
     return {"decision": "allow"}
@@ -794,6 +867,7 @@ class _ProtectedPaths:
     protected_dirs: frozenset[str]
     host_scripts: frozenset[str]
     regex: re.Pattern[str] | None
+    protected_prefixes: list[str] = field(default_factory=list)
 
     @classmethod
     def build(
@@ -813,8 +887,12 @@ class _ProtectedPaths:
             if distinctive_name and p.name not in _GENERIC_PROTECTED_BASENAMES:
                 names.add(p.name)
 
+        protected_prefixes = []
         for entry in SCANNER_PROTECTED_FILES:
-            add(entry, distinctive_name=True)
+            if entry.startswith("PREFIX:"):
+                protected_prefixes.append(entry[7:])
+            else:
+                add(entry, distinctive_name=True)
         for name in _STATIC_PROTECTED:
             add(name, distinctive_name=True)
         add(spec_file_path, distinctive_name=True)
@@ -841,7 +919,24 @@ class _ProtectedPaths:
             protected_dirs=frozenset(os.path.dirname(p) for p in abs_paths),
             host_scripts=frozenset(host_scripts),
             regex=regex,
+            protected_prefixes=protected_prefixes,
         )
+
+    def _is_prefix_protected(self, path: str) -> bool:
+        """Check if path falls under a prefix-protected directory."""
+        norm = os.path.normpath(os.path.realpath(path))
+        for prefix in self.protected_prefixes:
+            if norm.startswith(prefix):
+                rel = norm[len(prefix):]
+                parts = rel.split("/")
+                # Allow writes under sidecars/<repo>/state/ (but not trust-sensitive files)
+                if len(parts) >= 3 and parts[0] == "sidecars" and parts[2] == "state":
+                    basename = os.path.basename(norm)
+                    if basename in ("injection_cache.json", ".integrity_snapshot.json"):
+                        return True   # still protected
+                    return False      # allow
+                return True           # protected
+        return False
 
     def _basename_protected(self, base: str) -> bool:
         return (
@@ -900,8 +995,11 @@ class _ProtectedPaths:
                         return True
                 continue
             resolved = self.resolve(token, cwd)
-            if resolved and resolved in self.abs_paths:
-                return True
+            if resolved:
+                if resolved in self.abs_paths:
+                    return True
+                if self._is_prefix_protected(resolved):
+                    return True
             if (
                 cwd is None
                 and not os.path.isabs(token)
@@ -2802,8 +2900,30 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    stdin_data = {}
+    workspace_paths = []
+    _non_hook_modes = any([
+        getattr(args, 'git_hook', False),
+        getattr(args, 'scan_only', False),
+        getattr(args, 'stamp_receipt', False),
+        getattr(args, 'stamp_pass', False),
+        getattr(args, 'verify_receipt', False),
+    ])
+    
+    if not _non_hook_modes:
+        if not sys.stdin.isatty():
+            try:
+                raw = json.load(sys.stdin)
+                if isinstance(raw, dict):
+                    stdin_data = raw
+            except (json.JSONDecodeError, ValueError):
+                print(json.dumps({"decision": "deny", "reason": "Invalid JSON payload on stdin"}))
+                return 1
+
+    workspace_paths = stdin_data.get("workspacePaths", [])
+
     try:
-        config = load_config(args.config)
+        config = load_config(args.config, workspace_paths=workspace_paths)
         # Re-derive protected paths from the config that was loaded
         global SCANNER_PROTECTED_FILES
         config_loaded_from = config.get("_loaded_from")
@@ -2882,22 +3002,15 @@ def main() -> int:
             repo_dir, patterns=patterns, exclude_paths=exclude_paths, backend=backend, config=config
         )
 
-    if sys.stdin.isatty():
-        parser.print_help()
-        return 0
+    if not stdin_data:
+        if sys.stdin.isatty():
+            parser.print_help()
+            return 0
+        else:
+            print(json.dumps({"decision": "allow"}))
+            return 0
 
-    raw = sys.stdin.read().strip()
-    if not raw:
-        print(json.dumps({"decision": "allow"}))
-        return 0
-
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        print(json.dumps({"decision": "deny", "reason": f"Invalid JSON payload: {exc}"}))
-        return 0
-
-    result = evaluate_pretool_call(payload, config)
+    result = evaluate_pretool_call(stdin_data, config)
     print(json.dumps(result))
     return 0
 
