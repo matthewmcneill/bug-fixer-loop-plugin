@@ -586,6 +586,18 @@ def _check_success(dispatch: dict, target_repo: str) -> bool:
             pass
         return False
 
+    elif dtype in ("trajectory", "triage"):
+        conv_id = dispatch.get("conversation_id")
+        if not conv_id:
+            return False
+        step = read_last_transcript_step(conv_id)
+        if step is None:
+            return False
+        
+        # Agent going idle (PLANNER_RESPONSE with no tool calls) indicates 
+        # successful completion of trajectory and triage dispatches.
+        return step.get("type") == "PLANNER_RESPONSE" and not step.get("tool_calls")
+
     return False
 
 
