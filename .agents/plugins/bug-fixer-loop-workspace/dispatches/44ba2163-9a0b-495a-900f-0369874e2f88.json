@@ -1,8 +1,0 @@
-{
-  "conversation_id": "44ba2163-9a0b-495a-900f-0369874e2f88",
-  "type": "fresh_fix",
-  "spawned_at": "2026-10-01T20:50:51.423637+00:00",
-  "timeout_minutes": 45,
-  "resume_attempts": 0,
-  "issue_number": 13
-}
