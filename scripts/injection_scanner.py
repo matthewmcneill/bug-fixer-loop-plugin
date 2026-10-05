@@ -17,6 +17,9 @@ class InjectionResult:
         self.provider = provider
         self.details = details
 
+class RateLimitError(Exception):
+    """Raised when Model Armor returns 429 after retry exhaustion."""
+
 class ModelArmorProvider:
     """Google Cloud Model Armor injection classifier."""
     
@@ -52,8 +55,12 @@ class ModelArmorProvider:
         self._token_cache = (token, time.time() + 3600)
         return token
     
+    # Retry config for 429 quota errors
+    MAX_RETRIES = 5
+    BASE_DELAY = 2.0  # seconds — enough to cross a minute boundary
+
     def scan(self, text: str) -> InjectionResult:
-        """Call Model Armor sanitizeUserPrompt API."""
+        """Call Model Armor sanitizeUserPrompt API with retry on 429."""
         if not self.project or not self.service_account:
             raise ValueError(
                 "Model Armor requires 'project' and 'service_account' in config"
@@ -72,16 +79,37 @@ class ModelArmorProvider:
             }
         }).encode()
         
-        req = urllib.request.Request(
-            url, data=payload, method="POST",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            }
-        )
-        
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            result = json.loads(resp.read())
+        import random
+        last_error: Exception | None = None
+
+        for attempt in range(self.MAX_RETRIES + 1):
+            req = urllib.request.Request(
+                url, data=payload, method="POST",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                }
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    result = json.loads(resp.read())
+                break  # success — exit retry loop
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < self.MAX_RETRIES:
+                    delay = self.BASE_DELAY * (2 ** attempt) + random.uniform(0, 1)
+                    sys.stderr.write(
+                        f"MODEL_ARMOR_RATE_LIMITED: 429 on attempt {attempt + 1}/"
+                        f"{self.MAX_RETRIES + 1}, retrying in {delay:.1f}s\n"
+                    )
+                    time.sleep(delay)
+                    last_error = e
+                    continue
+                if e.code == 429:
+                    # Final 429 — raise as RateLimitError so scanner fails closed
+                    raise RateLimitError(
+                        f"429 after {self.MAX_RETRIES + 1} attempts"
+                    ) from e
+                raise  # non-429 — bubble up immediately
         
         # Parse Model Armor response
         sanitization = result.get("sanitizationResult", {})
@@ -133,11 +161,23 @@ class InjectionScanner:
         raise ValueError(f"Unknown injection provider: {self.provider}")
     
     def scan(self, text: str) -> InjectionResult:
-        """Scan text for injection. Fails open by default."""
+        """Scan text for injection.
+
+        Rate-limit errors (429) always fail closed to prevent abuse.
+        Other errors respect the fail_open setting.
+        """
         if not self.enabled:
             return InjectionResult(False, 0.0, "disabled")
         try:
             return self._provider_impl.scan(text)
+        except RateLimitError as exc:
+            # 429 after retries — ALWAYS fail closed (potential DDoS bypass)
+            sys.stderr.write(
+                f"INJECTION_SCAN_RATE_LIMITED: {self.provider}: {exc} "
+                f"(fail_closed — potential abuse)\n"
+            )
+            return InjectionResult(True, 1.0, self.provider,
+                                   f"rate_limited: {exc}")
         except Exception as exc:
             if self.fail_open:
                 # Audit log the failure, allow through
