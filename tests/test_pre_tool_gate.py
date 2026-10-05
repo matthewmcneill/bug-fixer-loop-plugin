@@ -540,7 +540,6 @@ class TestPreToolGate(unittest.TestCase):
     def test_egress_leak_non_gh_commands_unaffected(self):
         # Non-gh commands containing secret-matching text are not affected
         for cmd in (
-            'git commit -m "contains AKIAIOSFODNN7EXAMPLE"',
             'echo "contains AKIAIOSFODNN7EXAMPLE"',
             'grep "AKIAIOSFODNN7EXAMPLE" /path/to/file',
         ):

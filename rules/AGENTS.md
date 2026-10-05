@@ -5,7 +5,8 @@ They apply to all skills and sidecars within this plugin.
 
 ## 1. Never Auto-Merge
 You MUST NOT execute `gh pr merge`, `gh stack merge`, or any command that merges
-a Pull Request. The human maintainer performs all merges manually on GitHub.
+a Pull Request, and you MUST NOT push to the default branch (`main`/`master`).
+The human maintainer performs all merges manually on GitHub.
 
 ## 2. Specification Immutability
 You MUST NOT modify, delete, or overwrite the project's specification file
@@ -118,3 +119,16 @@ agent or previous session), handle it autonomously:
 3. **Then proceed** with your own task (checkout your target branch, etc.).
 4. **Never stop and ask the user** how to handle a dirty tree. The user is not
    present in autonomous mode. Either recover automatically or exit cleanly.
+
+## 19. Inspectable Commands and GitHub Writes
+The PreToolUse gate parses every shell command and refuses anything it cannot
+inspect. Write commands so their effect is visible in the command itself:
+- Pass GitHub bodies, titles and notes as literal text, or write them to a file
+  first (with your file tool) and use `--body-file` / `--notes-file`. Bodies built
+  from shell variables, `$(...)`, or stdin from another program are refused.
+- Run `gh` directly — not through `bash -c`, `eval`, `xargs`, aliases, or code
+  in `python -c` / `node -e`.
+- Do not run `scripts/safe_post.py`; it is reserved for the dispatchers.
+- Redirect output only to files whose name is literal (e.g. `> "$STATE_DIR/claims/12.lock"`
+  is fine; `> "$OUT"` is refused). Never write to protected files, the workspace
+  `config.json`, or the plugin's scripts by any means.

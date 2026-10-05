@@ -204,38 +204,21 @@ class TestSafePost(unittest.TestCase):
         self.assertNotIn("failing closed", r.stderr.lower())
 
     def test_fail_closed_no_config_reachable(self):
-        """Verify load_leak_patterns returns catch-all when no config is reachable."""
-        # Can't fully test as subprocess (DEFAULT_CONFIG exists in this repo),
-        # so test the function directly with mocking
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "safe_post_mod",
-            os.path.join(os.path.dirname(__file__), "..", "scripts", "safe_post_testable.py")
-            if False else SCRIPT  # use the real script
-        )
-        # Direct import test
-        import types
+        """load_leak_patterns returns a catch-all when no workspace config is reachable."""
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+        orig_cwd = os.getcwd()
         try:
-            import safe_post as sp_mod
-            # Temporarily override DEFAULT_CONFIG
-            orig = sp_mod.DEFAULT_CONFIG
-            sp_mod.DEFAULT_CONFIG = Path("/nonexistent/default")
-            orig_env = os.environ.get("BUG_FIXER_CONFIG")
-            os.environ["BUG_FIXER_CONFIG"] = "/also/nonexistent"
-            try:
-                patterns = sp_mod.load_leak_patterns()
-                self.assertEqual(patterns, [".*"], "Should return catch-all when no config reachable")
-            finally:
-                sp_mod.DEFAULT_CONFIG = orig
-                if orig_env is not None:
-                    os.environ["BUG_FIXER_CONFIG"] = orig_env
-                elif "BUG_FIXER_CONFIG" in os.environ:
-                    del os.environ["BUG_FIXER_CONFIG"]
+            import safe_post as sp_mod  # noqa: PLC0415 - imported after sys.path setup
+
+            with tempfile.TemporaryDirectory() as outside_repo, \
+                    patch.object(sp_mod, "DEFAULT_CONFIG", Path("/nonexistent/default")), \
+                    patch.dict(os.environ, {"BUG_FIXER_CONFIG": "/also/nonexistent"}):
+                os.chdir(outside_repo)
+                self.assertEqual(sp_mod.load_leak_patterns(), [".*"])
         finally:
+            os.chdir(orig_cwd)
             sys.path.pop(0)
-            if "safe_post" in sys.modules:
-                del sys.modules["safe_post"]
+            sys.modules.pop("safe_post", None)
 
 
 class TestGateBBlocksSafePost(unittest.TestCase):

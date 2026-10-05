@@ -132,11 +132,12 @@ flowchart TD
 The security architecture provides three layers of defense against prompt injection, model drift, and unauthorized mutations:
 
 1. **PreToolUse Hook Gate (`pre_tool_gate.py`)**:
-   - **Specification Immutability:** Denies all writes and shell mutations (`sed -i`, `>`, `rm`, `cp`) targeting the project specification (`docs/design_specification.md`).
-   - **Protected Files:** Prohibits modification of sensitive human artifacts listed in `protected_files`.
-   - **Host Script Self-Defense:** Blocks autonomous edits to `pre_tool_gate.py` and `safe_ingest.py`.
-   - **Forbidden Command Interception:** Blocks `gh pr merge`, `gh stack merge`, `gh pr review --approve`, `gh issue reopen`, and raw `gh issue/pr list|view`.
-   - **Fake Approval Injection Defense:** Blocks posting approval commands (`approved`, `/approve`).
+   - **Structural command analysis:** Shell commands are parsed (`shell_analysis.py`) into individual commands, words, redirections, heredocs and substitutions, and each command is judged by what it executes. Wrappers (`bash -c`, `eval`, `$(...)`, `env -S`, `xargs`, `find -exec`, `git rebase --exec`, unmodelled runners such as `flock`/`tmux`/`ssh`) are analyzed recursively; anything assembled at runtime that would reach GitHub or a protected file is refused.
+   - **Specification Immutability & Protected Files:** Denies writes, deletes, moves and inline-code references (`python -c "open(...)"`) targeting the specification, `protected_files`, the workspace `config.json` / `injection_cache.json` and scanner ignore files.
+   - **Host Script Self-Defense:** Blocks autonomous edits to the gate, ingestion, egress-proxy, scanner and parser scripts.
+   - **Forbidden Command Interception:** Blocks merges (`gh pr merge`, REST/GraphQL merge endpoints, pushes to `main`/`master`), self-approval, issue reopening, raw GitHub reads (`gh issue/pr list|view|status`, `gh search`, `gh api` reads of issues/PRs/comments), gh aliases/extensions, and repository/account configuration changes.
+   - **Fake Approval Injection Defense:** Blocks posting approval text (`approved`, `/approve`, `LGTM`) from literal bodies, files and stdin.
+   - **Egress Leak Gate:** Scans outbound GitHub content (bodies, titles, fields, `@file`/`--input`/gist/release files, stdin) and network tools (`curl`, `scp`, `nc`, …) against built-in plus configured leak patterns; content the gate cannot see at check time is refused.
 
 2. **Deterministic Safe Ingestion (`safe_ingest.py`)**:
    - **Maintainer Approval Gate:** External issues and PRs require explicit maintainer approval before un-redacted titles, bodies, and comments are admitted into model context.

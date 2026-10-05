@@ -3,7 +3,8 @@
 safe_post.py — Egress proxy for GitHub write operations.
 
 All GitHub write commands (issue/PR create, edit, comment, review) MUST
-go through this proxy instead of raw `gh`. The dispatchers route body-carrying writes through this proxy.
+go through this proxy instead of raw `gh`. The dispatchers route body-carrying
+writes through this proxy.
 Raw `gh` writes from agent skills still go through the regex gate in
 pre_tool_gate.py. Migrating skills and denying raw `gh` writes is
 tracked on issue #22.
@@ -37,40 +38,79 @@ WORKSPACE_DIR = PLUGIN_DIR / ".agents" / "plugins" / "bug-fixer-loop-workspace"
 DEFAULT_CONFIG = WORKSPACE_DIR / "config.json"
 
 
-def load_leak_patterns() -> list[str]:
-    """Load leak patterns from workspace config.
+# Patterns enforced regardless of config: a config can add patterns, never
+# remove these. Kept identical to pre_tool_gate.BUILTIN_LEAK_PATTERNS (tested).
+BUILTIN_LEAK_PATTERNS = (
+    r"ya29\.[A-Za-z0-9_-]+",
+    r"AKIA[0-9A-Z]{16}",
+    r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
+    r"gh[pousr]_[A-Za-z0-9]{36,}",
+    r"github_pat_[A-Za-z0-9_]{22,}",
+)
 
-    Resolves config via BUG_FIXER_CONFIG (set by the sidecar stub,
-    outside the agent's reach). Falls back to the plugin's own
-    workspace config. Fails closed if neither is available.
-    """
-    config_path = None
+APPROVAL_TEXT_REGEX = re.compile(r"^\s*/?(?:approved?|lgtm)\s*[.!]*\s*$", re.IGNORECASE)
+
+
+def _candidate_configs() -> list[Path]:
+    """Every workspace config this invocation could legitimately belong to."""
+    candidates: list[Path] = []
     env_path = os.environ.get("BUG_FIXER_CONFIG", "")
     if env_path:
-        candidate = Path(env_path).expanduser().resolve()
-        if candidate.is_file():
-            config_path = candidate
-    if config_path is None and DEFAULT_CONFIG.is_file():
-        config_path = DEFAULT_CONFIG
-
-    if config_path is None:
-        sys.stderr.write("SAFE_POST: WARNING: no config found, failing closed\n")
-        return [".*"]  # Matches everything — blocks all posts
-
+        candidates.append(Path(env_path).expanduser())
+    candidates.append(DEFAULT_CONFIG)
     try:
-        with open(config_path) as f:
-            config = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        sys.stderr.write(f"SAFE_POST: WARNING: config unreadable at {config_path}, failing closed\n")
-        return [".*"]
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+        if top:
+            workspace = Path(top) / ".agents" / "plugins" / "bug-fixer-loop-workspace"
+            candidates.append(workspace / "config.json")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    unique: list[Path] = []
+    for c in candidates:
+        resolved = c.resolve()
+        if resolved not in unique:
+            unique.append(resolved)
+    return unique
 
-    # Support both v1 and v2 config
-    scanning = config.get("scanning", {})
-    secrets = scanning.get("secrets", {}) if isinstance(scanning, dict) else {}
-    patterns = secrets.get("patterns")
-    if patterns is None:
-        patterns = config.get("leak_patterns", [])
-    return list(patterns or [])
+
+def load_leak_patterns() -> list[str]:
+    """Built-in floor plus the patterns of every reachable workspace config.
+
+    BUG_FIXER_CONFIG is set by the sidecar for dispatchers, but anyone running
+    the proxy can set it, so a config can only ever add patterns: the floor
+    and the plugin/target workspace configs are always included. Fails closed
+    when no config can be read, or when a config exists but is unreadable.
+    """
+    patterns = list(BUILTIN_LEAK_PATTERNS)
+    loaded_any = False
+    for config_path in _candidate_configs():
+        if not config_path.is_file():
+            continue
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            log(f"WARNING: config unreadable at {config_path}, failing closed")
+            return [".*"]
+        if not isinstance(config, dict):
+            log(f"WARNING: config at {config_path} is not an object, failing closed")
+            return [".*"]
+        loaded_any = True
+        scanning = config.get("scanning", {})
+        secrets = scanning.get("secrets", {}) if isinstance(scanning, dict) else {}
+        extra = secrets.get("patterns") if isinstance(secrets, dict) else None
+        if extra is None:
+            extra = config.get("leak_patterns", [])
+        for pat in extra or []:
+            if isinstance(pat, str) and pat and pat not in patterns:
+                patterns.append(pat)
+
+    if not loaded_any:
+        log("WARNING: no config found, failing closed")
+        return [".*"]  # Matches everything — blocks all posts
+    return patterns
 
 
 def scan_text(text: str, patterns: list[str]) -> list[str]:
@@ -175,8 +215,10 @@ def main():
 
     title = getattr(args, "title", None) or ""
 
-    # Scan all text content for leaks
-    scannable = f"{title}\n{body}".strip()
+    # Scan all outbound text: title, body and every other argument (labels, repo, …)
+    other_args = [str(v) for v in vars(args).values() if isinstance(v, str)]
+    other_args += [str(x) for v in vars(args).values() if isinstance(v, list) for x in v]
+    scannable = "\n".join([title, body, *other_args]).strip()
     if scannable and patterns:
         violations = scan_text(scannable, patterns)
         if violations:
@@ -193,10 +235,7 @@ def main():
 
     # Block approval injection in any body
     if body:
-        approval_re = re.compile(
-            r"^\s*/?(?:approved?|lgtm)\s*[.!]*\s*$", re.IGNORECASE
-        )
-        if approval_re.match(body.strip()):
+        if APPROVAL_TEXT_REGEX.match(body.strip()):
             log("DENIED: posting fake maintainer approval comment is prohibited")
             sys.exit(1)
 
