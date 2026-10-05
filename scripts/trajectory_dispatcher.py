@@ -118,7 +118,7 @@ if brain_dir.exists():
         if transcript.stat().st_mtime < cutoff:
             continue
 
-        # Check if this is a bug-fixer conversation for this repo
+        # Check if this is a bug-fixer conversation strictly scoped to TARGET_REPO
         try:
             with open(transcript) as f:
                 head = f.read(2000)
