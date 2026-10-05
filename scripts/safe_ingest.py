@@ -23,12 +23,14 @@ Security Policy:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import unicodedata
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -36,6 +38,14 @@ from typing import Any
 APPROVAL_COMMENT_REGEX = re.compile(r"^\s*/?approved?\s*[.!]*\s*$", re.IGNORECASE)
 REPO_SLUG_REGEX = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GRAPHQL_PAGE_LIMIT = 100
+
+ALLOWLISTED_TAG_REGEX = re.compile(
+    r"^<!--\s*(?:agy_arch_conv_id|agy_dev_conv_id):\s*[a-zA-Z0-9_-]+\s*-->$"
+)
+HTML_COMMENT_REGEX = re.compile(r"<!--[\s\S]*?-->")
+UNICODE_HIDDEN_REGEX = re.compile(
+    r"[\U000e0000-\U000e007f\u200b-\u200d\ufeff\u202a-\u202e\u2066-\u2069]"
+)
 
 QUARANTINE_LABELS = frozenset({"security:prompt-injection"})
 REDACTED_PLACEHOLDER = "[REDACTED: UNAPPROVED EXTERNAL CONTENT]"
@@ -96,6 +106,7 @@ SAFE_STRUCTURAL_FIELDS = frozenset(
         "is_quarantined",
         "approval_status",
         "is_approved",
+        "has_hidden_content",
         "title",
         "body",
         "comments",
@@ -142,6 +153,30 @@ PRIORITY_RANK_BY_NAME: dict[str, tuple[str, int]] = {
 DEFAULT_UNSET_PRIORITY_RANK = 4
 
 
+def normalise_config(config: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalises config dictionary so callers can always access scanning namespace."""
+    if not isinstance(config, dict):
+        return {}
+    res = copy.deepcopy(config)
+    if "scanning" in res and isinstance(res["scanning"], dict):
+        scanning = res["scanning"]
+        if "secrets" not in scanning or not isinstance(scanning["secrets"], dict):
+            scanning["secrets"] = {}
+        secrets = scanning["secrets"]
+        if "patterns" not in secrets:
+            secrets["patterns"] = list(res.get("leak_patterns", []))
+        if "exclude_paths" not in secrets:
+            secrets["exclude_paths"] = list(res.get("scan_exclude_paths", []))
+    else:
+        res["scanning"] = {
+            "secrets": {
+                "patterns": list(res.get("leak_patterns", [])),
+                "exclude_paths": list(res.get("scan_exclude_paths", [])),
+            }
+        }
+    return res
+
+
 def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
     """Loads plugin config from an explicit path, BUG_FIXER_CONFIG env var, or standard locations."""
     target_path: Path | None = None
@@ -179,7 +214,7 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
             data = json.load(f)
             if not isinstance(data, dict):
                 raise ValueError(f"Config at {target_path} must be a JSON object, got {type(data).__name__}")
-            return data
+            return normalise_config(data)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON in config file {target_path}: {exc}") from exc
 
@@ -245,6 +280,115 @@ def redact_leaks_from_item(
                 new_reviews.append(r)
         redacted["reviews"] = new_reviews
     return redacted
+
+
+def _strip_format_controls(text: str) -> str:
+    """Strip Unicode format-control characters (category Cf) except ZWJ between emoji."""
+    result = []
+    for i, ch in enumerate(text):
+        cat = unicodedata.category(ch)
+        if cat == "Cf":
+            if ch == '\u200d':
+                prev_ch = text[i-1] if i > 0 else ''
+                next_ch = text[i+1] if i < len(text)-1 else ''
+                if prev_ch and ord(prev_ch) > 0x2000 and next_ch and ord(next_ch) > 0x2000:
+                    result.append(ch)
+                    continue
+            continue
+        result.append(ch)
+    return ''.join(result)
+
+def normalise_visible_content(text: str) -> str:
+    """Normalises visible content by stripping non-allowlisted HTML comments,
+    Unicode tag characters (ASCII smuggling), zero-width characters, and bidi overrides.
+    """
+    if not isinstance(text, str):
+        return "" if text is None else str(text)
+    if not text:
+        return text
+
+    cleaned = text
+    idx = cleaned.find("<!--")
+    while idx != -1:
+        end_idx = cleaned.find("-->", idx)
+        if end_idx == -1:
+            cleaned = cleaned[:idx]
+            break
+        else:
+            comment = cleaned[idx:end_idx+3]
+            if ALLOWLISTED_TAG_REGEX.match(comment):
+                idx = cleaned.find("<!--", end_idx)
+            else:
+                cleaned = cleaned[:idx] + cleaned[end_idx+3:]
+                idx = cleaned.find("<!--", idx)
+
+    cleaned = re.sub(r"\[//\]:\s*#\s*\([^)]*\)", "", cleaned)
+    cleaned = re.sub(r"[\ufe00-\ufe0f\U000e0100-\U000e01ef]", "", cleaned)
+    
+    return _strip_format_controls(cleaned)
+
+
+def detect_hidden_content(raw: str, normalised: str) -> bool:
+    """Returns True if raw and normalised text differ materially (non-whitespace content stripped)."""
+    if not isinstance(raw, str) or not isinstance(normalised, str):
+        return False
+    return "".join(raw.split()) != "".join(normalised.split())
+
+
+def _apply_content_normalisation(sanitized: dict[str, Any]) -> dict[str, Any]:
+    """Applies visible content normalisation to title, body, comments, and reviews.
+
+    Sets 'has_hidden_content': True on sanitized if any hidden content was detected.
+    """
+    has_hidden = False
+    if "title" in sanitized and isinstance(sanitized["title"], str):
+        raw_title = sanitized["title"]
+        norm_title = normalise_visible_content(raw_title)
+        sanitized["title"] = norm_title
+        if detect_hidden_content(raw_title, norm_title):
+            has_hidden = True
+
+    if "body" in sanitized and isinstance(sanitized["body"], str):
+        raw_body = sanitized["body"]
+        norm_body = normalise_visible_content(raw_body)
+        sanitized["body"] = norm_body
+        if detect_hidden_content(raw_body, norm_body):
+            has_hidden = True
+
+    if "comments" in sanitized and isinstance(sanitized["comments"], list):
+        norm_comments = []
+        for c in sanitized["comments"]:
+            if isinstance(c, dict) and "body" in c and isinstance(c["body"], str):
+                c_copy = dict(c)
+                raw_c_body = c["body"]
+                norm_c_body = normalise_visible_content(raw_c_body)
+                c_copy["body"] = norm_c_body
+                norm_comments.append(c_copy)
+                if detect_hidden_content(raw_c_body, norm_c_body):
+                    has_hidden = True
+            else:
+                norm_comments.append(c)
+        sanitized["comments"] = norm_comments
+
+    if "reviews" in sanitized and isinstance(sanitized["reviews"], list):
+        norm_reviews = []
+        for r in sanitized["reviews"]:
+            if isinstance(r, dict) and "body" in r and isinstance(r["body"], str):
+                r_copy = dict(r)
+                raw_r_body = r["body"]
+                norm_r_body = normalise_visible_content(raw_r_body)
+                r_copy["body"] = norm_r_body
+                norm_reviews.append(r_copy)
+                if detect_hidden_content(raw_r_body, norm_r_body):
+                    has_hidden = True
+            else:
+                norm_reviews.append(r)
+        sanitized["reviews"] = norm_reviews
+
+    if has_hidden:
+        sanitized["has_hidden_content"] = True
+
+    return sanitized
 
 
 def is_valid_repo_slug(repo: str | None) -> bool:
@@ -663,9 +807,9 @@ def sanitize_unapproved_item(
     if "body" in item:
         sanitized["body"] = REDACTED_PLACEHOLDER
     if "comments" in item:
-        sanitized["comments"] = [] if quarantined else filter_comments_list(item.get("comments") or [], trusted, None)
+        sanitized["comments"] = [] if quarantined else _apply_content_normalisation({"comments": filter_comments_list(item.get("comments") or [], trusted, None)})["comments"]
     if "reviews" in item:
-        sanitized["reviews"] = [] if quarantined else filter_comments_list(item.get("reviews") or [], trusted, None)
+        sanitized["reviews"] = [] if quarantined else _apply_content_normalisation({"reviews": filter_comments_list(item.get("reviews") or [], trusted, None)})["reviews"]
     return sanitized
 
 
@@ -736,8 +880,11 @@ def evaluate_and_sanitize_item(
             )
         if "reviews" in sanitized:
             sanitized["reviews"] = filter_comments_list(reviews, trusted_users, effective_approval_ts, comment_edit_map)
+        sanitized = _apply_content_normalisation(sanitized)
         if leak_patterns:
             sanitized = redact_leaks_from_item(sanitized, leak_patterns)
+        if sanitized.get("has_hidden_content"):
+            sanitized["approval_status"] = "HIDDEN_CONTENT"
         return True, "TRUSTED_AUTHOR", sanitized
 
     # External author: requires a valid maintainer 'approved' comment
@@ -802,8 +949,11 @@ def evaluate_and_sanitize_item(
         sanitized["comments"] = filter_comments_list(comments, trusted_users, latest_approval_ts, comment_edit_map)
     if "reviews" in sanitized:
         sanitized["reviews"] = filter_comments_list(reviews, trusted_users, latest_approval_ts, comment_edit_map)
+    sanitized = _apply_content_normalisation(sanitized)
     if leak_patterns:
         sanitized = redact_leaks_from_item(sanitized, leak_patterns)
+    if sanitized.get("has_hidden_content"):
+        sanitized["approval_status"] = "HIDDEN_CONTENT"
     return True, "APPROVED_BY_MAINTAINER", sanitized
 
 
@@ -859,10 +1009,14 @@ def sanitize_inline_pr_comments(
             if isinstance(c, dict) and "body" in c and isinstance(c["body"], str):
                 c_copy = dict(c)
                 c_copy["body"] = redact_leaks_from_text(c_copy["body"], leak_patterns)
+                c_copy["body"] = normalise_visible_content(c_copy["body"])
                 cleaned.append(c_copy)
             else:
                 cleaned.append(c)
         return cleaned
+    for c in res:
+        if isinstance(c, dict) and "body" in c and isinstance(c["body"], str):
+            c["body"] = normalise_visible_content(c["body"])
     return res
 
 
@@ -1215,7 +1369,10 @@ def _project_requested_fields(
 
     if not requested_fields:
         return item
-    return {k: item[k] for k in requested_fields if k in item}
+    res = {k: item[k] for k in requested_fields if k in item}
+    if item.get("has_hidden_content"):
+        res["has_hidden_content"] = True
+    return res
 
 
 def _extract_flag_value(args: Sequence[str], flag: str) -> tuple[str | None, list[str]]:
@@ -1272,7 +1429,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     bot_prefixes = tuple(config.get("bot_prefixes") or DEFAULT_BOT_PREFIXES)
-    leak_patterns = compile_leak_patterns(config.get("leak_patterns"))
+    leak_patterns = compile_leak_patterns(config.get("scanning", {}).get("secrets", {}).get("patterns", []))
 
     repo, _ = _extract_flag_value(passthrough, "--repo")
     if not repo:

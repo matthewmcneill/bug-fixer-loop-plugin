@@ -183,7 +183,8 @@ DEFAULTS = {
         "bug-fixer:architect:approved",
         "bug-fixer:architect:awaiting-review",
         "bug-fixer:human:needs-intervention",
-        "bug-fixer:triage:discovered-in-review"
+        "bug-fixer:triage:discovered-in-review",
+        "security:prompt-injection"
     ],
     "test_command": "",
     "lint_command": "",

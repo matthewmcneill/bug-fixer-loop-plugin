@@ -16,6 +16,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -60,6 +61,14 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
 
 def _gh(*args) -> subprocess.CompletedProcess:
     return _run(["gh", *args])
+
+
+_SAFE_POST = Path(__file__).resolve().parent / "safe_post.py"
+
+
+def _safe_post(*args) -> subprocess.CompletedProcess:
+    """Route body-carrying GitHub writes through the egress proxy."""
+    return _run([sys.executable, str(_SAFE_POST), *args])
 
 
 # ---------------------------------------------------------------------------
@@ -410,9 +419,9 @@ def post_state_dump(target_repo: str, target_type: str, target_number: int,
         target_number: issue or PR number
     """
     body = _format_state_dump(conv_id, context, dispatch)
-    cmd = "issue" if target_type == "issue" else "pr"
-    r = _gh(cmd, "comment", str(target_number), "--repo", target_repo,
-            "--body", body)
+    cmd = "issue-comment" if target_type == "issue" else "pr-comment"
+    r = _safe_post(cmd, str(target_number), "--repo", target_repo,
+                   "--body", body)
     if r.returncode == 0:
         log_fn(f"Posted state dump to {target_type} #{target_number}")
         return True

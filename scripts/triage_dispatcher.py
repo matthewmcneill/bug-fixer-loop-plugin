@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from liveness import agentapi_is_reachable, record_dispatch
+from injection_scanner import InjectionScanner, CachedInjectionScanner
 
 CLASSIFICATION_LABELS = {
     "bug-fixer:engineer:needs-fix",
@@ -115,7 +116,7 @@ log(f"Checking {TARGET_REPO} for untriaged issues")
 r = run([sys.executable, str(SAFE_INGEST), "issue-list",
          "--repo", TARGET_REPO, "--state", "open",
          "--limit", "200",
-         "--json", "number,title,labels"])
+         "--json", "number,title,body,labels,comments"])
 
 try:
     issues = json.loads(r.stdout)
@@ -140,6 +141,27 @@ for issue in issues:
     if "bug-fixer:architect:awaiting-review" in label_names and label_names & CLASSIFICATION_LABELS:
         continue
     untriaged.append(issue)
+
+# ---------------------------------------------------------------------------
+# Injection Scan
+# ---------------------------------------------------------------------------
+injection_config = config.get("scanning", {}).get("injection", {})
+scanner = CachedInjectionScanner(InjectionScanner(injection_config))
+
+safe_untriaged = []
+for issue in untriaged:
+    text = f"{issue.get('title', '')} {issue.get('body', '')}"
+    result = scanner.scan(text)
+    if result.is_injection:
+        log(f"INJECTION DETECTED on #{issue['number']}: "
+            f"{result.provider} confidence={result.confidence}")
+        r_edit = run(["gh", "issue", "edit", str(issue["number"]),
+             "--add-label", "security:prompt-injection"])
+        if r_edit.returncode != 0:
+            log(f"Failed to apply security label to #{issue['number']}: {r_edit.stderr}")
+    else:
+        safe_untriaged.append(issue)
+untriaged = safe_untriaged
 
 if not untriaged:
     log("No untriaged issues. Exiting.")

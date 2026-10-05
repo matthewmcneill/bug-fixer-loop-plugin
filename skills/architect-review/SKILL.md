@@ -202,31 +202,10 @@ If ANY architectural flaws, technical debt, pointer instability, memory leaks, o
    Please address these architectural findings in the next iteration."
    ```
 
-4. **Append Architect Conversation ID to PR Body:**
-   The agent MUST use the GitHub CLI or API to append this HTML comment to the very bottom of the PR body (preserving existing content):
-   ```html
-   <!-- agy_arch_conv_id: <this_conversation_id> -->
-   ```
-   > **CRITICAL:** Replace `<this_conversation_id>` with the agent's actual Antigravity Conversation ID.
-
-   **Execution Instructions:**
-   ```bash
-   # 1. Retrieve the existing PR body
-   EXISTING_BODY="$(gh pr view <pr_number> --repo <target_repo> --json body --jq .body)"
-
-   # 2. Append or replace the architect conversation ID comment while preserving all other content
-   # If an earlier agy_arch_conv_id comment exists, replace it; otherwise append to the bottom:
-   if echo "${EXISTING_BODY}" | grep -q "<!-- agy_arch_conv_id:"; then
-     UPDATED_BODY="$(echo "${EXISTING_BODY}" | sed -E "s|<!-- agy_arch_conv_id: [^ ]+ -->|<!-- agy_arch_conv_id: <this_conversation_id> -->|")"
-   else
-     UPDATED_BODY="${EXISTING_BODY}
-
-   <!-- agy_arch_conv_id: <this_conversation_id> -->"
-   fi
-
-   # 3. Update the PR body
-   gh pr edit <pr_number> --repo <target_repo> --body "${UPDATED_BODY}"
-   ```
+4. **Do NOT edit the PR body to record your conversation ID.**
+   The architect dispatcher writes `<!-- agy_arch_conv_id: … -->` into the PR body itself after
+   dispatching this review. Agents must not read PR bodies with raw `gh pr view` (blocked — use
+   `safe_ingest.py`) or post bodies built from shell variables (blocked as unscannable egress).
 
 5. **Exit cleanly.**
 

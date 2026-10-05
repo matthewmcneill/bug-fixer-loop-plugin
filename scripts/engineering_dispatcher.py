@@ -18,6 +18,7 @@ import re
 import signal
 import subprocess
 import sys
+
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from injection_scanner import CachedInjectionScanner, InjectionScanner
 from liveness import (record_dispatch, sweep_dispatches,
                       transcript_age_seconds, transcript_path, is_stalled,
                       is_in_error_loop, should_skip_issue_dispatch,
@@ -55,6 +57,14 @@ CONTAINMENT = (
 
 def gh(*args) -> subprocess.CompletedProcess:
     return run(["gh", *args])
+
+
+SAFE_POST = SCRIPT_DIR / "safe_post.py"
+
+
+def safe_post(*args) -> subprocess.CompletedProcess:
+    """Route body-carrying GitHub writes through the egress proxy."""
+    return run([sys.executable, str(SAFE_POST), *args])
 
 
 def inject_conv_tag(pr_number: int, tag_name: str, conv_id: str) -> bool:
@@ -89,8 +99,8 @@ def inject_conv_tag(pr_number: int, tag_name: str, conv_id: str) -> bool:
         # Append the tag
         new_body += f"\n<!-- {tag_name}: {conv_id} -->"
 
-        gh("pr", "edit", str(pr_number), "--repo", TARGET_REPO,
-           "--body", new_body)
+        safe_post("pr-edit", str(pr_number), "--repo", TARGET_REPO,
+                  "--body", new_body)
         log(f"inject_conv_tag: wrote {tag_name}={conv_id[:8]}... to PR #{pr_number}")
         return True
     except Exception as e:
@@ -453,8 +463,8 @@ def main():
                 gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
                    "--add-label", "bug-fixer:human:needs-intervention",
                    "--remove-label", "bug-fixer:engineer:in-progress")
-                gh("issue", "comment", str(issue_num), "--repo", TARGET_REPO,
-                   "--body", f"[BUG-FIXER] ⚠️ Escalating to human: {reason}")
+                safe_post("issue-comment", str(issue_num), "--repo", TARGET_REPO,
+                          "--body", f"[BUG-FIXER] ⚠️ Escalating to human: {reason}")
                 continue
 
             # Get issue title for conversation naming
@@ -573,8 +583,8 @@ def main():
                             issue_number=issue_num, timeout_minutes=45, worktree_path=str(wt_path),
                             model=model)
             log(f"Reattached #{issue_num} → conversation {new_conv_id}")
-            gh("issue", "comment", str(issue_num), "--repo", TARGET_REPO,
-               "--body", f"[BUG-FIXER] Reattached to orphaned work from session {conv_id}. New session: {new_conv_id}.")
+            safe_post("issue-comment", str(issue_num), "--repo", TARGET_REPO,
+                      "--body", f"[BUG-FIXER] Reattached to orphaned work from session {conv_id}. New session: {new_conv_id}.")
             reattach_count += 1
             reattached_issues.add(issue_num)
 
@@ -750,7 +760,7 @@ def main():
 
     r = run([sys.executable, str(SAFE_INGEST), "issue-list",
              "--repo", TARGET_REPO, "--label", "bug-fixer:engineer:needs-fix",
-             "--state", "open", "--json", "number,title,milestone,labels"])
+             "--state", "open", "--json", "number,title,body,milestone,labels,comments"])
 
     try:
         issues = json.loads(r.stdout)
@@ -759,10 +769,29 @@ def main():
         sys.exit(0)
 
     # Filter out issues already in-progress or awaiting review
-    eligible = [
+    raw_eligible = [
         i for i in issues
         if not any(l.get("name") in ("bug-fixer:engineer:in-progress", "bug-fixer:architect:awaiting-review") for l in i.get("labels", []))
     ]
+
+    # Injection Scan
+    injection_config = config.get("scanning", {}).get("injection", {})
+    scanner = CachedInjectionScanner(InjectionScanner(injection_config))
+
+    eligible = []
+    for issue in raw_eligible:
+        text_parts = [issue.get("title", ""), issue.get("body", "")]
+        for c in issue.get("comments", []):
+            text_parts.append(c.get("body", ""))
+        text = "\n".join(p for p in text_parts if p and p != "[REDACTED: UNAPPROVED EXTERNAL CONTENT]")
+        result = scanner.scan(text)
+        if result.is_injection:
+            log(f"INJECTION DETECTED on #{issue['number']}: {result.provider} confidence={result.confidence}")
+            r_edit = gh("issue", "edit", str(issue["number"]), "--repo", TARGET_REPO, "--add-label", "security:prompt-injection")
+            if r_edit.returncode != 0:
+                log(f"Failed to apply security label to #{issue['number']}: {r_edit.stderr}")
+        else:
+            eligible.append(issue)
 
     if not eligible:
         log("No eligible issues. Exiting.")
@@ -792,8 +821,8 @@ def main():
             gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
                "--add-label", "bug-fixer:human:needs-intervention",
                "--remove-label", "bug-fixer:engineer:needs-fix")
-            gh("issue", "comment", str(issue_num), "--repo", TARGET_REPO,
-               "--body", f"[BUG-FIXER] ⚠️ Escalating to human: {reason}")
+            safe_post("issue-comment", str(issue_num), "--repo", TARGET_REPO,
+                      "--body", f"[BUG-FIXER] ⚠️ Escalating to human: {reason}")
             continue
 
         log(f"Claiming #{issue_num}: {issue_title} (slot {spawned + 1}/{available_slots})")

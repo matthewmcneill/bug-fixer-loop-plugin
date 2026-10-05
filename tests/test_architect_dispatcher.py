@@ -12,8 +12,9 @@ class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
     def setUp(self):
         self.target_repo = "matthewmcneill/bug-fixer-loop-plugin"
 
+    @patch("scripts.architect_dispatcher.safe_post")
     @patch("scripts.architect_dispatcher.gh")
-    def test_conflicting_pr_handling(self, mock_gh):
+    def test_conflicting_pr_handling(self, mock_gh, mock_safe_post):
         """When an approved PR has CONFLICTING status, it should be re-routed to engineering."""
         # 1. gh pr list returns a conflicting PR
         list_output = json.dumps([
@@ -25,17 +26,18 @@ class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
         ])
         mock_gh.side_effect = [
             subprocess.CompletedProcess(args=[], returncode=0, stdout=list_output, stderr=""),  # pr list
-            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),           # pr comment
             subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),           # pr edit
             subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),           # pr ready --undo
         ]
+        mock_safe_post.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         check_merge_conflicts(self.target_repo)
 
         # Verify calls
-        self.assertEqual(mock_gh.call_count, 4)
+        self.assertEqual(mock_gh.call_count, 3)
+        self.assertEqual(mock_safe_post.call_count, 1)
 
-        # Call 1: list approved PRs
+        # Call 1: list approved PRs (via gh)
         call_1_args = mock_gh.call_args_list[0][0]
         self.assertEqual(call_1_args, (
             "pr", "list",
@@ -46,16 +48,15 @@ class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
             "--json", "number,title,mergeable",
         ))
 
-        # Call 2: post [ARCHITECT] comment
-        call_2_args = mock_gh.call_args_list[1][0]
-        self.assertEqual(call_2_args[0:4], ("pr", "comment", "42", "--repo"))
-        self.assertEqual(call_2_args[4], self.target_repo)
-        self.assertEqual(call_2_args[5], "--body")
-        self.assertIn("[ARCHITECT] Merge conflict detected:", call_2_args[6])
+        # Call 2: post [ARCHITECT] comment (via safe_post)
+        sp_args = mock_safe_post.call_args_list[0][0]
+        self.assertEqual(sp_args[0:4], ("pr-comment", "42", "--repo", self.target_repo))
+        self.assertEqual(sp_args[4], "--body")
+        self.assertIn("[ARCHITECT] Merge conflict detected:", sp_args[5])
 
-        # Call 3: update labels (remove approved, add needs-iteration)
-        call_3_args = mock_gh.call_args_list[2][0]
-        self.assertEqual(call_3_args, (
+        # Call 3: update labels (via gh)
+        call_2_args = mock_gh.call_args_list[1][0]
+        self.assertEqual(call_2_args, (
             "pr", "edit", "42",
             "--repo", self.target_repo,
             "--remove-label", "bug-fixer:architect:approved",
@@ -63,8 +64,8 @@ class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
         ))
 
         # Call 4: revert to draft via gh pr ready --undo
-        call_4_args = mock_gh.call_args_list[3][0]
-        self.assertEqual(call_4_args, (
+        call_3_args = mock_gh.call_args_list[2][0]
+        self.assertEqual(call_3_args, (
             "pr", "ready", "42",
             "--undo",
             "--repo", self.target_repo,
@@ -118,8 +119,9 @@ class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
 
         self.assertEqual(mock_gh.call_count, 1)
 
+    @patch("scripts.architect_dispatcher.safe_post")
     @patch("scripts.architect_dispatcher.gh")
-    def test_mixed_prs_handling(self, mock_gh):
+    def test_mixed_prs_handling(self, mock_gh, mock_safe_post):
         """When multiple approved PRs exist with mixed statuses, only CONFLICTING is modified."""
         list_output = json.dumps([
             {"number": 101, "title": "Mergeable PR", "mergeable": "MERGEABLE"},
@@ -128,18 +130,19 @@ class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
         ])
         mock_gh.side_effect = [
             subprocess.CompletedProcess(args=[], returncode=0, stdout=list_output, stderr=""),
-            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),  # comment
             subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),  # edit
             subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),  # undo ready
         ]
+        mock_safe_post.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         check_merge_conflicts(self.target_repo)
 
-        self.assertEqual(mock_gh.call_count, 4)
+        self.assertEqual(mock_gh.call_count, 3)
+        self.assertEqual(mock_safe_post.call_count, 1)
         # Check that mutations were only for PR #102
-        self.assertEqual(mock_gh.call_args_list[1][0][2], "102")
-        self.assertEqual(mock_gh.call_args_list[2][0][2], "102")
-        self.assertEqual(mock_gh.call_args_list[3][0][2], "102")
+        self.assertEqual(mock_safe_post.call_args_list[0][0][1], "102")  # safe_post comment
+        self.assertEqual(mock_gh.call_args_list[1][0][2], "102")  # gh edit
+        self.assertEqual(mock_gh.call_args_list[2][0][2], "102")  # gh ready --undo
 
     @patch("scripts.architect_dispatcher.gh")
     def test_query_failure_handled_gracefully(self, mock_gh):

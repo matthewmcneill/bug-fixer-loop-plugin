@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,6 +35,7 @@ AGENTAPI_DIR = Path.home() / ".gemini" / "antigravity" / "bin"
 if AGENTAPI_DIR.is_dir():
     os.environ["PATH"] = str(AGENTAPI_DIR) + os.pathsep + os.environ.get("PATH", "")
 
+from injection_scanner import CachedInjectionScanner, InjectionScanner
 from liveness import record_dispatch, sweep_dispatches, agentapi_is_reachable
 
 
@@ -48,6 +50,14 @@ def run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
 
 def gh(*args) -> subprocess.CompletedProcess:
     return run(["gh", *args])
+
+
+SAFE_POST = SCRIPT_DIR / "safe_post.py"
+
+
+def safe_post(*args) -> subprocess.CompletedProcess:
+    """Route body-carrying GitHub writes through the egress proxy."""
+    return run([sys.executable, str(SAFE_POST), *args])
 
 
 def inject_conv_tag(pr_number: int, tag_name: str, conv_id: str) -> bool:
@@ -75,8 +85,8 @@ def inject_conv_tag(pr_number: int, tag_name: str, conv_id: str) -> bool:
         # Append the tag
         new_body += f"\n<!-- {tag_name}: {conv_id} -->"
 
-        gh("pr", "edit", str(pr_number), "--repo", TARGET_REPO,
-           "--body", new_body)
+        safe_post("pr-edit", str(pr_number), "--repo", TARGET_REPO,
+                  "--body", new_body)
         log(f"inject_conv_tag: wrote {tag_name}={conv_id[:8]}... to PR #{pr_number}")
         return True
     except Exception as e:
@@ -132,7 +142,7 @@ def check_merge_conflicts(target_repo: str | None = None) -> None:
                 "- This approved PR has developed merge conflicts against the base branch.\n"
                 "- Re-routing to engineering for rebase, conflict resolution, and verification."
             )
-            r_comment = gh("pr", "comment", str(number), "--repo", repo, "--body", conflict_comment)
+            r_comment = safe_post("pr-comment", str(number), "--repo", repo, "--body", conflict_comment)
             if r_comment.returncode != 0:
                 log(f"Warning: Failed to post conflict comment on PR #{number}: {r_comment.stderr.strip()}")
 
@@ -232,6 +242,10 @@ def main():
         log("No bug-fixer PRs found. Exiting.")
         sys.exit(0)
 
+    # Init Injection Scanner
+    injection_config = config.get("scanning", {}).get("injection", {})
+    scanner = CachedInjectionScanner(InjectionScanner(injection_config))
+
     # Build set of PRs with active review dispatches
     active_review_dispatches = set()
     if DISPATCHES_DIR.exists():
@@ -279,6 +293,29 @@ def main():
             gh("pr", "edit", str(number), "--repo", TARGET_REPO,
                "--add-label", "bug-fixer:human:needs-intervention",
                "--remove-label", "bug-fixer:architect:awaiting-review")
+            continue
+
+        # Fetch comments for scanning
+        r_all_comments = run([sys.executable, str(SAFE_INGEST), "pr-view", str(number), "--repo", TARGET_REPO,
+                              "--comments", "--json", "comments"])
+        pr_comments = []
+        if r_all_comments.returncode == 0:
+            try:
+                pr_comments = json.loads(r_all_comments.stdout).get("comments", [])
+            except Exception:
+                pass
+
+        # Perform injection scan
+        text_parts = [title, body]
+        for c in pr_comments:
+            text_parts.append(c.get("body", ""))
+        text = "\n".join(p for p in text_parts if p and p != "[REDACTED: UNAPPROVED EXTERNAL CONTENT]")
+        result = scanner.scan(text)
+        if result.is_injection:
+            log(f"INJECTION DETECTED on PR #{number}: {result.provider} confidence={result.confidence}")
+            r_edit = gh("pr", "edit", str(number), "--repo", TARGET_REPO, "--add-label", "security:prompt-injection")
+            if r_edit.returncode != 0:
+                log(f"Failed to apply security label to PR #{number}: {r_edit.stderr}")
             continue
 
         log(f"Processing PR #{number}: {title} (review round {review_count + 1}/{MAX_REVIEW_ROUNDS})")

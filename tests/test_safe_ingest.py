@@ -17,12 +17,14 @@ from scripts.safe_ingest import (
     _extract_json_payload,
     _project_requested_fields,
     compile_leak_patterns,
+    detect_hidden_content,
     evaluate_and_sanitize_item,
     extract_author_login,
     filter_comments_list,
     is_approval_comment,
     is_valid_repo_slug,
     load_config,
+    normalise_visible_content,
     parse_iso_timestamp,
     redact_leaks_from_item,
     redact_leaks_from_text,
@@ -422,6 +424,165 @@ class TestSafeIngest(unittest.TestCase):
         )
         self.assertEqual([i["number"] for i in sorted_items], [12, 15, 10])
 
+    # 9. Content normalisation and hidden content detection tests
+    def test_normalise_visible_content_strips_html_comments(self):
+        # 1. HTML comments are stripped
+        self.assertEqual(
+            normalise_visible_content("Hello <!-- hidden instruction --> world"),
+            "Hello  world",
+        )
+        # Multiline HTML comments are stripped
+        multiline = "line 1\n<!-- comment\nline 2 -->\nline 3"
+        self.assertEqual(
+            normalise_visible_content(multiline),
+            "line 1\n\nline 3",
+        )
+        # Non-allowlisted comment tag shapes are stripped
+        self.assertEqual(
+            normalise_visible_content("<!-- agy_other_conv_id: 123 -->"),
+            "",
+        )
+        self.assertEqual(
+            normalise_visible_content("<!-- agy_dev_conv_id: abc123 \n malicious -->"),
+            "",
+        )
+
+    def test_normalise_visible_content_preserves_agy_conv_id_tags(self):
+        # 2. AGY conversation ID tags are preserved
+        self.assertEqual(
+            normalise_visible_content("<!-- agy_dev_conv_id: abc123 -->"),
+            "<!-- agy_dev_conv_id: abc123 -->",
+        )
+        self.assertEqual(
+            normalise_visible_content("<!-- agy_arch_conv_id: arch-uuid-456 -->"),
+            "<!-- agy_arch_conv_id: arch-uuid-456 -->",
+        )
+        # Preserved when embedded among other text and stripped comments
+        text = "Start <!-- hidden --> <!-- agy_dev_conv_id: abc123 --> End"
+        self.assertEqual(
+            normalise_visible_content(text),
+            "Start  <!-- agy_dev_conv_id: abc123 --> End",
+        )
+
+    def test_normalise_visible_content_strips_unicode_tags(self):
+        # 3. Unicode tag characters (U+E0001, ASCII smuggling range U+E0000-U+E007F)
+        self.assertEqual(
+            normalise_visible_content("Hello\U000e0001World"),
+            "HelloWorld",
+        )
+        smuggled = "Visible\U000e0020\U000e0048\U000e0069\U000e007f"
+        self.assertEqual(
+            normalise_visible_content(smuggled),
+            "Visible",
+        )
+
+    def test_normalise_visible_content_strips_zero_width_characters(self):
+        # 4. Zero-width characters (U+200B, U+200C, U+200D, U+FEFF)
+        self.assertEqual(
+            normalise_visible_content("A\u200bB\u200cC\u200dD\ufeffE"),
+            "ABCDE",
+        )
+
+    def test_normalise_visible_content_strips_bidi_overrides(self):
+        # 5. Bidi overrides (U+202A–U+202E, U+2066–U+2069)
+        bidi_text = "A\u202aB\u202bC\u202cD\u202dE\u202eF\u2066G\u2067H\u2068I\u2069J"
+        self.assertEqual(
+            normalise_visible_content(bidi_text),
+            "ABCDEFGHIJ",
+        )
+
+    def test_detect_hidden_content(self):
+        # 6. Returns True when content stripped and False when nothing changed
+        self.assertTrue(detect_hidden_content("Hello <!-- hidden instruction --> world", "Hello  world"))
+        self.assertTrue(detect_hidden_content("Hello\U000e0001World", "HelloWorld"))
+        self.assertTrue(detect_hidden_content("A\u200bB", "AB"))
+        self.assertTrue(detect_hidden_content("A\u202aB", "AB"))
+
+        # False when nothing changed
+        self.assertFalse(detect_hidden_content("Hello world", "Hello world"))
+        self.assertFalse(detect_hidden_content("<!-- agy_dev_conv_id: abc123 -->", "<!-- agy_dev_conv_id: abc123 -->"))
+        self.assertFalse(detect_hidden_content("", ""))
+        # False when only whitespace differs
+        self.assertFalse(detect_hidden_content("Hello   world\n", "Hello world"))
+
+    def test_evaluate_and_sanitize_item_sets_has_hidden_content(self):
+        # 7. Sets has_hidden_content: true on an item with hidden content (trusted author path)
+        issue_with_hidden = {
+            "number": 101,
+            "title": "Clean Title <!-- hidden payload -->",
+            "body": "Normal body with zero-width space\u200b injected",
+            "author": {"login": "maintainer-user"},
+            "createdAt": "2026-09-26T09:00:00Z",
+            "labels": [{"name": "bug"}],
+            "comments": [
+                {
+                    "id": "c1",
+                    "author": {"login": "maintainer-user"},
+                    "body": "Comment with \U000e0001 tag",
+                    "createdAt": "2026-09-26T09:05:00Z",
+                }
+            ],
+        }
+        ok, reason, clean = evaluate_and_sanitize_item(issue_with_hidden, self.trusted)
+        self.assertTrue(ok)
+        self.assertEqual(reason, "TRUSTED_AUTHOR")
+        self.assertIsNotNone(clean)
+        self.assertTrue(clean.get("has_hidden_content"))
+        self.assertEqual(clean["title"], "Clean Title ")
+        self.assertEqual(clean["body"], "Normal body with zero-width space injected")
+        self.assertEqual(clean["comments"][0]["body"], "Comment with  tag")
+
+        # Clean item without hidden content does not set has_hidden_content
+        issue_clean = {
+            "number": 102,
+            "title": "Clean Title",
+            "body": "Normal body\n<!-- agy_dev_conv_id: abc123 -->",
+            "author": {"login": "maintainer-user"},
+            "createdAt": "2026-09-26T09:00:00Z",
+            "labels": [{"name": "bug"}],
+            "comments": [],
+        }
+        ok_c, reason_c, clean_c = evaluate_and_sanitize_item(issue_clean, self.trusted)
+        self.assertTrue(ok_c)
+        self.assertNotIn("has_hidden_content", clean_c)
+        self.assertIn("<!-- agy_dev_conv_id: abc123 -->", clean_c["body"])
+
+        # External author with approval also sets has_hidden_content: true when hidden content present
+        issue_external = {
+            "number": 103,
+            "title": "External Title <!-- prompt injection -->",
+            "body": "External Body",
+            "author": {"login": "external-user"},
+            "createdAt": "2026-09-26T09:00:00Z",
+            "comments": [
+                {
+                    "id": "c2",
+                    "author": {"login": "maintainer-user"},
+                    "body": "approved",
+                    "createdAt": "2026-09-26T09:10:00Z",
+                    "includesCreatedEdit": False,
+                }
+            ],
+        }
+        mock_fetcher = lambda n: {"lastEditedAt": None, "includesCreatedEdit": False, "commentLastEditedAt": {"c2": None}}
+        ok_ext, reason_ext, clean_ext = evaluate_and_sanitize_item(issue_external, self.trusted, edit_metadata_fetcher=mock_fetcher)
+        self.assertTrue(ok_ext)
+        self.assertEqual(reason_ext, "APPROVED_BY_MAINTAINER")
+        self.assertTrue(clean_ext.get("has_hidden_content"))
+        self.assertEqual(clean_ext["title"], "External Title ")
+
+
+
+    def test_load_config_v2_workspace(self):
+        """Test that load_config correctly loads the v2 workspace config and populates patterns."""
+        from scripts.safe_ingest import load_config
+        config = load_config(".agents/plugins/bug-fixer-loop-workspace/config.json")
+        self.assertIn("scanning", config)
+        self.assertIn("secrets", config["scanning"])
+        self.assertIn("patterns", config["scanning"]["secrets"])
+        self.assertTrue(isinstance(config["scanning"]["secrets"]["patterns"], list))
+        self.assertTrue(len(config["scanning"]["secrets"]["patterns"]) > 0)
 
 if __name__ == "__main__":
+
     unittest.main()
