@@ -15,10 +15,7 @@ import re
 import sys
 from urllib.parse import unquote_plus
 
-try:
-    from pre_tool_gate import compile_leak_patterns, load_config
-except ImportError:  # imported as scripts.github_url_gate
-    from scripts.pre_tool_gate import compile_leak_patterns, load_config
+from pre_tool_gate import compile_leak_patterns, load_config
 
 GITHUB_ISSUE_PR_URL = re.compile(
     r"https?://github\.com/[^/]+/[^/]+/(?:issues|pull)/\d+"

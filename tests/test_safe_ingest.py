@@ -1,14 +1,19 @@
 import io
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from pathlib import Path
 
-from scripts.safe_ingest import (
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from safe_ingest import (
     APPROVAL_COMMENT_REGEX,
     DEFAULT_BOT_PREFIXES,
     MANDATORY_INTERNAL_FIELDS,
@@ -575,7 +580,7 @@ class TestSafeIngest(unittest.TestCase):
 
     def test_load_config_v2_workspace(self):
         """Test that load_config correctly loads the v2 workspace config and populates patterns."""
-        from scripts.safe_ingest import load_config
+        from safe_ingest import load_config
         config = load_config(".agents/plugins/bug-fixer-loop-workspace/config.json")
         self.assertIn("scanning", config)
         self.assertIn("secrets", config["scanning"])

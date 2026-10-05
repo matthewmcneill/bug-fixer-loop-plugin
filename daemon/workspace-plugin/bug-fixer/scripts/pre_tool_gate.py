@@ -46,12 +46,8 @@ import sys
 from typing import Any, Protocol, runtime_checkable
 import unicodedata
 
-try:
-    from shell_analysis import DYN, Segment, ShellParseError, Word, expand_braces
-    from shell_analysis import parse as parse_shell
-except ImportError:  # imported as scripts.pre_tool_gate
-    from scripts.shell_analysis import DYN, Segment, ShellParseError, Word, expand_braces
-    from scripts.shell_analysis import parse as parse_shell
+from shell_analysis import DYN, Segment, ShellParseError, Word, expand_braces
+from shell_analysis import parse as parse_shell
 
 # Gate Denial Reasons
 REASON_SPEC_IMMUTABLE = (

@@ -10,8 +10,9 @@ import sys
 import unittest
 
 REPO = Path(__file__).resolve().parents[1]
-GATE = REPO / "scripts" / "github_url_gate.py"
-sys.path.insert(0, str(REPO / "scripts"))
+SCRIPTS_DIR = REPO / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"
+GATE = SCRIPTS_DIR / "github_url_gate.py"
+sys.path.insert(0, str(SCRIPTS_DIR))
 
 from github_url_gate import REASON, REASON_URL_LEAK, url_leaks  # noqa: E402
 

@@ -20,7 +20,7 @@ import unittest
 import unittest.mock
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "scripts"))
+sys.path.insert(0, str(REPO / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"))
 
 import pre_tool_gate  # noqa: E402
 from pre_tool_gate import BUILTIN_LEAK_PATTERNS, evaluate_pretool_call, load_config  # noqa: E402
@@ -284,9 +284,9 @@ def _legitimate(rt: str) -> list[str]:
         "grep -n leak scripts/pre_tool_gate.py",
         "python3 -m unittest discover -s tests -v",
         "python3 -m unittest tests/test_safe_post.py",
-        "python3 scripts/safe_ingest.py issue-list --repo o/r --json number",
-        "python3 scripts/pre_tool_gate.py --scan-only .",
-        f"python3 scripts/pre_tool_gate.py --config {WS}/config.json --scan-only .",
+        "python3 daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py issue-list --repo o/r --json number",
+        "python3 daemon/workspace-plugin/bug-fixer/scripts/pre_tool_gate.py --scan-only .",
+        f"python3 daemon/workspace-plugin/bug-fixer/scripts/pre_tool_gate.py --config {WS}/config.json --scan-only .",
         "python3 --version",
         "bash --version",
         'python3 -c "print(1+1)"',
@@ -366,7 +366,7 @@ class TestGateBAdversarial(unittest.TestCase):
         }
         for name, content in files.items():
             Path(cls.rt, name).write_text(content)
-        os.symlink(REPO / "scripts" / "safe_post.py", Path(cls.rt, "proxy_link.py"))
+        os.symlink(REPO / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts" / "safe_post.py", Path(cls.rt, "proxy_link.py"))
         os.mkfifo(Path(cls.rt, "fifo"))
         cls.config = load_config(REPO / WS / "config.json")
 

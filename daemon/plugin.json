@@ -1,0 +1,5 @@
+{
+  "name": "bug-fixer-daemon",
+  "description": "Bug-fixer global daemon — sidecars and tick loop",
+  "disabled": true
+}

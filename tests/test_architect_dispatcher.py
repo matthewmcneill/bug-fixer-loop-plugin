@@ -3,17 +3,23 @@
 import json
 import subprocess
 import unittest
+import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from scripts.architect_dispatcher import check_merge_conflicts
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from architect_dispatcher import check_merge_conflicts
 
 
 class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
     def setUp(self):
         self.target_repo = "matthewmcneill/bug-fixer-loop-plugin"
 
-    @patch("scripts.architect_dispatcher.safe_post")
-    @patch("scripts.architect_dispatcher.gh")
+    @patch("architect_dispatcher.safe_post")
+    @patch("architect_dispatcher.gh")
     def test_conflicting_pr_handling(self, mock_gh, mock_safe_post):
         """When an approved PR has CONFLICTING status, it should be re-routed to engineering."""
         # 1. gh pr list returns a conflicting PR
@@ -71,7 +77,7 @@ class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
             "--repo", self.target_repo,
         ))
 
-    @patch("scripts.architect_dispatcher.gh")
+    @patch("architect_dispatcher.gh")
     def test_mergeable_pr_no_action(self, mock_gh):
         """When an approved PR is MERGEABLE, no mutation commands should be executed."""
         list_output = json.dumps([
@@ -90,7 +96,7 @@ class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
         # Only the list query should have run
         self.assertEqual(mock_gh.call_count, 1)
 
-    @patch("scripts.architect_dispatcher.gh")
+    @patch("architect_dispatcher.gh")
     def test_unknown_pr_no_action(self, mock_gh):
         """When an approved PR has UNKNOWN mergeable status, retry next tick without mutations."""
         list_output = json.dumps([
@@ -108,7 +114,7 @@ class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
 
         self.assertEqual(mock_gh.call_count, 1)
 
-    @patch("scripts.architect_dispatcher.gh")
+    @patch("architect_dispatcher.gh")
     def test_empty_approved_prs_list(self, mock_gh):
         """When no approved PRs exist, check exits cleanly without mutations."""
         mock_gh.return_value = subprocess.CompletedProcess(
@@ -119,8 +125,8 @@ class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
 
         self.assertEqual(mock_gh.call_count, 1)
 
-    @patch("scripts.architect_dispatcher.safe_post")
-    @patch("scripts.architect_dispatcher.gh")
+    @patch("architect_dispatcher.safe_post")
+    @patch("architect_dispatcher.gh")
     def test_mixed_prs_handling(self, mock_gh, mock_safe_post):
         """When multiple approved PRs exist with mixed statuses, only CONFLICTING is modified."""
         list_output = json.dumps([
@@ -144,7 +150,7 @@ class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
         self.assertEqual(mock_gh.call_args_list[1][0][2], "102")  # gh edit
         self.assertEqual(mock_gh.call_args_list[2][0][2], "102")  # gh ready --undo
 
-    @patch("scripts.architect_dispatcher.gh")
+    @patch("architect_dispatcher.gh")
     def test_query_failure_handled_gracefully(self, mock_gh):
         """If gh pr list fails with a non-zero exit code, error is handled without crashing."""
         mock_gh.return_value = subprocess.CompletedProcess(
@@ -155,7 +161,7 @@ class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
         check_merge_conflicts(self.target_repo)
         self.assertEqual(mock_gh.call_count, 1)
 
-    @patch("scripts.architect_dispatcher.gh")
+    @patch("architect_dispatcher.gh")
     def test_invalid_json_handled_gracefully(self, mock_gh):
         """If gh pr list returns invalid JSON, error is handled without crashing."""
         mock_gh.return_value = subprocess.CompletedProcess(

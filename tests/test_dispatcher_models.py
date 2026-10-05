@@ -2,10 +2,15 @@
 
 import re
 import unittest
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.engineering_dispatcher import (
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from engineering_dispatcher import (
     COMPLEXITY_MODEL_MAP,
     get_default_engineering_model,
     get_model_for_issue,
@@ -16,6 +21,9 @@ class TestDispatcherModels(unittest.TestCase):
     def setUp(self):
         self.repo_root = Path(__file__).resolve().parent.parent
         self.scripts_dir = self.repo_root / "scripts"
+        self.py_scripts_dir = (
+            self.repo_root / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"
+        )
 
     def test_install_script_contains_default_models(self):
         """Verify install.sh defines the expected model tier defaults."""
@@ -42,7 +50,7 @@ class TestDispatcherModels(unittest.TestCase):
             "trajectory_dispatcher.py",
         ]
         for name in dispatchers:
-            script_path = self.scripts_dir / name
+            script_path = self.py_scripts_dir / name
             content = script_path.read_text()
             # Find all calls to agentapi new-conversation
             matches = re.findall(
@@ -82,7 +90,7 @@ class TestDispatcherModels(unittest.TestCase):
         )
 
         # Default fallback (no complexity label, empty config -> 'pro')
-        with patch.dict("scripts.engineering_dispatcher.config", {}, clear=True):
+        with patch.dict("engineering_dispatcher.config", {}, clear=True):
             self.assertEqual(
                 get_model_for_issue({"labels": [{"name": "bug"}]}),
                 "pro",
@@ -91,7 +99,7 @@ class TestDispatcherModels(unittest.TestCase):
 
         # Config with engineering_model override
         with patch.dict(
-            "scripts.engineering_dispatcher.config",
+            "engineering_dispatcher.config",
             {"engineering_model": "flash_lite"},
             clear=True,
         ):
@@ -103,7 +111,7 @@ class TestDispatcherModels(unittest.TestCase):
 
         # Config with legacy tick_model fallback
         with patch.dict(
-            "scripts.engineering_dispatcher.config",
+            "engineering_dispatcher.config",
             {"tick_model": "flash"},
             clear=True,
         ):

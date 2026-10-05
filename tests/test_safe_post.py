@@ -8,7 +8,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-SCRIPT = os.path.join(os.path.dirname(__file__), "..", "scripts", "safe_post.py")
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+SCRIPT = str(SCRIPTS_DIR / "safe_post.py")
 
 
 class TestSafePost(unittest.TestCase):
@@ -205,7 +208,7 @@ class TestSafePost(unittest.TestCase):
 
     def test_fail_closed_no_config_reachable(self):
         """load_leak_patterns returns a catch-all when no workspace config is reachable."""
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+        sys.path.insert(0, str(SCRIPTS_DIR))
         orig_cwd = os.getcwd()
         try:
             import safe_post as sp_mod  # noqa: PLC0415 - imported after sys.path setup

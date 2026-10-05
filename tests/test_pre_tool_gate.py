@@ -10,7 +10,11 @@ import unittest
 import unittest.mock
 from typing import Any
 
-from scripts.pre_tool_gate import (
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from pre_tool_gate import (
     REASON_APPROVAL_INJECTION,
     REASON_AUTO_MERGE,
     REASON_EGRESS_LEAK,
@@ -35,7 +39,7 @@ from scripts.pre_tool_gate import (
 )
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
-GATE_SCRIPT = PLUGIN_ROOT / "scripts" / "pre_tool_gate.py"
+GATE_SCRIPT = PLUGIN_ROOT / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts" / "pre_tool_gate.py"
 
 # Test config (config.json no longer lives in plugin root — it's in the consumer workspace)
 TEST_CONFIG = {
@@ -256,7 +260,7 @@ class TestPreToolGate(unittest.TestCase):
     def test_gate_b_allow_normal_command(self):
         for cmd in (
             "pio test -e native",
-            "python3 scripts/safe_ingest.py issue-list",
+            "python3 daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py issue-list",
             "git status",
             "git checkout -b fix/issue-100",
             "git add src/main.cpp",
@@ -326,7 +330,7 @@ class TestPreToolGate(unittest.TestCase):
             subprocess.run(["git", "add", "secret.txt"], cwd=temp_dir, check=True, capture_output=True)
 
             patterns = TEST_CONFIG["leak_patterns"]
-            import scripts.pre_tool_gate as pre_tool_gate
+            import pre_tool_gate
             violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns)
             self.assertEqual(len(violations), 1)
             self.assertIn("secret.txt", violations[0])
@@ -386,7 +390,7 @@ class TestPreToolGate(unittest.TestCase):
             subprocess.run(["git", "add", "tests/credentials.txt"], cwd=temp_dir, check=True, capture_output=True)
             
             patterns = TEST_CONFIG["leak_patterns"]
-            import scripts.pre_tool_gate as pre_tool_gate
+            import pre_tool_gate
             violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns, exclude_paths=["tests/"])
             self.assertEqual(len(violations), 0)
             self.assertEqual(excluded, 1)
@@ -407,7 +411,7 @@ class TestPreToolGate(unittest.TestCase):
             subprocess.run(["git", "add", "tests/credentials.txt", "src/credentials.txt"], cwd=temp_dir, check=True, capture_output=True)
             
             patterns = TEST_CONFIG["leak_patterns"]
-            import scripts.pre_tool_gate as pre_tool_gate
+            import pre_tool_gate
             violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns, exclude_paths=["tests/"])
             self.assertEqual(len(violations), 1)
             self.assertIn("src/credentials.txt", violations[0])
@@ -738,7 +742,7 @@ class TestPreToolGate(unittest.TestCase):
 
     # BetterleaksBackend Tests
     def test_betterleaks_build_env_strips_vars(self):
-        from scripts.pre_tool_gate import BetterleaksBackend
+        from pre_tool_gate import BetterleaksBackend
         import os
         os.environ['BETTERLEAKS_VALIDATE'] = '1'
         os.environ['BETTERLEAKS_SOMETHING'] = 'abc'
@@ -752,7 +756,7 @@ class TestPreToolGate(unittest.TestCase):
         self.assertIn('OTHER_VAR', env)
 
     def test_betterleaks_build_cmd_flags(self):
-        from scripts.pre_tool_gate import BetterleaksBackend, ScanScope
+        from pre_tool_gate import BetterleaksBackend, ScanScope
         backend = BetterleaksBackend(config_path='/fake/path.toml')
         cmd = backend._build_cmd('/repo', ScanScope.TREE)
         
@@ -771,7 +775,7 @@ class TestPreToolGate(unittest.TestCase):
             self.assertIn(flag, cmd)
 
     def test_betterleaks_build_cmd_scopes(self):
-        from scripts.pre_tool_gate import BetterleaksBackend, ScanScope
+        from pre_tool_gate import BetterleaksBackend, ScanScope
         backend = BetterleaksBackend()
         
         cmd_staged = backend._build_cmd('/repo', ScanScope.STAGED)
@@ -782,7 +786,7 @@ class TestPreToolGate(unittest.TestCase):
 
     @unittest.mock.patch('subprocess.check_output')
     def test_betterleaks_scan_parses_json(self, mock_check_output):
-        from scripts.pre_tool_gate import BetterleaksBackend, ScanScope
+        from pre_tool_gate import BetterleaksBackend, ScanScope
         mock_output = '''{
             "scan": {"state": "complete", "files_scanned": 12},
             "findings": [
@@ -803,7 +807,7 @@ class TestPreToolGate(unittest.TestCase):
 
     @unittest.mock.patch('subprocess.check_output')
     def test_betterleaks_scan_no_raw_secret(self, mock_check_output):
-        from scripts.pre_tool_gate import BetterleaksBackend, ScanScope
+        from pre_tool_gate import BetterleaksBackend, ScanScope
         mock_output = '''{
             "scan": {"state": "complete", "files_scanned": 1},
             "findings": [
@@ -826,7 +830,7 @@ class TestPreToolGate(unittest.TestCase):
 
     @unittest.mock.patch('subprocess.run')
     def test_resolve_backend_fallback_to_regex(self, mock_run):
-        from scripts.pre_tool_gate import resolve_backend, RegexBackend
+        from pre_tool_gate import resolve_backend, RegexBackend
         import subprocess
         # Simulate betterleaks not found
         mock_run.side_effect = FileNotFoundError()
@@ -843,8 +847,8 @@ class TestPreToolGate(unittest.TestCase):
 
     @unittest.mock.patch('subprocess.run')
     def test_resolve_backend_returns_betterleaks(self, mock_run):
-        from scripts.pre_tool_gate import resolve_backend
-        from scripts.pre_tool_gate import BetterleaksBackend
+        from pre_tool_gate import resolve_backend
+        from pre_tool_gate import BetterleaksBackend
         # Simulate betterleaks found
         mock_run.return_value = None
         
@@ -923,7 +927,7 @@ class TestPreToolGate(unittest.TestCase):
 
     @unittest.mock.patch("subprocess.run")
     def test_resolve_backend_reads_normalised_v2_config(self, mock_run):
-        from scripts.pre_tool_gate import BetterleaksBackend, RegexBackend, resolve_backend
+        from pre_tool_gate import BetterleaksBackend, RegexBackend, resolve_backend
 
         mock_run.return_value = None
 
@@ -1007,7 +1011,7 @@ class TestPreToolGate(unittest.TestCase):
                 "scan_exclude_paths": ["tests/"],
             }
 
-            import scripts.pre_tool_gate as pre_tool_gate
+            import pre_tool_gate
 
             violations, scanned, excluded = pre_tool_gate.scan_repository(
                 temp_dir,
