@@ -33,13 +33,13 @@ class TestDispatcherModels(unittest.TestCase):
         self.assertIn('"architect_model": "pro"', install_script)
         self.assertIn('"trajectory_model": "flash"', install_script)
 
-    def test_configure_script_contains_default_models(self):
-        """Verify configure.sh provisions the default model tiers."""
-        configure_script = (self.scripts_dir / "configure.sh").read_text()
-        self.assertIn('config["triage_model"] = "flash"', configure_script)
-        self.assertIn('config["architect_model"] = "pro"', configure_script)
-        self.assertIn('config["trajectory_model"] = "flash"', configure_script)
-        self.assertIn('config["engineering_model"]', configure_script)
+    def test_enroll_script_contains_default_models(self):
+        """Verify enroll.sh provisions the default model tiers."""
+        enroll_script = (self.scripts_dir / "enroll.sh").read_text()
+        self.assertIn('"triage_model": "flash"', enroll_script)
+        self.assertIn('"architect_model": "pro"', enroll_script)
+        self.assertIn('"trajectory_model": "flash"', enroll_script)
+        self.assertIn('"engineering_model": "pro"', enroll_script)
 
     def test_all_dispatchers_specify_model_flag_on_new_conversation(self):
         """Verify all agentapi new-conversation calls in dispatcher scripts pass --model."""

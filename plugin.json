@@ -1,6 +1,0 @@
-{
-  "name": "bug-fixer-loop",
-  "version": "0.3.0",
-  "disabled": true,
-  "description": "Autonomous bug fixer loop — a 4-loop background agent that triages, fixes, architect-reviews, and PRs small bugs and TODOs while you focus on major feature work."
-}
