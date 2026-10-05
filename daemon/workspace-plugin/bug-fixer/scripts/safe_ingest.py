@@ -35,6 +35,8 @@ from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from pre_tool_gate import _find_daemon_dir
+
 APPROVAL_COMMENT_REGEX = re.compile(r"^\s*/?approved?\s*[.!]*\s*$", re.IGNORECASE)
 REPO_SLUG_REGEX = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GRAPHQL_PAGE_LIMIT = 100
@@ -177,7 +179,21 @@ def normalise_config(config: dict[str, Any] | None) -> dict[str, Any]:
     return res
 
 
-def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
+def _defaults() -> dict[str, Any]:
+    return normalise_config(
+        {
+            "spec_file_path": "docs/plugin-architecture.md",
+            "protected_files": ["docs/plugin-architecture.md"],
+            "leak_patterns": [],
+            "scan_exclude_paths": ["tests/"],
+        }
+    )
+
+
+def load_config(
+    config_path: str | Path | None = None,
+    require: bool = False,
+) -> dict[str, Any]:
     """Loads plugin config from an explicit path, BUG_FIXER_CONFIG env var, or standard locations."""
     target_path: Path | None = None
     if config_path:
@@ -190,24 +206,31 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
             raise FileNotFoundError(f"Configuration file not found at BUG_FIXER_CONFIG path: {env_path}")
         target_path = env_path
     else:
-        # Search candidate locations (standard layout):
-        # 1. Workspace config (sibling of plugin dir in .agents/plugins/)
-        # 2. Current working directory (for direct CLI usage)
+        # Search candidate locations:
         script_dir = Path(__file__).resolve().parent
         plugin_dir = script_dir.parent
-        candidates = [
+        daemon_dir = _find_daemon_dir(script_dir)
+        candidates = []
+        if daemon_dir:
+            sidecars_dir = daemon_dir / "sidecars"
+            if sidecars_dir.is_dir():
+                for sidecar_sub in sidecars_dir.iterdir():
+                    if sidecar_sub.is_dir() and (sidecar_sub / "config.json").is_file():
+                        candidates.append(sidecar_sub / "config.json")
+        candidates.extend([
+            plugin_dir / "config.json",
             plugin_dir.parent / "bug-fixer-loop-workspace" / "config.json",
             Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace" / "config.json",
-        ]
+        ])
         for cand in candidates:
             if cand.is_file():
                 target_path = cand
                 break
 
     if target_path is None or not target_path.is_file():
-        raise FileNotFoundError(
-            "Could not locate config.json. Please specify via --config <path> or set BUG_FIXER_CONFIG environment variable."
-        )
+        if require:
+            raise FileNotFoundError("No bug-fixer config found")
+        return _defaults()
 
     try:
         with open(target_path, "r", encoding="utf-8") as f:

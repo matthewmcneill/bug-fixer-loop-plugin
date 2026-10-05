@@ -190,6 +190,16 @@ class InjectionScanner:
             raise
 
 
+def _get_cache_path(config_path: str | None = None) -> Path:
+    config_env = os.environ.get("BUG_FIXER_CONFIG", "")
+    if config_env and Path(config_env).is_file():
+        return Path(config_env).resolve().parent / "injection_cache.json"
+    if config_path and Path(config_path).is_file():
+        return Path(config_path).resolve().parent / "injection_cache.json"
+    # Legacy fallback
+    return Path(__file__).resolve().parent.parent / "injection_cache.json"
+
+
 class CachedInjectionScanner:
     """Wraps InjectionScanner with SHA-256 content-hash cache.
 
@@ -201,21 +211,10 @@ class CachedInjectionScanner:
                  max_cache: int = 1000):
         self.scanner = scanner
         self.max_cache = max_cache
-        # Derive cache path from BUG_FIXER_CONFIG env or explicit dir
-        if cache_dir is None:
-            # Derive from BUG_FIXER_CONFIG (set by sidecar stub).
-            # The cache sits next to the loaded config, which is the
-            # path Gate A protects.
-            env_config = os.environ.get("BUG_FIXER_CONFIG", "")
-            if env_config:
-                cache_dir = str(Path(env_config).resolve().parent)
-            else:
-                # Fallback: plugin's own workspace
-                cache_dir = str(
-                    Path(__file__).resolve().parent.parent
-                    / ".agents" / "plugins" / "bug-fixer-loop-workspace"
-                )
-        self.cache_path = os.path.join(cache_dir, "injection_cache.json")
+        if cache_dir is not None:
+            self.cache_path = str(Path(cache_dir) / "injection_cache.json")
+        else:
+            self.cache_path = str(_get_cache_path())
         self._cache: dict[str, dict] = self._load_cache()
 
     def _cache_key(self, text: str) -> str:

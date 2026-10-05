@@ -34,7 +34,7 @@ from pathlib import Path
 # Derive config path from this script's location (deterministic)
 SCRIPT_DIR = Path(__file__).resolve().parent
 PLUGIN_DIR = SCRIPT_DIR.parent
-WORKSPACE_DIR = PLUGIN_DIR / ".agents" / "plugins" / "bug-fixer-loop-workspace"
+WORKSPACE_DIR = PLUGIN_DIR.parent / "bug-fixer-loop-workspace"
 DEFAULT_CONFIG = WORKSPACE_DIR / "config.json"
 
 
@@ -52,12 +52,21 @@ APPROVAL_TEXT_REGEX = re.compile(r"^\s*/?(?:approved?|lgtm)\s*[.!]*\s*$", re.IGN
 
 
 def _candidate_configs() -> list[Path]:
-    """Every workspace config this invocation could legitimately belong to."""
+    """Config search order: env → sidecar scan → legacy."""
     candidates: list[Path] = []
-    env_path = os.environ.get("BUG_FIXER_CONFIG", "")
-    if env_path:
-        candidates.append(Path(env_path).expanduser())
-    candidates.append(DEFAULT_CONFIG)
+    config_env = os.environ.get("BUG_FIXER_CONFIG", "")
+    if config_env:
+        candidates.append(Path(config_env))
+    if DEFAULT_CONFIG:
+        candidates.append(Path(DEFAULT_CONFIG))
+    # Legacy paths (backward compat)
+    script_dir = Path(__file__).resolve().parent
+    plugin_dir = script_dir.parent
+    candidates.append(plugin_dir / "config.json")  # co-located (old workspace layout)
+    for top in (plugin_dir.parent,):
+        workspace = top / "bug-fixer-loop-workspace" / "config.json"
+        candidates.append(workspace)
+    candidates.append(Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace" / "config.json")
     try:
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=5
@@ -69,9 +78,13 @@ def _candidate_configs() -> list[Path]:
         pass
     unique: list[Path] = []
     for c in candidates:
-        resolved = c.resolve()
-        if resolved not in unique:
-            unique.append(resolved)
+        try:
+            resolved = c.resolve()
+            if resolved not in unique:
+                unique.append(resolved)
+        except Exception:
+            if c not in unique:
+                unique.append(c)
     return unique
 
 

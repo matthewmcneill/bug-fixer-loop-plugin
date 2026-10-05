@@ -75,6 +75,50 @@ class SessionContext:
 _WORKSPACE_NAME = "bug-fixer-loop-workspace"
 
 
+def _find_dispatches_dir(workspace_dir: Path | None = None) -> Path | None:
+    """Find the dispatches directory.
+
+    Order:
+    1. BUG_FIXER_STATE_DIR env var -> <state_dir>/dispatches
+    2. Derived from BUG_FIXER_CONFIG env var -> <config_dir>/state/dispatches or <config_dir>/dispatches
+    3. Derived from workspace_dir -> <workspace_dir>/state/dispatches or <workspace_dir>/dispatches
+    4. Legacy workspace fallback (_WORKSPACE_NAME) -> <workspace>/state/dispatches or <workspace>/dispatches
+    """
+    state_dir = os.environ.get("BUG_FIXER_STATE_DIR", "")
+    if state_dir and Path(state_dir).is_dir():
+        return Path(state_dir) / "dispatches"
+
+    # Derive from BUG_FIXER_CONFIG
+    config_env = os.environ.get("BUG_FIXER_CONFIG", "")
+    if config_env:
+        p = Path(config_env).resolve()
+        config_dir = p.parent if p.is_file() else p
+        if (config_dir / "state" / "dispatches").is_dir():
+            return config_dir / "state" / "dispatches"
+        if (config_dir / "state").is_dir():
+            return config_dir / "state" / "dispatches"
+        if (config_dir / "dispatches").is_dir():
+            return config_dir / "dispatches"
+
+    # From provided workspace_dir
+    if workspace_dir is not None:
+        if (workspace_dir / "state" / "dispatches").is_dir():
+            return workspace_dir / "state" / "dispatches"
+        if (workspace_dir / "dispatches").is_dir():
+            return workspace_dir / "dispatches"
+
+    # Legacy fallback from _find_workspace_dir()
+    ws = _find_workspace_dir()
+    if ws is not None:
+        if (ws / "state" / "dispatches").is_dir():
+            return ws / "state" / "dispatches"
+        if (ws / "dispatches").is_dir():
+            return ws / "dispatches"
+        return ws / "dispatches"
+
+    return None
+
+
 def _find_workspace_dir() -> Path | None:
     """Discover the bug-fixer workspace directory.
 
@@ -105,6 +149,10 @@ def _find_workspace_dir() -> Path | None:
     if cwd_candidate.is_dir():
         return cwd_candidate
 
+    legacy_cwd = Path.cwd() / ".agents" / "plugins" / _WORKSPACE_NAME
+    if legacy_cwd.is_dir():
+        return legacy_cwd
+
     return None
 
 
@@ -129,7 +177,13 @@ def _find_dispatch(workspace_dir: Path, conversation_id: str) -> dict | None:
     if not conversation_id:
         return None
 
-    dispatches_dir = workspace_dir / "dispatches"
+    if workspace_dir.name == "dispatches" and workspace_dir.is_dir():
+        dispatches_dir = workspace_dir
+    elif (workspace_dir / "state" / "dispatches").is_dir():
+        dispatches_dir = workspace_dir / "state" / "dispatches"
+    else:
+        dispatches_dir = workspace_dir / "dispatches"
+
     if not dispatches_dir.is_dir():
         return None
 
@@ -194,11 +248,15 @@ class BugFixer:
             return _DEFAULT_CONTEXT
 
         workspace = _find_workspace_dir()
-        if workspace is None:
-            return _DEFAULT_CONTEXT
+        dispatches_dir = _find_dispatches_dir(workspace)
 
-        dispatch = _find_dispatch(workspace, conversation_id)
-        config = _load_config(workspace)
+        dispatch = None
+        if dispatches_dir is not None:
+            dispatch = _find_dispatch(dispatches_dir, conversation_id)
+        elif workspace is not None:
+            dispatch = _find_dispatch(workspace, conversation_id)
+
+        config = _load_config(workspace) if workspace else {}
 
         if dispatch is None:
             return SessionContext(

@@ -24,36 +24,70 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+
+def _get_snapshot_file() -> Path:
+    """Snapshot file lives alongside the config in the sidecar dir."""
+    config_env = os.environ.get("BUG_FIXER_CONFIG", "")
+    if config_env and Path(config_env).is_file():
+        return Path(config_env).resolve().parent / ".integrity_snapshot.json"
+    # Legacy fallback
+    return Path(__file__).resolve().parent.parent / ".integrity_snapshot.json"
+
+
+def _get_snapshot_dir() -> Path:
+    """Directory where copies of protected files are saved for reversion."""
+    return _get_snapshot_file().parent / ".integrity_snapshot"
+
+
+# Module-level alias for backward compatibility
+SNAPSHOT_FILE = _get_snapshot_file()
 
 
 def _get_protected_files() -> list[str]:
     """Return absolute paths of files to monitor for integrity."""
     script_dir = Path(__file__).resolve().parent
     plugin_dir = script_dir.parent
-    workspace = plugin_dir / ".agents" / "plugins" / "bug-fixer-loop-workspace"
 
     files = []
-    # Workspace config and cache
-    for name in ["config.json", "injection_cache.json"]:
-        p = workspace / name
-        if p.exists():
-            files.append(str(p))
+    # Sidecar / workspace config and cache
+    config_env = os.environ.get("BUG_FIXER_CONFIG", "")
+    if config_env and Path(config_env).is_file():
+        sidecar_dir = Path(config_env).resolve().parent
+        for name in ["config.json", "injection_cache.json"]:
+            p = sidecar_dir / name
+            if p.exists():
+                files.append(str(p))
+    else:
+        # Legacy fallback workspaces
+        legacy_workspaces = [
+            plugin_dir.parent / "bug-fixer-loop-workspace",
+            Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace",
+            plugin_dir / ".agents" / "plugins" / "bug-fixer-loop-workspace",
+        ]
+        for workspace in legacy_workspaces:
+            for name in ["config.json", "injection_cache.json"]:
+                p = workspace / name
+                if p.exists() and str(p) not in files:
+                    files.append(str(p))
 
-    # Scanner config files at repo root
-    for name in [".betterleaks.toml", ".betterleaksignore"]:
-        p = plugin_dir / name
-        if p.exists():
-            files.append(str(p))
+    # Scanner config files at repo root or plugin dir
+    for d in [plugin_dir, plugin_dir.parent, Path.cwd()]:
+        for name in [".betterleaks.toml", ".betterleaksignore"]:
+            p = d / name
+            if p.exists() and str(p) not in files:
+                files.append(str(p))
 
     # Host security scripts themselves
     for name in ["pre_tool_gate.py", "safe_ingest.py",
                   "safe_post.py", "injection_scanner.py",
                   "integrity_monitor.py"]:
         p = script_dir / name
-        if p.exists():
+        if p.exists() and str(p) not in files:
             files.append(str(p))
 
     return files
@@ -67,61 +101,70 @@ def _sha256(path: str) -> str:
         return ""
 
 
-# Snapshot file: stores checksums taken by the PreToolUse hook
-SNAPSHOT_FILE = Path(__file__).resolve().parent.parent / ".agents" / "plugins" / "bug-fixer-loop-workspace" / ".integrity_snapshot.json"
-
-
 def snapshot() -> None:
     """Take a snapshot of all protected file checksums (called by --pre)."""
+    snapshot_file = _get_snapshot_file()
+    snapshot_dir = _get_snapshot_dir()
+    snapshot_file.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+
     checksums = {}
     for path in _get_protected_files():
         h = _sha256(path)
         if h:
             checksums[path] = h
+            backup_name = hashlib.sha256(path.encode("utf-8")).hexdigest()
+            try:
+                shutil.copy2(path, snapshot_dir / backup_name)
+            except OSError:
+                pass
 
-    SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(SNAPSHOT_FILE, "w") as f:
+    with open(snapshot_file, "w") as f:
         json.dump(checksums, f)
 
 
 def verify() -> None:
     """Verify protected files against snapshot, revert if tampered (called by --post)."""
-    if not SNAPSHOT_FILE.exists():
+    snapshot_file = _get_snapshot_file()
+    snapshot_dir = _get_snapshot_dir()
+    if not snapshot_file.exists():
         return
 
     try:
-        with open(SNAPSHOT_FILE) as f:
+        with open(snapshot_file) as f:
             expected = json.load(f)
     except (json.JSONDecodeError, OSError):
         return
 
-    plugin_dir = Path(__file__).resolve().parent.parent
-
     for path, expected_hash in expected.items():
         actual_hash = _sha256(path)
-        if actual_hash and actual_hash != expected_hash:
-            # TAMPERING DETECTED — revert from git
-            rel_path = os.path.relpath(path, plugin_dir)
+        if actual_hash != expected_hash:
+            # TAMPERING DETECTED — revert from snapshot
             sys.stderr.write(
-                f"INTEGRITY VIOLATION: {rel_path} was modified by an "
+                f"INTEGRITY VIOLATION: {path} was modified by an "
                 f"indirect write (bypassing PreToolUse gate). Reverting.\n"
             )
-            try:
-                subprocess.run(
-                    ["git", "checkout", "--", rel_path],
-                    cwd=str(plugin_dir),
-                    capture_output=True,
-                    timeout=5,
-                )
-                sys.stderr.write(f"REVERTED: {rel_path}\n")
-            except Exception as e:
-                sys.stderr.write(f"REVERT FAILED for {rel_path}: {e}\n")
+            backup_name = hashlib.sha256(path.encode("utf-8")).hexdigest()
+            backup_path = snapshot_dir / backup_name
+            if backup_path.is_file():
+                try:
+                    shutil.copy2(backup_path, path)
+                    sys.stderr.write(f"REVERTED: {path}\n")
+                except Exception as e:
+                    sys.stderr.write(f"REVERT FAILED for {path}: {e}\n")
+            else:
+                sys.stderr.write(f"REVERT FAILED for {path}: snapshot backup not found\n")
 
     # Clean up snapshot
     try:
-        SNAPSHOT_FILE.unlink()
+        snapshot_file.unlink(missing_ok=True)
     except OSError:
         pass
+    if snapshot_dir.is_dir():
+        try:
+            shutil.rmtree(snapshot_dir)
+        except OSError:
+            pass
 
 
 def main() -> int:
