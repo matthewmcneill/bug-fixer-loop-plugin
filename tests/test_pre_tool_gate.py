@@ -1087,3 +1087,40 @@ class TestPR47Fixes(unittest.TestCase):
         # The scan method should not populate exclude_paths with defaults
         # We can't run betterleaks, but we can verify the attribute isn't set
         self.assertFalse(hasattr(backend, 'DEFAULT_REGEX_EXCLUDE_PATHS'))
+
+    def test_betterleaks_version_mismatch_raises(self):
+        """Version pin mismatch should raise RuntimeError."""
+        from pre_tool_gate import BetterleaksBackend
+        import subprocess
+        # Only test if betterleaks is installed
+        try:
+            subprocess.run(["betterleaks", "version"], capture_output=True, check=True)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            self.skipTest("betterleaks not installed")
+        with self.assertRaises(RuntimeError) as ctx:
+            BetterleaksBackend(expected_version="0.0.0-impossible")
+        self.assertIn("version mismatch", str(ctx.exception))
+
+    def test_betterleaks_checksum_mismatch_raises(self):
+        """Checksum mismatch should raise RuntimeError."""
+        from pre_tool_gate import BetterleaksBackend
+        import subprocess
+        try:
+            subprocess.run(["betterleaks", "version"], capture_output=True, check=True)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            self.skipTest("betterleaks not installed")
+        with self.assertRaises(RuntimeError) as ctx:
+            BetterleaksBackend(expected_checksum="0000000000000000000000000000000000000000000000000000000000000000")
+        self.assertIn("checksum mismatch", str(ctx.exception))
+
+    def test_betterleaks_no_pin_no_error(self):
+        """Without version/checksum config, init should not raise."""
+        from pre_tool_gate import BetterleaksBackend
+        import subprocess
+        try:
+            subprocess.run(["betterleaks", "version"], capture_output=True, check=True)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            self.skipTest("betterleaks not installed")
+        # Should not raise
+        backend = BetterleaksBackend()
+        self.assertEqual(backend.name, "betterleaks")

@@ -663,11 +663,44 @@ class RegexBackend:
 class BetterleaksBackend:
     name: str = "betterleaks"
 
-    def __init__(self, config_path: str | None = None) -> None:
+    def __init__(self, config_path: str | None = None,
+                 expected_version: str | None = None,
+                 expected_checksum: str | None = None) -> None:
         self.config_path = config_path
+        self.expected_version = expected_version
+        self.expected_checksum = expected_checksum
         self._version: str | None = None
         self.scanned_count: int = 0
         self.excluded_count: int = 0
+        self._verify_binary()
+
+    def _verify_binary(self) -> None:
+        """Verify betterleaks binary version and checksum if configured.
+
+        Version pinning prevents silent upgrades that could change scanning
+        behaviour. Checksum verification prevents supply-chain attacks where
+        the binary is replaced with a trojan that always returns clean.
+        """
+        if self.expected_version:
+            actual = self.version
+            if actual != self.expected_version and actual != "unknown":
+                raise RuntimeError(
+                    f"Betterleaks version mismatch: expected {self.expected_version}, "
+                    f"got {actual}. Update scanning.secrets.betterleaks.version in "
+                    f"config to accept the new version after verification."
+                )
+        if self.expected_checksum:
+            binary_path = shutil.which("betterleaks")
+            if not binary_path:
+                raise RuntimeError("Betterleaks binary not found for checksum verification")
+            actual_hash = hashlib.sha256(Path(binary_path).read_bytes()).hexdigest()
+            if actual_hash != self.expected_checksum:
+                raise RuntimeError(
+                    f"Betterleaks checksum mismatch: expected {self.expected_checksum[:16]}…, "
+                    f"got {actual_hash[:16]}…. Binary may have been tampered with. "
+                    f"Update scanning.secrets.betterleaks.sha256 in config after "
+                    f"verifying the new binary."
+                )
 
     @property
     def version(self) -> str:
@@ -853,7 +886,11 @@ def resolve_backend(
                 or secrets_cfg.get("config_path")
                 or secrets_cfg.get("config")
             )
-            return BetterleaksBackend(config_path)
+            return BetterleaksBackend(
+                config_path=config_path,
+                expected_version=betterleaks_cfg.get("version"),
+                expected_checksum=betterleaks_cfg.get("sha256"),
+            )
         except (subprocess.CalledProcessError, FileNotFoundError):
             sys.stderr.write("WARNING: betterleaks not found, falling back to regex (degraded)\n")
             return RegexBackend(patterns)
