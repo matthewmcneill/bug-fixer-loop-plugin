@@ -33,6 +33,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from typing import Any, Protocol, runtime_checkable
@@ -107,20 +108,33 @@ OUTBOUND_GH_CMD_REGEX = re.compile(
 
 HOST_SECURITY_SCRIPTS = frozenset({"pre_tool_gate.py", "safe_ingest.py",
     "safe_post.py", "injection_scanner.py"})
-# Derive workspace paths deterministically from this script location.
-# pre_tool_gate.py is at <plugin_dir>/scripts/pre_tool_gate.py
-# Using __file__ instead of env vars so the paths cannot be redirected.
-_PLUGIN_DIR = Path(__file__).resolve().parent.parent
-_WORKSPACE_DIR = _PLUGIN_DIR / ".agents" / "plugins" / "bug-fixer-loop-workspace"
-_WORKSPACE_CONFIG = str(_WORKSPACE_DIR / "config.json")
-_WORKSPACE_CACHE = str(_WORKSPACE_DIR / "injection_cache.json")
-
-SCANNER_PROTECTED_FILES = frozenset({
+# Protected workspace paths are derived at runtime from the config that
+# was actually loaded (which lives in the TARGET repo's workspace, not
+# necessarily the plugin repo). Static scanner files are always protected.
+_STATIC_PROTECTED = frozenset({
     ".betterleaks.toml",
     ".betterleaksignore",
-    _WORKSPACE_CONFIG,
-    _WORKSPACE_CACHE,
 })
+
+def _derive_workspace_paths(loaded_config_path: Path | None = None) -> frozenset[str]:
+    """Build the full SCANNER_PROTECTED_FILES set.
+
+    Derives workspace paths from the config that was loaded, so they
+    always protect the target repo's config regardless of install layout.
+    Falls back to cwd-based derivation.
+    """
+    protected = set(_STATIC_PROTECTED)
+    if loaded_config_path:
+        ws_dir = loaded_config_path.resolve().parent
+    else:
+        # Fallback: derive from cwd (the repo being operated on)
+        ws_dir = Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace"
+    protected.add(str(ws_dir / "config.json"))
+    protected.add(str(ws_dir / "injection_cache.json"))
+    return frozenset(protected)
+
+# Initial value — updated after config is loaded in evaluate_pretool_call
+SCANNER_PROTECTED_FILES = _derive_workspace_paths()
 
 
 def normalise_config(config: dict[str, Any] | None) -> dict[str, Any]:
@@ -175,7 +189,6 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
         script_dir = Path(__file__).resolve().parent
         plugin_dir = script_dir.parent
         for cand in [
-            _WORKSPACE_DIR / "config.json",
             plugin_dir.parent / "bug-fixer-loop-workspace" / "config.json",
             Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace" / "config.json",
         ]:
@@ -196,6 +209,7 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
             data = json.load(f)
             if not isinstance(data, dict):
                 raise ValueError(f"Config at {target_path} must be a JSON object")
+            data["_loaded_from"] = str(target_path)
             return normalise_config(data)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON in config file {target_path}: {exc}") from exc
@@ -496,6 +510,12 @@ def evaluate_gate_b(
 
 def evaluate_pretool_call(payload: dict[str, Any], config: dict[str, Any]) -> dict[str, str]:
     """Evaluates PreToolUse payload against Gates A, B, and C."""
+    # Ensure SCANNER_PROTECTED_FILES matches the loaded config
+    global SCANNER_PROTECTED_FILES
+    loaded_from = config.get("_loaded_from") if config else None
+    if loaded_from:
+        SCANNER_PROTECTED_FILES = _derive_workspace_paths(Path(loaded_from))
+
     tool_name = ""
     args: dict[str, Any] = {}
 
@@ -687,6 +707,7 @@ class BetterleaksBackend:
         self._version: str | None = None
         self.scanned_count: int = 0
         self.excluded_count: int = 0
+        self._binary_path = shutil.which("betterleaks") or "betterleaks"
         self._verify_binary()
 
     def _verify_binary(self) -> None:
@@ -698,17 +719,21 @@ class BetterleaksBackend:
         """
         if self.expected_version:
             actual = self.version
-            if actual != self.expected_version and actual != "unknown":
+            if actual == "unknown":
+                raise RuntimeError(
+                    "Betterleaks version check failed: could not determine "
+                    "installed version. Binary may be missing or broken."
+                )
+            if actual != self.expected_version:
                 raise RuntimeError(
                     f"Betterleaks version mismatch: expected {self.expected_version}, "
                     f"got {actual}. Update scanning.secrets.betterleaks.version in "
                     f"config to accept the new version after verification."
                 )
         if self.expected_checksum:
-            binary_path = shutil.which("betterleaks")
-            if not binary_path:
+            if self._binary_path == "betterleaks":
                 raise RuntimeError("Betterleaks binary not found for checksum verification")
-            actual_hash = hashlib.sha256(Path(binary_path).read_bytes()).hexdigest()
+            actual_hash = hashlib.sha256(Path(self._binary_path).read_bytes()).hexdigest()
             if actual_hash != self.expected_checksum:
                 raise RuntimeError(
                     f"Betterleaks checksum mismatch: expected {self.expected_checksum[:16]}…, "
@@ -723,7 +748,7 @@ class BetterleaksBackend:
             return self._version
         try:
             out = subprocess.check_output(
-                ["betterleaks", "version"], stderr=subprocess.DEVNULL, text=True
+                [self._binary_path, "version"], stderr=subprocess.DEVNULL, text=True
             ).strip()
             self._version = out
         except Exception:
@@ -738,7 +763,7 @@ class BetterleaksBackend:
         return env
 
     def _build_cmd(self, repo_dir: str, scope: ScanScope) -> list[str]:
-        cmd = ["betterleaks"]
+        cmd = [self._binary_path]
         if scope == ScanScope.STAGED:
             cmd.extend(["git", "--staged", repo_dir])
         elif scope == ScanScope.TREE:
@@ -852,7 +877,7 @@ class BetterleaksBackend:
                 pass
         try:
             out = subprocess.check_output(
-                ["betterleaks", "config", "hash"], stderr=subprocess.DEVNULL, text=True
+                [self._binary_path, "config", "hash"], stderr=subprocess.DEVNULL, text=True
             ).strip()
             if out:
                 return out
@@ -1042,6 +1067,11 @@ def main() -> int:
 
     try:
         config = load_config(args.config)
+        # Re-derive protected paths from the config that was loaded
+        global SCANNER_PROTECTED_FILES
+        config_loaded_from = config.get("_loaded_from")
+        if config_loaded_from:
+            SCANNER_PROTECTED_FILES = _derive_workspace_paths(Path(config_loaded_from))
     except Exception as exc:
         sys.stderr.write(f"Config loading error: {exc}\n")
         config = {

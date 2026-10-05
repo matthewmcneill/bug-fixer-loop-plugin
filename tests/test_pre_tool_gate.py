@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from typing import Any
 
 from scripts.pre_tool_gate import (
@@ -1072,13 +1073,17 @@ class TestPR47Fixes(unittest.TestCase):
 
     def test_shell_mutation_blocks_workspace_config(self):
         """check_shell_mutation SHOULD block writes to the workspace config."""
-        from pre_tool_gate import check_shell_mutation, _WORKSPACE_CONFIG
-        result = check_shell_mutation(
-            f'echo "{{}}" > {_WORKSPACE_CONFIG}',
-            "docs/design_specification.md",
-            []
-        )
-        self.assertTrue(result, "Should block writes to workspace config.json")
+        from pre_tool_gate import check_shell_mutation, SCANNER_PROTECTED_FILES
+        # Find the config.json path in SCANNER_PROTECTED_FILES
+        config_paths = [p for p in SCANNER_PROTECTED_FILES if p.endswith("config.json")]
+        self.assertTrue(config_paths, "SCANNER_PROTECTED_FILES should contain a config.json path")
+        for config_path in config_paths:
+            result = check_shell_mutation(
+                f'echo "{{}}" > {config_path}',
+                "docs/design_specification.md",
+                []
+            )
+            self.assertTrue(result, f"Should block writes to {config_path}")
 
     def test_betterleaks_does_not_use_default_excludes(self):
         """BetterleaksBackend should NOT apply DEFAULT_REGEX_EXCLUDE_PATHS."""

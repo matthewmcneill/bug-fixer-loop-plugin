@@ -3,8 +3,10 @@
 safe_post.py — Egress proxy for GitHub write operations.
 
 All GitHub write commands (issue/PR create, edit, comment, review) MUST
-go through this proxy instead of raw `gh`. The PreToolUse hook denies
-raw `gh` write commands; this script is the only sanctioned path.
+go through this proxy instead of raw `gh`. The dispatchers route body-carrying writes through this proxy.
+Raw `gh` writes from agent skills still go through the regex gate in
+pre_tool_gate.py. Migrating skills and denying raw `gh` writes is
+tracked on issue #22.
 
 Architecture:
   Agent/Dispatcher -> safe_post.py (scans body, then calls gh)
@@ -35,14 +37,36 @@ WORKSPACE_DIR = PLUGIN_DIR / ".agents" / "plugins" / "bug-fixer-loop-workspace"
 DEFAULT_CONFIG = WORKSPACE_DIR / "config.json"
 
 
-def load_leak_patterns() -> list[str]:
-    """Load leak patterns from workspace config."""
-    config_path = os.environ.get("BUG_FIXER_CONFIG", str(DEFAULT_CONFIG))
+def load_leak_patterns(config_override: str | None = None) -> list[str]:
+    """Load leak patterns from workspace config.
+
+    Fails closed: if config is missing or invalid, returns a sentinel
+    pattern that matches everything, so no content can pass unscanned.
+    """
+    config_path = DEFAULT_CONFIG
+    if config_override:
+        config_path = Path(config_override)
+    else:
+        # Derive from the target repo's workspace
+        try:
+            repo_root = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True
+            ).stdout.strip()
+            if repo_root:
+                candidate = Path(repo_root) / ".agents" / "plugins" / "bug-fixer-loop-workspace" / "config.json"
+                if candidate.is_file():
+                    config_path = candidate
+        except Exception:
+            pass
+
     try:
         with open(config_path) as f:
             config = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return []
+        # Fail closed: no config means we can't verify content is safe
+        sys.stderr.write("SAFE_POST: WARNING: no config found, failing closed\n")
+        return [".*"]  # Matches everything — blocks all posts
 
     # Support both v1 and v2 config
     scanning = config.get("scanning", {})
@@ -74,6 +98,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Egress proxy for GitHub write operations"
     )
+    parser.add_argument("--config", help="Override config path (testing only)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # --- issue-create ---
@@ -138,7 +163,7 @@ def main():
     p_lo.add_argument("--remove-label", action="append", default=[])
 
     args = parser.parse_args()
-    patterns = load_leak_patterns()
+    patterns = load_leak_patterns(getattr(args, "config", None))
 
     # Resolve body from --body-file if provided
     body = getattr(args, "body", None) or ""
@@ -164,6 +189,35 @@ def main():
             for v in violations:
                 log(f"  matched: {v[:40]}...")
             sys.exit(1)
+
+    # Gate B parity: block self-approval, approval injection, and label abuse
+    if args.command == "pr-review":
+        if getattr(args, "approve", False) or getattr(args, "request_changes", False):
+            log("DENIED: self-approval / request-changes is prohibited")
+            sys.exit(1)
+
+    # Block approval injection in any body
+    if body:
+        approval_re = re.compile(
+            r"^\s*/?(?:approved?|lgtm)\s*[.!]*\s*$", re.IGNORECASE
+        )
+        if approval_re.match(body.strip()):
+            log("DENIED: posting fake maintainer approval comment is prohibited")
+            sys.exit(1)
+
+    # Block removing security labels via label-only
+    if args.command == "label-only":
+        for label in getattr(args, "remove_label", []):
+            if label.startswith("security:"):
+                log(f"DENIED: removing security label '{label}' is prohibited")
+                sys.exit(1)
+
+    # Also block removing security labels via issue-edit / pr-edit
+    if args.command in ("issue-edit", "pr-edit"):
+        for label in getattr(args, "remove_label", []):
+            if label.startswith("security:"):
+                log(f"DENIED: removing security label '{label}' is prohibited")
+                sys.exit(1)
 
     # Build the gh command
     if args.command == "label-only":
