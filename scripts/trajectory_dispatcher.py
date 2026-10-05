@@ -118,11 +118,11 @@ if brain_dir.exists():
         if transcript.stat().st_mtime < cutoff:
             continue
 
-        # Check if this is a bug-fixer conversation (check first few lines)
+        # Check if this is a bug-fixer conversation strictly scoped to TARGET_REPO
         try:
             with open(transcript) as f:
                 head = f.read(2000)
-            if any(kw in head for kw in [
+            if TARGET_REPO in head and any(kw in head for kw in [
                 "bug-fixer-engineering", "bug-fixer-triage",
                 "Fix #", "Triage:", "bug-fixer:engineer:needs-fix",
                 "engineering_dispatcher", "triage_dispatcher",
@@ -134,10 +134,19 @@ if brain_dir.exists():
 # Also check the sidecar logs
 sidecar_log_dir = Path.home() / ".gemini/antigravity/sidecar_data"
 recent_sidecar_logs = []
-for sidecar_name in ["bug-fixer-engineering-loop", "bug-fixer-triage-loop"]:
-    log_file = sidecar_log_dir / sidecar_name / "logs/sidecar.log"
-    if log_file.exists() and log_file.stat().st_mtime > cutoff:
-        recent_sidecar_logs.append(str(log_file))
+repo_short = TARGET_REPO.split('/')[-1]
+sidecar_prefixes = [
+    "bug-fixer-engineering-loop",
+    "bug-fixer-triage-loop",
+    "bug-fixer-pr-review-loop",
+    "bug-fixer-trajectory-loop"
+]
+for prefix in sidecar_prefixes:
+    # Check both unsuffixed and repo-scoped variants
+    for candidate_name in [prefix, f"{prefix}--{repo_short}"]:
+        log_file = sidecar_log_dir / candidate_name / "logs/sidecar.log"
+        if log_file.exists() and log_file.stat().st_mtime > cutoff:
+            recent_sidecar_logs.append(str(log_file))
 
 total_activity = len(recent_transcripts) + len(recent_sidecar_logs)
 

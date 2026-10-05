@@ -7,7 +7,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from liveness import agentapi_is_reachable, check_orphaned_prs
+from liveness import agentapi_is_reachable, check_orphaned_prs, _check_success
 import json
 
 class TestLiveness(unittest.TestCase):
@@ -66,7 +66,7 @@ class TestLiveness(unittest.TestCase):
         check_orphaned_prs("owner/repo", mock_log)
 
         self.assertEqual(mock_gh.call_count, 3)
-        self.assertEqual(mock_gh.call_args_list[0][0], ("pr", "list", "--repo", "owner/repo", "--state", "open", "--draft", "--json", "number,title,labels"))
+        self.assertEqual(mock_gh.call_args_list[0][0], ("pr", "list", "--repo", "owner/repo", "--state", "open", "--json", "number,title,labels"))
         self.assertEqual(mock_gh.call_args_list[1][0], ("pr", "edit", "101", "--repo", "owner/repo", "--add-label", "bug-fixer:system:pr"))
         self.assertEqual(mock_gh.call_args_list[2][0], ("pr", "edit", "101", "--repo", "owner/repo", "--add-label", "bug-fixer:architect:awaiting-review"))
         self.assertEqual(mock_log.call_count, 2)
@@ -165,6 +165,15 @@ class TestLiveness(unittest.TestCase):
         # Test another step type
         mock_read_last.return_value = {"type": "USER_INPUT"}
         self.assertFalse(_check_success(dispatch, "owner/repo"))
+
+    @patch("liveness._gh")
+    def test_check_success_ignores_closed_issue(self, mock_gh):
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="false\n", stderr=""
+        )
+        dispatch = {"type": "fresh_fix", "issue_number": 48}
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+        mock_gh.assert_called_with("issue", "view", "48", "--repo", "owner/repo", "--json", "state,labels", "--jq", '.state == "OPEN" and ([.labels[].name] | any(. == "bug-fixer:architect:awaiting-review"))')
 
 if __name__ == '__main__':
     unittest.main()

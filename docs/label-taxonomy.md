@@ -185,25 +185,27 @@ flowchart TD
 
     TDR -->|"new issue created"| NEW
 
-    style ENQ fill:#e1f5fe,stroke:#0288d1
-    style EIP fill:#e1f5fe,stroke:#0288d1
-    style ENI fill:#e1f5fe,stroke:#0288d1
-    style AAR fill:#e8f5e9,stroke:#388e3c
+    style ENQ fill:#fff9c4,stroke:#fbc02d
+    style EIP fill:#fff9c4,stroke:#fbc02d
+    style ENI fill:#fff9c4,stroke:#fbc02d
+    style AAR fill:#e3f2fd,stroke:#1976d2
     style AAP fill:#e8f5e9,stroke:#388e3c
-    style HAR fill:#fff3e0,stroke:#f57c00
-    style HIN fill:#fff3e0,stroke:#f57c00
-    style HPC fill:#fff3e0,stroke:#f57c00
-    style HRQ fill:#fff3e0,stroke:#f57c00
-    style HNI fill:#fff3e0,stroke:#f57c00
-    style HSC fill:#fff3e0,stroke:#f57c00
-    style TDR fill:#f3e5f5,stroke:#7b1fa2
+    style HAR fill:#ffe0b2,stroke:#f57c00
+    style HIN fill:#ffe0b2,stroke:#f57c00
+    style HPC fill:#ffe0b2,stroke:#f57c00
+    style HRQ fill:#ffe0b2,stroke:#f57c00
+    style HNI fill:#ffe0b2,stroke:#f57c00
+    style HSC fill:#ffe0b2,stroke:#f57c00
+    style TDR fill:#ffebee,stroke:#d32f2f
 ```
 
 **Colour key:**
-🔵 `engineer:*` — engineering loop |
-🟢 `architect:*` — architect loop |
+🟡 `engineer:*` — engineering loop |
+🔵 `architect:*` — architect loop (`approved` is 🟢) |
 🟠 `human:*` — human action required |
-🟣 `triage:*` — needs classification
+🔴 `triage:*` — needs classification |
+🟣 `complexity:*` — model routing tier |
+🪻 `system:*` — system alerts
 
 ---
 

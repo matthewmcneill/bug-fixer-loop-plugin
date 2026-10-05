@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-architect_dispatcher.py — Polls GitHub for Draft PRs needing architect review
+architect_dispatcher.py — Polls GitHub for PRs needing architect review
 and monitors approved PRs for merge conflicts.
 
 Runs on a cron schedule via the sidecar. Does NOT use an LLM.
-Checks for draft bug-fixer PRs and only spawns an Architect review
-conversation when there's a draft to review.
+Checks for bug-fixer PRs and only spawns an Architect review
+conversation when there's a PR to review.
 Also checks approved PRs for merge conflicts and re-routes them to engineering.
 
 No-op conditions (exit silently):
   - No config found
-  - No eligible draft PRs
+  - No eligible PRs
 """
 
 import json
@@ -211,11 +211,11 @@ def main():
     check_merge_conflicts(TARGET_REPO)
 
     # ---------------------------------------------------------------------------
-    # Step 1: Draft PR Polling Logic
+    # Step 1: PR Polling Logic
     # ---------------------------------------------------------------------------
 
     r = gh("pr", "list", "--repo", TARGET_REPO, "--label", "bug-fixer:system:pr,bug-fixer:architect:awaiting-review",
-           "--state", "open", "--draft",
+           "--state", "open",
            "--json", "number,title,labels,body")
 
     if r.returncode != 0:
@@ -229,7 +229,7 @@ def main():
         sys.exit(1)
 
     if not prs:
-        log("No draft bug-fixer PRs found. Exiting.")
+        log("No bug-fixer PRs found. Exiting.")
         sys.exit(0)
 
     # Build set of PRs with active review dispatches
@@ -340,7 +340,8 @@ Diff:
 
         if dispatch_conv_id:
             record_dispatch(DISPATCHES_DIR, dispatch_conv_id, "architect_review",
-                            pr_number=number, timeout_minutes=20)
+                            pr_number=number, timeout_minutes=20,
+                            model=config.get("architect_model", "pro"))
             # Ensure the PR body has the architect conversation tag so the next
             # review cycle can resume this conversation instead of spawning new.
             inject_conv_tag(number, "agy_arch_conv_id", dispatch_conv_id)

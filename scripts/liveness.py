@@ -540,33 +540,35 @@ def _check_success(dispatch: dict, target_repo: str) -> bool:
         issue_num = dispatch.get("issue_number")
         if not issue_num:
             return False
-        # Check if issue transitioned to awaiting-review
+        # Check if issue is OPEN and transitioned to awaiting-review
         r = _gh("issue", "view", str(issue_num), "--repo", target_repo,
-                "--json", "labels", "--jq",
-                '[.labels[].name] | any(. == "bug-fixer:architect:awaiting-review")')
+                "--json", "state,labels", "--jq",
+                '.state == "OPEN" and ([.labels[].name] | any(. == "bug-fixer:architect:awaiting-review"))')
         return r.stdout.strip() == "true"
 
     elif dtype == "pr_iteration":
         pr_num = dispatch.get("pr_number")
         if not pr_num:
             return False
-        # Check if bug-fixer:engineer:needs-iteration label is gone (agent removed it after pushing)
+        # Check if PR is OPEN and bug-fixer:engineer:needs-iteration label is gone (agent removed it after pushing)
         r = _gh("pr", "view", str(pr_num), "--repo", target_repo,
-                "--json", "labels", "--jq",
-                '[.labels[].name] | any(. == "bug-fixer:engineer:needs-iteration")')
-        return r.stdout.strip() == "false"
+                "--json", "state,labels", "--jq",
+                '.state == "OPEN" and ([.labels[].name] | any(. == "bug-fixer:engineer:needs-iteration") | not)')
+        return r.stdout.strip() == "true"
 
     elif dtype == "architect_review":
         pr_num = dispatch.get("pr_number")
         if not pr_num:
             return False
-        # Check for [ARCHITECT] comment posted after spawn
+        # Check PR is OPEN and for [ARCHITECT] comment posted after spawn
         r = _gh("pr", "view", str(pr_num), "--repo", target_repo,
-                "--comments", "--json", "comments")
+                "--comments", "--json", "state,comments")
         if r.returncode != 0:
             return False
         try:
             data = json.loads(r.stdout)
+            if data.get("state") != "OPEN":
+                return False
             for c in data.get("comments", []):
                 if "[ARCHITECT]" in c.get("body", ""):
                     # Good enough — architect posted something
@@ -703,8 +705,8 @@ def _recover(dispatch: dict, dispatches_dir: Path, target_repo: str,
 
 
 def check_orphaned_prs(target_repo: str, log_fn):
-    """Warn on and auto-heal draft PRs matching the [BugFixer] convention that are missing required labels."""
-    r = _gh("pr", "list", "--repo", target_repo, "--state", "open", "--draft", "--json", "number,title,labels")
+    """Warn on and auto-heal PRs matching the [BugFixer] convention that are missing required labels."""
+    r = _gh("pr", "list", "--repo", target_repo, "--state", "open", "--json", "number,title,labels")
     if r.returncode != 0:
         return
     try:
@@ -725,7 +727,7 @@ def check_orphaned_prs(target_repo: str, log_fn):
             _gh("pr", "edit", str(pr_num), "--repo", target_repo, "--add-label", "bug-fixer:system:pr")
             labels.append("bug-fixer:system:pr")
 
-        # Check if draft PR is missing an active review state label (limbo prevention)
+        # Check if PR is missing an active review state label (limbo prevention)
         has_review_status = any(l in labels for l in (
             "bug-fixer:architect:awaiting-review",
             "bug-fixer:engineer:needs-iteration",
@@ -733,8 +735,67 @@ def check_orphaned_prs(target_repo: str, log_fn):
             "bug-fixer:human:needs-intervention",
         ))
         if not has_review_status:
-            log_fn(f"Auto-healing PR #{pr_num}: draft bug-fixer PR missing review status label. Adding bug-fixer:architect:awaiting-review.")
+            log_fn(f"Auto-healing PR #{pr_num}: bug-fixer PR missing review status label. Adding bug-fixer:architect:awaiting-review.")
             _gh("pr", "edit", str(pr_num), "--repo", target_repo, "--add-label", "bug-fixer:architect:awaiting-review")
+
+
+def _append_to_ledger(dispatch: dict, target_repo: str, dispatches_dir: Path, log_fn):
+    try:
+        pr_num = dispatch.get("pr_number")
+        issue_num = dispatch.get("issue_number")
+        
+        # If no PR number, try to find it from the issue
+        if not pr_num and issue_num:
+            r = _gh("pr", "list", "--repo", target_repo, "--search", f"#{issue_num}", "--json", "number", "--jq", ".[0].number")
+            if r.returncode == 0 and r.stdout.strip() and r.stdout.strip() != "null":
+                pr_num = int(r.stdout.strip())
+        
+        if not pr_num and dispatch.get("type") == "architect_review":
+            return # Should have pr_number
+            
+        architect_rounds = 0
+        outcome = "pending"
+        
+        if pr_num:
+            # Get PR details
+            r = _gh("pr", "view", str(pr_num), "--repo", target_repo, "--comments", "--json", "state,labels,comments")
+            if r.returncode == 0:
+                try:
+                    data = json.loads(r.stdout)
+                    state = data.get("state", "")
+                    labels = [l.get("name", "") for l in data.get("labels", [])]
+                    
+                    # Count architect rounds
+                    for c in data.get("comments", []):
+                        if "[ARCHITECT]" in c.get("body", ""):
+                            architect_rounds += 1
+                            
+                    # Determine outcome
+                    if "bug-fixer:architect:approved" in labels:
+                        outcome = "approved"
+                    elif "bug-fixer:human:needs-intervention" in labels:
+                        outcome = "human_intervention"
+                    elif state == "CLOSED": # closed without merge
+                        outcome = "rejected"
+                except Exception:
+                    pass
+
+        entry = {
+            "pr": pr_num,
+            "issue": issue_num,
+            "model": dispatch.get("model", "unknown"),
+            "type": dispatch.get("type", "unknown"),
+            "architect_rounds": architect_rounds,
+            "outcome": outcome,
+            "completed_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        ledger_path = dispatches_dir.parent / "pr_completions.jsonl"
+        with open(ledger_path, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+            
+    except Exception as e:
+        log_fn(f"Failed to append to ledger: {e}")
 
 def sweep_dispatches(dispatches_dir: Path, target_repo: str,
                      log_fn, claims_dir: Path | None = None) -> list[dict]:
@@ -765,6 +826,7 @@ def sweep_dispatches(dispatches_dir: Path, target_repo: str,
             wt_path = dispatch.get("worktree_path")
             if wt_path and Path(wt_path).exists():
                 _run(["git", "-C", str(Path(wt_path).parent.parent), "worktree", "remove", "-f", wt_path])
+            _append_to_ledger(dispatch, target_repo, dispatches_dir, log_fn)
             dispatch_file.unlink(missing_ok=True)
             continue
 

@@ -4,4 +4,5 @@ cooldown.json
 failure_count
 triage_cooldown.json
 triage_failure_count
+pr_completions.jsonl
 tmp/

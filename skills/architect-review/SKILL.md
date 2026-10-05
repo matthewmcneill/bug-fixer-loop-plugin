@@ -84,9 +84,9 @@ If `target_repo` is empty or the config file is missing, abort with:
 
 Identify the target PR number:
 - Provided via dispatcher prompt or user argument: `<pr_number>`.
-- If unprovided, find the oldest open draft PR with label `bug-fixer`:
+- If unprovided, find the oldest open PR with label `bug-fixer`:
   ```bash
-  gh pr list --repo <target_repo> --state open --draft --label "bug-fixer:system:pr" --json number,title,createdAt --jq 'sort_by(.createdAt) | .[0].number'
+  gh pr list --repo <target_repo> --state open --label "bug-fixer:system:pr" --json number,title,createdAt --jq 'sort_by(.createdAt) | .[0].number'
   ```
 
 ---
@@ -295,4 +295,4 @@ For each discovery:
 ## Trigger Reference
 
 - **Manual invocations:** "architect review", "review PR", "run architect review", "audit PR architecture", "principal architect review", "check PR for technical debt".
-- **Sidecar invocation:** Triggered automatically by `architect_dispatcher.py` when an open draft PR tagged with `bug-fixer` is awaiting architect review.
+- **Sidecar invocation:** Triggered automatically by `architect_dispatcher.py` when an open PR tagged with `bug-fixer` is awaiting architect review.
