@@ -350,6 +350,7 @@ declare -A LABELS_META=(
   ["bug-fixer:complexity:mechanical"]="E1BEE7:Model tier: rote/deterministic work"
   ["bug-fixer:complexity:standard"]="BA68C8:Model tier: standard engineering work"
   ["bug-fixer:complexity:architect"]="7B1FA2:Model tier: needs architect-grade reasoning"
+  ["security:prompt-injection"]="D93F0B:Content flagged as potential prompt injection by scanner"
 )
 
 REQUIRED_LABELS=(
@@ -370,6 +371,7 @@ REQUIRED_LABELS=(
   "bug-fixer:complexity:mechanical"
   "bug-fixer:complexity:standard"
   "bug-fixer:complexity:architect"
+  "security:prompt-injection"
 )
 
 for label in "${REQUIRED_LABELS[@]}"; do

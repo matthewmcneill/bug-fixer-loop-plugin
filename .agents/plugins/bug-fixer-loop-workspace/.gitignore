@@ -6,3 +6,4 @@ triage_cooldown.json
 triage_failure_count
 pr_completions.jsonl
 tmp/
+injection_cache.json
