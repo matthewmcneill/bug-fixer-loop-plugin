@@ -134,16 +134,19 @@ if brain_dir.exists():
 # Also check the sidecar logs
 sidecar_log_dir = Path.home() / ".gemini/antigravity/sidecar_data"
 recent_sidecar_logs = []
-repo_slug = TARGET_REPO.split('/')[-1]
-for sidecar_name in [
-    f"bug-fixer-engineering-loop--{repo_slug}",
-    f"bug-fixer-triage-loop--{repo_slug}",
-    f"bug-fixer-pr-review-loop--{repo_slug}",
-    f"bug-fixer-trajectory-loop--{repo_slug}",
-]:
-    log_file = sidecar_log_dir / sidecar_name / "logs/sidecar.log"
-    if log_file.exists() and log_file.stat().st_mtime > cutoff:
-        recent_sidecar_logs.append(str(log_file))
+repo_short = TARGET_REPO.split('/')[-1]
+sidecar_prefixes = [
+    "bug-fixer-engineering-loop",
+    "bug-fixer-triage-loop",
+    "bug-fixer-pr-review-loop",
+    "bug-fixer-trajectory-loop"
+]
+for prefix in sidecar_prefixes:
+    # Check both unsuffixed and repo-scoped variants
+    for candidate_name in [prefix, f"{prefix}--{repo_short}"]:
+        log_file = sidecar_log_dir / candidate_name / "logs/sidecar.log"
+        if log_file.exists() and log_file.stat().st_mtime > cutoff:
+            recent_sidecar_logs.append(str(log_file))
 
 total_activity = len(recent_transcripts) + len(recent_sidecar_logs)
 
