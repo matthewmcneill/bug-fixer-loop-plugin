@@ -33,7 +33,8 @@ engineering dispatcher and potentially block all bug-fixer activity for hours.
 This skill is part of the `bug-fixer-loop` plugin. Resolve:
 ```bash
 PLUGIN_DIR="$(cd "$(dirname "<this_skill_file>")/../.." && pwd)"
-STATE_DIR="<workspace_root>/.agents/plugins/bug-fixer-loop-workspace"
+# Note: BUG_FIXER_STATE_DIR env var overrides default STATE_DIR if set
+STATE_DIR="${BUG_FIXER_STATE_DIR:-<workspace_root>/.agents/plugins/bug-fixer-loop-workspace}"
 ```
 Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missing, output `CONFIG_INCOMPLETE: Plugin not configured. Run ${PLUGIN_DIR}/scripts/configure.sh first.` and exit immediately.
 

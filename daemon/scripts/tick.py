@@ -9,9 +9,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+
 def main() -> int:
     # Derive workspace plugin scripts dir from daemon layout
-    daemon_dir = Path(__file__).resolve().parent.parent
+    base_file = __file__ if "__file__" in globals() else "daemon/scripts/tick.py"
+    daemon_dir = Path(base_file).resolve().parent.parent
     receiver = daemon_dir / "workspace-plugin" / "bug-fixer" / "scripts" / "tick_receiver.py"
 
     if not receiver.is_file():
@@ -19,10 +21,11 @@ def main() -> int:
         return 1
 
     result = subprocess.run(
-        [sys.executable, str(receiver)],
+        [sys.executable, str(receiver)] + sys.argv[1:],
         env=os.environ,
     )
     return result.returncode
 
-if __name__ == "__main__":
+
+if __name__ == "__main__" and "__file__" in globals():
     sys.exit(main())

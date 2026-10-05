@@ -13,7 +13,7 @@ approach first.
 
 ## Correct approach — use safe_ingest.py
 
-Run from the project root (the repository working directory):
+Run relative to the workspace plugin directory (the hooks working directory):
 
 ```bash
 # View a single issue (extract the number from the URL/reference)

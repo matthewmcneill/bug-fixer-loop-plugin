@@ -197,10 +197,23 @@ def main():
     SKILL_PATH = PLUGIN_DIR / "skills/architect-review/SKILL.md"
     SAFE_INGEST = PLUGIN_DIR / "scripts/safe_ingest.py"
 
-    # Derive repo dir from config file location (standard layout)
-    # <repo>/.agents/plugins/bug-fixer-loop-workspace/config.json
-    STATE_DIR = CONFIG_FILE.parent
-    REPO_DIR = STATE_DIR.parent.parent.parent
+    _state_env = os.environ.get("BUG_FIXER_STATE_DIR")
+    if _state_env:
+        STATE_DIR = Path(_state_env)
+    elif CONFIG_FILE:
+        STATE_DIR = CONFIG_FILE.parent / "state"
+    else:
+        STATE_DIR = Path.cwd()
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+    if config.get("repo_dir"):
+        REPO_DIR = Path(config["repo_dir"])
+    elif CONFIG_FILE:
+        REPO_DIR = CONFIG_FILE.parent.parent.parent.parent
+    else:
+        REPO_DIR = Path.cwd()
+
+    CLAIMS_DIR = STATE_DIR / "claims"
     DISPATCHES_DIR = STATE_DIR / "dispatches"
 
     log(f"Polling PRs in {TARGET_REPO}")

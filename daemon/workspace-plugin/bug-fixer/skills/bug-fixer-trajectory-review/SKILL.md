@@ -30,7 +30,7 @@ This skill performs a daily review of the bug-fixer's performance to catch recur
    - PRs merged
    - PRs rejected
    - Test pass rate
-   - **Architect Review Efficiency**: Read the `.agents/plugins/bug-fixer-loop-workspace/pr_completions.jsonl` ledger to calculate and report:
+   - **Architect Review Efficiency**: Read the `${STATE_DIR}/pr_completions.jsonl` ledger (where `STATE_DIR` is configured via `BUG_FIXER_STATE_DIR` or `<workspace_root>/.agents/plugins/bug-fixer-loop-workspace`) to calculate and report:
      - Average architect review iterations per PR (total rounds before approval)
      - Iteration count broken down by engineer model
      - Human intervention rate (percentage of PRs needing intervention or rejected)
@@ -76,5 +76,5 @@ This skill performs a daily review of the bug-fixer's performance to catch recur
 ## Workspace
 
 - **Temporary files**: Use the workspace tmp directory path provided by the dispatcher for all scratch files and intermediate output. Stale files (>12h) are purged automatically on each daily run.
-- **Completion ledger**: `${STATE_DIR}/pr_completions.jsonl` — append-only JSONL file written by `sweep_dispatches()` in `liveness.py` when a dispatch completes. This is the primary data source for architect review efficiency metrics.
+- **Completion ledger**: `${STATE_DIR}/pr_completions.jsonl` — append-only JSONL file written by `sweep_dispatches()` in `liveness.py` when a dispatch completes. (Note: `STATE_DIR` is resolved from `BUG_FIXER_STATE_DIR` if set, otherwise `<workspace_root>/.agents/plugins/bug-fixer-loop-workspace`). This is the primary data source for architect review efficiency metrics.
 

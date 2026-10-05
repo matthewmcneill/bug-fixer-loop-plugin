@@ -72,10 +72,20 @@ TARGET_REPO = config["target_repo"]
 SKILL_PATH = PLUGIN_DIR / "skills/bug-fixer-trajectory-review/SKILL.md"
 SAFE_INGEST = PLUGIN_DIR / "scripts/safe_ingest.py"
 
+_state_env = os.environ.get("BUG_FIXER_STATE_DIR")
+if _state_env:
+    STATE_DIR = Path(_state_env)
+elif CONFIG_FILE:
+    STATE_DIR = CONFIG_FILE.parent / "state"
+else:
+    STATE_DIR = Path.cwd()
+STATE_DIR.mkdir(parents=True, exist_ok=True)
+
 # Workspace tmp directory — scratch space for spawned review conversations
-WORKSPACE_TMP_DIR = CONFIG_FILE.parent / "tmp"
+WORKSPACE_TMP_DIR = STATE_DIR / "tmp"
 WORKSPACE_TMP_DIR.mkdir(parents=True, exist_ok=True)
-DISPATCHES_DIR = CONFIG_FILE.parent / "dispatches"
+CLAIMS_DIR = STATE_DIR / "claims"
+DISPATCHES_DIR = STATE_DIR / "dispatches"
 
 # Purge stale tmp files (>12h old)
 _tmp_cutoff = datetime.now().timestamp() - 43200  # 12 hours

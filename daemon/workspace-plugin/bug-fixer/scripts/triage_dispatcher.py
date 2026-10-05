@@ -81,14 +81,22 @@ TARGET_REPO = config["target_repo"]
 SKILL_PATH = PLUGIN_DIR / "skills/bug-fixer-triage/SKILL.md"
 SAFE_INGEST = PLUGIN_DIR / "scripts/safe_ingest.py"
 
-# Derive state dir from config file location (standard layout)
-_TRIAGE_STATE_DIR = CONFIG_FILE.parent
+_state_env = os.environ.get("BUG_FIXER_STATE_DIR")
+if _state_env:
+    STATE_DIR = Path(_state_env)
+elif CONFIG_FILE:
+    STATE_DIR = CONFIG_FILE.parent / "state"
+else:
+    STATE_DIR = Path.cwd()
+STATE_DIR.mkdir(parents=True, exist_ok=True)
+_TRIAGE_STATE_DIR = STATE_DIR
 
-TRIAGE_COOLDOWN_FILE = _TRIAGE_STATE_DIR / "triage_cooldown.json"
-TRIAGE_FAILURE_FILE = _TRIAGE_STATE_DIR / "triage_failure_count"
+TRIAGE_COOLDOWN_FILE = STATE_DIR / "triage_cooldown.json"
+TRIAGE_FAILURE_FILE = STATE_DIR / "triage_failure_count"
 MAX_TRIAGE_FAILURES = 3
 TRIAGE_COOLDOWN_SECONDS = 3600
-DISPATCHES_DIR = _TRIAGE_STATE_DIR / "dispatches"
+CLAIMS_DIR = STATE_DIR / "claims"
+DISPATCHES_DIR = STATE_DIR / "dispatches"
 
 # Circuit breaker check
 if TRIAGE_COOLDOWN_FILE.exists():
@@ -201,7 +209,7 @@ if r.returncode != 0 or 'conversationId' not in r.stdout:
         count = int(TRIAGE_FAILURE_FILE.read_text().strip()) + 1 if TRIAGE_FAILURE_FILE.exists() else 1
     except (ValueError, OSError):
         count = 1
-    _TRIAGE_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
     TRIAGE_FAILURE_FILE.write_text(str(count))
     if count >= MAX_TRIAGE_FAILURES:
         expires = time.time() + TRIAGE_COOLDOWN_SECONDS

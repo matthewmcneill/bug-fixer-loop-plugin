@@ -163,13 +163,6 @@ MAX_CONCURRENT = 4
 BRANCH_PREFIX = "bugfix"
 SKILL_PATH = PLUGIN_DIR / "skills/bug-fixer-engineering/SKILL.md"
 SAFE_INGEST = PLUGIN_DIR / "scripts/safe_ingest.py"
-STATE_DIR = None
-REPO_DIR = None
-WORKTREES_DIR = None
-CLAIMS_DIR = None
-DISPATCHES_DIR = None
-COOLDOWN_FILE = None
-FAILURE_COUNT_FILE = None
 MAX_CONSECUTIVE_FAILURES = 3
 COOLDOWN_SECONDS = 3600  # 1 hour
 
@@ -181,15 +174,30 @@ if WORKSPACE_CONFIG:
         TARGET_REPO = config.get("target_repo", "")
         MAX_CONCURRENT = config.get("max_concurrent_prs", 4)
         BRANCH_PREFIX = config.get("branch_prefix", "bugfix")
-        STATE_DIR = CONFIG_FILE.parent
-        REPO_DIR = STATE_DIR.parent.parent.parent
-        WORKTREES_DIR = REPO_DIR / "worktrees"
-        CLAIMS_DIR = STATE_DIR / "claims"
-        DISPATCHES_DIR = STATE_DIR / "dispatches"
-        COOLDOWN_FILE = STATE_DIR / "cooldown.json"
-        FAILURE_COUNT_FILE = STATE_DIR / "failure_count"
     except (json.JSONDecodeError, OSError) as e:
         log(f"Failed to load config {CONFIG_FILE}: {e}")
+
+_state_env = os.environ.get("BUG_FIXER_STATE_DIR")
+if _state_env:
+    STATE_DIR = Path(_state_env)
+elif CONFIG_FILE:
+    STATE_DIR = CONFIG_FILE.parent / "state"
+else:
+    STATE_DIR = Path.cwd()
+STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+if config.get("repo_dir"):
+    REPO_DIR = Path(config["repo_dir"])
+elif CONFIG_FILE:
+    REPO_DIR = CONFIG_FILE.parent.parent.parent.parent
+else:
+    REPO_DIR = None
+
+WORKTREES_DIR = REPO_DIR / "worktrees" if REPO_DIR else None
+CLAIMS_DIR = STATE_DIR / "claims"
+DISPATCHES_DIR = STATE_DIR / "dispatches"
+COOLDOWN_FILE = STATE_DIR / "cooldown.json"
+FAILURE_COUNT_FILE = STATE_DIR / "failure_count"
 
 
 def get_default_engineering_model() -> str:

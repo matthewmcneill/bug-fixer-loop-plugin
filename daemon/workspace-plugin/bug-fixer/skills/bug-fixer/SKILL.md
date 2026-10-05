@@ -41,7 +41,8 @@ PLUGIN_DIR="$(cd "$(dirname "<this_skill_file>")/../.." && pwd)"
 
 **State directory** (repo-specific config — in the workspace):
 ```bash
-STATE_DIR="<workspace_root>/.agents/plugins/bug-fixer-loop-workspace"
+# Note: BUG_FIXER_STATE_DIR env var overrides default STATE_DIR if set
+STATE_DIR="${BUG_FIXER_STATE_DIR:-<workspace_root>/.agents/plugins/bug-fixer-loop-workspace}"
 ```
 
 Read `${STATE_DIR}/config.json`. Extract `target_repo`, `maintainer`,
