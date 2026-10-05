@@ -129,8 +129,12 @@ def _derive_workspace_paths(loaded_config_path: Path | None = None) -> frozenset
     else:
         # Fallback: derive from cwd (the repo being operated on)
         ws_dir = Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace"
+    # Absolute paths for exact matching
     protected.add(str(ws_dir / "config.json"))
     protected.add(str(ws_dir / "injection_cache.json"))
+    # Relative paths for shell command matching (agents write relative)
+    protected.add(".agents/plugins/bug-fixer-loop-workspace/config.json")
+    protected.add(".agents/plugins/bug-fixer-loop-workspace/injection_cache.json")
     return frozenset(protected)
 
 # Initial value — updated after config is loaded in evaluate_pretool_call
@@ -495,6 +499,10 @@ def evaluate_gate_b(
         return {"decision": "deny", "reason": REASON_APPROVAL_INJECTION}
     if RAW_GH_READ_REGEX.search(cmd):
         return {"decision": "deny", "reason": REASON_RAW_GH}
+    # safe_post.py is dispatcher-only; agents must use raw gh (+ regex gate)
+    if re.search(r"safe_post\.py\b", cmd):
+        return {"decision": "deny", "reason": "safe_post.py is reserved for dispatchers. Use raw gh commands."}
+
     if check_shell_mutation(cmd, spec_file_path, protected_files):
         return {"decision": "deny", "reason": REASON_SHELL_MUTATION}
 

@@ -37,36 +37,32 @@ WORKSPACE_DIR = PLUGIN_DIR / ".agents" / "plugins" / "bug-fixer-loop-workspace"
 DEFAULT_CONFIG = WORKSPACE_DIR / "config.json"
 
 
-def load_leak_patterns(config_override: str | None = None) -> list[str]:
+def load_leak_patterns() -> list[str]:
     """Load leak patterns from workspace config.
 
-    Fails closed: if config is missing or invalid, returns a sentinel
-    pattern that matches everything, so no content can pass unscanned.
+    Resolves config via BUG_FIXER_CONFIG (set by the sidecar stub,
+    outside the agent's reach). Falls back to the plugin's own
+    workspace config. Fails closed if neither is available.
     """
-    config_path = DEFAULT_CONFIG
-    if config_override:
-        config_path = Path(config_override)
-    else:
-        # Derive from the target repo's workspace
-        try:
-            repo_root = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True, text=True
-            ).stdout.strip()
-            if repo_root:
-                candidate = Path(repo_root) / ".agents" / "plugins" / "bug-fixer-loop-workspace" / "config.json"
-                if candidate.is_file():
-                    config_path = candidate
-        except Exception:
-            pass
+    config_path = None
+    env_path = os.environ.get("BUG_FIXER_CONFIG", "")
+    if env_path:
+        candidate = Path(env_path).expanduser().resolve()
+        if candidate.is_file():
+            config_path = candidate
+    if config_path is None and DEFAULT_CONFIG.is_file():
+        config_path = DEFAULT_CONFIG
+
+    if config_path is None:
+        sys.stderr.write("SAFE_POST: WARNING: no config found, failing closed\n")
+        return [".*"]  # Matches everything — blocks all posts
 
     try:
         with open(config_path) as f:
             config = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        # Fail closed: no config means we can't verify content is safe
-        sys.stderr.write("SAFE_POST: WARNING: no config found, failing closed\n")
-        return [".*"]  # Matches everything — blocks all posts
+    except (json.JSONDecodeError, OSError):
+        sys.stderr.write(f"SAFE_POST: WARNING: config unreadable at {config_path}, failing closed\n")
+        return [".*"]
 
     # Support both v1 and v2 config
     scanning = config.get("scanning", {})
@@ -98,7 +94,6 @@ def main():
     parser = argparse.ArgumentParser(
         description="Egress proxy for GitHub write operations"
     )
-    parser.add_argument("--config", help="Override config path (testing only)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # --- issue-create ---
@@ -163,7 +158,7 @@ def main():
     p_lo.add_argument("--remove-label", action="append", default=[])
 
     args = parser.parse_args()
-    patterns = load_leak_patterns(getattr(args, "config", None))
+    patterns = load_leak_patterns()
 
     # Resolve body from --body-file if provided
     body = getattr(args, "body", None) or ""

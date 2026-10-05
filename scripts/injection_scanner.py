@@ -163,19 +163,18 @@ class CachedInjectionScanner:
         self.max_cache = max_cache
         # Derive cache path from BUG_FIXER_CONFIG env or explicit dir
         if cache_dir is None:
-            # Derive from the target repo (cwd), not the plugin location.
-            # The cache belongs to the repo being operated on.
-            try:
-                repo_root = subprocess.run(
-                    ["git", "rev-parse", "--show-toplevel"],
-                    capture_output=True, text=True
-                ).stdout.strip()
-                if repo_root:
-                    cache_dir = str(Path(repo_root) / ".agents" / "plugins" / "bug-fixer-loop-workspace")
-                else:
-                    cache_dir = str(Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace")
-            except Exception:
-                cache_dir = str(Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace")
+            # Derive from BUG_FIXER_CONFIG (set by sidecar stub).
+            # The cache sits next to the loaded config, which is the
+            # path Gate A protects.
+            env_config = os.environ.get("BUG_FIXER_CONFIG", "")
+            if env_config:
+                cache_dir = str(Path(env_config).resolve().parent)
+            else:
+                # Fallback: plugin's own workspace
+                cache_dir = str(
+                    Path(__file__).resolve().parent.parent
+                    / ".agents" / "plugins" / "bug-fixer-loop-workspace"
+                )
         self.cache_path = os.path.join(cache_dir, "injection_cache.json")
         self._cache: dict[str, dict] = self._load_cache()
 
