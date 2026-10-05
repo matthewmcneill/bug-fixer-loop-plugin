@@ -105,8 +105,22 @@ OUTBOUND_GH_CMD_REGEX = re.compile(
     r")\b"
 )
 
-HOST_SECURITY_SCRIPTS = frozenset({"pre_tool_gate.py", "safe_ingest.py", "injection_scanner.py"})
-SCANNER_PROTECTED_FILES = frozenset({".betterleaks.toml", ".betterleaksignore", ".agents/plugins/bug-fixer-loop-workspace/config.json", ".agents/plugins/bug-fixer-loop-workspace/injection_cache.json"})
+HOST_SECURITY_SCRIPTS = frozenset({"pre_tool_gate.py", "safe_ingest.py",
+    "safe_post.py", "injection_scanner.py"})
+# Derive workspace paths deterministically from this script location.
+# pre_tool_gate.py is at <plugin_dir>/scripts/pre_tool_gate.py
+# Using __file__ instead of env vars so the paths cannot be redirected.
+_PLUGIN_DIR = Path(__file__).resolve().parent.parent
+_WORKSPACE_DIR = _PLUGIN_DIR / ".agents" / "plugins" / "bug-fixer-loop-workspace"
+_WORKSPACE_CONFIG = str(_WORKSPACE_DIR / "config.json")
+_WORKSPACE_CACHE = str(_WORKSPACE_DIR / "injection_cache.json")
+
+SCANNER_PROTECTED_FILES = frozenset({
+    ".betterleaks.toml",
+    ".betterleaksignore",
+    _WORKSPACE_CONFIG,
+    _WORKSPACE_CACHE,
+})
 
 
 def normalise_config(config: dict[str, Any] | None) -> dict[str, Any]:
@@ -161,6 +175,7 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
         script_dir = Path(__file__).resolve().parent
         plugin_dir = script_dir.parent
         for cand in [
+            _WORKSPACE_DIR / "config.json",
             plugin_dir.parent / "bug-fixer-loop-workspace" / "config.json",
             Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace" / "config.json",
         ]:

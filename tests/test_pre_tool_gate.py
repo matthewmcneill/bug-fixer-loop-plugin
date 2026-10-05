@@ -1072,9 +1072,9 @@ class TestPR47Fixes(unittest.TestCase):
 
     def test_shell_mutation_blocks_workspace_config(self):
         """check_shell_mutation SHOULD block writes to the workspace config."""
-        from pre_tool_gate import check_shell_mutation
+        from pre_tool_gate import check_shell_mutation, _WORKSPACE_CONFIG
         result = check_shell_mutation(
-            'echo "{}" > .agents/plugins/bug-fixer-loop-workspace/config.json',
+            f'echo "{{}}" > {_WORKSPACE_CONFIG}',
             "docs/design_specification.md",
             []
         )

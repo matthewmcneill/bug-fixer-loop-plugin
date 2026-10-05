@@ -163,13 +163,10 @@ class CachedInjectionScanner:
         self.max_cache = max_cache
         # Derive cache path from BUG_FIXER_CONFIG env or explicit dir
         if cache_dir is None:
-            config_env = os.environ.get("BUG_FIXER_CONFIG", "")
-            if config_env:
-                cache_dir = str(Path(config_env).resolve().parent)
-            else:
-                cache_dir = os.path.join(
-                    os.getcwd(), ".agents", "plugins", "bug-fixer-loop-workspace"
-                )
+            # Derive from this script's location — deterministic, not env-mutable
+            _script_dir = Path(__file__).resolve().parent
+            _plugin_dir = _script_dir.parent
+            cache_dir = str(_plugin_dir / ".agents" / "plugins" / "bug-fixer-loop-workspace")
         self.cache_path = os.path.join(cache_dir, "injection_cache.json")
         self._cache: dict[str, dict] = self._load_cache()
 

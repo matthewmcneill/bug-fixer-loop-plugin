@@ -59,6 +59,14 @@ def gh(*args) -> subprocess.CompletedProcess:
     return run(["gh", *args])
 
 
+SAFE_POST = SCRIPT_DIR / "safe_post.py"
+
+
+def safe_post(*args) -> subprocess.CompletedProcess:
+    """Route body-carrying GitHub writes through the egress proxy."""
+    return run([sys.executable, str(SAFE_POST), *args])
+
+
 def inject_conv_tag(pr_number: int, tag_name: str, conv_id: str) -> bool:
     """Inject or update an HTML conversation-ID tag in a PR body.
 
@@ -91,8 +99,8 @@ def inject_conv_tag(pr_number: int, tag_name: str, conv_id: str) -> bool:
         # Append the tag
         new_body += f"\n<!-- {tag_name}: {conv_id} -->"
 
-        gh("pr", "edit", str(pr_number), "--repo", TARGET_REPO,
-           "--body", new_body)
+        safe_post("pr-edit", str(pr_number), "--repo", TARGET_REPO,
+                  "--body", new_body)
         log(f"inject_conv_tag: wrote {tag_name}={conv_id[:8]}... to PR #{pr_number}")
         return True
     except Exception as e:
@@ -455,8 +463,8 @@ def main():
                 gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
                    "--add-label", "bug-fixer:human:needs-intervention",
                    "--remove-label", "bug-fixer:engineer:in-progress")
-                gh("issue", "comment", str(issue_num), "--repo", TARGET_REPO,
-                   "--body", f"[BUG-FIXER] ⚠️ Escalating to human: {reason}")
+                safe_post("issue-comment", str(issue_num), "--repo", TARGET_REPO,
+                          "--body", f"[BUG-FIXER] ⚠️ Escalating to human: {reason}")
                 continue
 
             # Get issue title for conversation naming
@@ -575,8 +583,8 @@ def main():
                             issue_number=issue_num, timeout_minutes=45, worktree_path=str(wt_path),
                             model=model)
             log(f"Reattached #{issue_num} → conversation {new_conv_id}")
-            gh("issue", "comment", str(issue_num), "--repo", TARGET_REPO,
-               "--body", f"[BUG-FIXER] Reattached to orphaned work from session {conv_id}. New session: {new_conv_id}.")
+            safe_post("issue-comment", str(issue_num), "--repo", TARGET_REPO,
+                      "--body", f"[BUG-FIXER] Reattached to orphaned work from session {conv_id}. New session: {new_conv_id}.")
             reattach_count += 1
             reattached_issues.add(issue_num)
 
@@ -813,8 +821,8 @@ def main():
             gh("issue", "edit", str(issue_num), "--repo", TARGET_REPO,
                "--add-label", "bug-fixer:human:needs-intervention",
                "--remove-label", "bug-fixer:engineer:needs-fix")
-            gh("issue", "comment", str(issue_num), "--repo", TARGET_REPO,
-               "--body", f"[BUG-FIXER] ⚠️ Escalating to human: {reason}")
+            safe_post("issue-comment", str(issue_num), "--repo", TARGET_REPO,
+                      "--body", f"[BUG-FIXER] ⚠️ Escalating to human: {reason}")
             continue
 
         log(f"Claiming #{issue_num}: {issue_title} (slot {spawned + 1}/{available_slots})")

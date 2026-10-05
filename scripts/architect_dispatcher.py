@@ -52,6 +52,14 @@ def gh(*args) -> subprocess.CompletedProcess:
     return run(["gh", *args])
 
 
+SAFE_POST = SCRIPT_DIR / "safe_post.py"
+
+
+def safe_post(*args) -> subprocess.CompletedProcess:
+    """Route body-carrying GitHub writes through the egress proxy."""
+    return run([sys.executable, str(SAFE_POST), *args])
+
+
 def inject_conv_tag(pr_number: int, tag_name: str, conv_id: str) -> bool:
     """Inject or update an HTML conversation-ID tag in a PR body.
 
@@ -77,8 +85,8 @@ def inject_conv_tag(pr_number: int, tag_name: str, conv_id: str) -> bool:
         # Append the tag
         new_body += f"\n<!-- {tag_name}: {conv_id} -->"
 
-        gh("pr", "edit", str(pr_number), "--repo", TARGET_REPO,
-           "--body", new_body)
+        safe_post("pr-edit", str(pr_number), "--repo", TARGET_REPO,
+                  "--body", new_body)
         log(f"inject_conv_tag: wrote {tag_name}={conv_id[:8]}... to PR #{pr_number}")
         return True
     except Exception as e:
@@ -134,7 +142,7 @@ def check_merge_conflicts(target_repo: str | None = None) -> None:
                 "- This approved PR has developed merge conflicts against the base branch.\n"
                 "- Re-routing to engineering for rebase, conflict resolution, and verification."
             )
-            r_comment = gh("pr", "comment", str(number), "--repo", repo, "--body", conflict_comment)
+            r_comment = safe_post("pr-comment", str(number), "--repo", repo, "--body", conflict_comment)
             if r_comment.returncode != 0:
                 log(f"Warning: Failed to post conflict comment on PR #{number}: {r_comment.stderr.strip()}")
 
