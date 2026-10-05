@@ -3,9 +3,9 @@
   "target_repo": "matthewmcneill/bug-fixer-loop-plugin",
   "maintainer": "matthewmcneill",
   "trusted_users": [],
-  "spec_file_path": "docs/design_specification.md",
+  "spec_file_path": "docs/plugin-architecture.md",
   "protected_files": [
-    "docs/design_specification.md"
+    "docs/plugin-architecture.md"
   ],
   "scanning": {
     "secrets": {

@@ -3,7 +3,7 @@
 
 Enforces safety, boundary, and immutability invariants:
 1. Specification File Immutability:
-   - Modifying the configured spec file (e.g., docs/design_specification.md)
+   - Modifying the configured spec file (e.g., docs/plugin-architecture.md)
      via file editing tools or shell commands is strictly prohibited.
 2. Protected Files Enforcement:
    - Files declared in `protected_files` cannot be modified by autonomous agents.
@@ -248,8 +248,8 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
     if target_path is None or not target_path.is_file():
         return normalise_config(
             {
-                "spec_file_path": "docs/design_specification.md",
-                "protected_files": ["docs/design_specification.md"],
+                "spec_file_path": "docs/plugin-architecture.md",
+                "protected_files": ["docs/plugin-architecture.md"],
                 "leak_patterns": [],
                 "scan_exclude_paths": ["tests/"],
             }
@@ -2816,8 +2816,8 @@ def main() -> int:
     except Exception as exc:
         sys.stderr.write(f"Config loading error: {exc}\n")
         config = {
-            "spec_file_path": "docs/design_specification.md",
-            "protected_files": ["docs/design_specification.md"],
+            "spec_file_path": "docs/plugin-architecture.md",
+            "protected_files": ["docs/plugin-architecture.md"],
             "leak_patterns": [],
         }
 

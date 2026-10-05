@@ -25,7 +25,7 @@ Options:
   -r, --repo <owner/repo>       Target GitHub repository (e.g. owner/repo)
   -d, --repo-dir <path>         Local checkout path of target repository
   -m, --maintainer <login>      Trusted maintainer GitHub login
-  --spec-file <path>            Path to design specification file (default: docs/design_specification.md)
+  --spec-file <path>            Path to design specification file (default: docs/plugin-architecture.md)
   --test-command <cmd>          Test command to run (default: pio test -e native)
   --lint-command <cmd>          Lint command to run (optional)
   --triage-only                 Skip configuration, just run triage preview
@@ -120,7 +120,7 @@ if [[ "${TRIAGE_ONLY}" == "true" ]]; then
     echo "Error: target_repo not set in config. Run ./scripts/configure.sh first." >&2
     exit 1
   fi
-  SPEC_FILE_PATH=$(python3 -c "import json; print(json.load(open('${CONFIG_FILE}')).get('spec_file_path','docs/design_specification.md'))")
+  SPEC_FILE_PATH=$(python3 -c "import json; print(json.load(open('${CONFIG_FILE}')).get('spec_file_path','docs/plugin-architecture.md'))")
   echo "================================================================"
   echo "  Bug Fixer Loop — Triage Preview (${TARGET_REPO})"
   echo "================================================================"
@@ -236,7 +236,7 @@ if [[ -z "$MAINTAINER_USER" ]]; then
 fi
 
 # 1.4 Spec File Path
-DEFAULT_SPEC="${EXISTING_SPEC_FILE:-docs/design_specification.md}"
+DEFAULT_SPEC="${EXISTING_SPEC_FILE:-docs/plugin-architecture.md}"
 if [[ -z "$SPEC_FILE_PATH" ]]; then
   if [[ "$ASSUME_YES" = true || ! -t 0 ]]; then
     SPEC_FILE_PATH="$DEFAULT_SPEC"
