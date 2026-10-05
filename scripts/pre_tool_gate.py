@@ -106,7 +106,7 @@ OUTBOUND_GH_CMD_REGEX = re.compile(
 )
 
 HOST_SECURITY_SCRIPTS = frozenset({"pre_tool_gate.py", "safe_ingest.py", "injection_scanner.py"})
-SCANNER_PROTECTED_FILES = frozenset({".betterleaks.toml", ".betterleaksignore", ".agents/plugins/bug-fixer-loop-workspace/config.json"})
+SCANNER_PROTECTED_FILES = frozenset({".betterleaks.toml", ".betterleaksignore", ".agents/plugins/bug-fixer-loop-workspace/config.json", ".agents/plugins/bug-fixer-loop-workspace/injection_cache.json"})
 
 
 def normalise_config(config: dict[str, Any] | None) -> dict[str, Any]:
@@ -233,14 +233,19 @@ def check_shell_mutation(cmd: str, spec_file_path: str, protected_files: list[st
     for pf in SCANNER_PROTECTED_FILES:
         if pf:
             watched.add(pf)
-            watched.add(Path(pf).name)
+            # Only add basename for scanner files like .betterleaks.toml,
+            # NOT for config.json (would block legitimate engineering work)
+            if not pf.endswith("config.json"):
+                watched.add(Path(pf).name)
 
     escaped = [re.escape(w) for w in watched if w]
     if not escaped:
         return False
     targets_pattern = "|".join(escaped)
+    # Use (?:^|\W) instead of \b before targets — \b fails for paths
+    # starting with . (like .agents/) because . is not a word character.
     mutation_regex = re.compile(
-        rf"(?:(?:\b(?:sed\s+-i|tee|rm|cp|mv)\b|(?:>>|>)\s*)[^\n;|]*\b(?:{targets_pattern})\b)"
+        rf"(?:(?:\b(?:sed\s+-i|tee|rm|cp|mv)\b|(?:>>|>)\s*)[^\n;|]*(?:^|\W|/)(?:{targets_pattern})(?:\s|$|[;|&]))"
     )
     return bool(mutation_regex.search(cmd))
 
@@ -412,7 +417,7 @@ def check_egress_leaks(cmd: str, leak_patterns: list[str]) -> bool:
     body = extract_outbound_body(cmd)
     if body is None:
         return False
-    if body == "[UNSCANNABLE_STDIN_BODY]":
+    if "[UNSCANNABLE_STDIN_BODY]" in body:
         return "UNSCANNABLE" 
 
     compiled: list[re.Pattern[str]] = []
@@ -708,21 +713,21 @@ class BetterleaksBackend:
             cmd.extend(["--config", self.config_path])
         return cmd
 
-    DEFAULT_REGEX_EXCLUDE_PATHS = ["tests/", ".agents/skills/principal-architect-workspace/"]
-
     def scan(
         self,
         repo_dir: str,
         scope: ScanScope,
         exclude_paths: list[str] | None = None,
     ) -> list[ScanViolation]:
-        if not exclude_paths:
-            exclude_paths = self.DEFAULT_REGEX_EXCLUDE_PATHS
-        else:
+        # Betterleaks has its own ignore mechanism and had 0 false positives
+        # on this repo — do NOT apply DEFAULT_REGEX_EXCLUDE_PATHS here.
+        if exclude_paths:
             exclude_paths = [p for p in exclude_paths if p and p != "/"]
+        else:
+            exclude_paths = []
         if isinstance(scope, str):
             scope = ScanScope(scope)
-            
+
         self.scanned_count = 0
         self.excluded_count = 0
         cmd = self._build_cmd(repo_dir, scope)

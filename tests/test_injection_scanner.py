@@ -48,8 +48,8 @@ class TestInjectionScanner(unittest.TestCase):
             "sanitizationResult": {
                 "filterResults": {
                     "pi_and_jailbreak": {
-                        "executionState": "EXECUTION_SUCCESS",
                         "piAndJailbreakFilterResult": {
+                            "executionState": "EXECUTION_SUCCESS",
                             "matchState": "MATCH_FOUND",
                             "confidenceLevel": "HIGH"
                         }
@@ -73,8 +73,8 @@ class TestInjectionScanner(unittest.TestCase):
             "sanitizationResult": {
                 "filterResults": {
                     "pi_and_jailbreak": {
-                        "executionState": "EXECUTION_SUCCESS",
                         "piAndJailbreakFilterResult": {
+                            "executionState": "EXECUTION_SUCCESS",
                             "matchState": "MATCH_NOT_FOUND",
                             "confidenceLevel": "LOW_AND_ABOVE"
                         }
@@ -175,3 +175,28 @@ class TestInjectionScanner(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+    def test_cached_scanner_does_not_cache_disabled(self):
+        """Disabled results should not be cached — they'd poison the cache."""
+        config = {"enabled": False}
+        scanner = CachedInjectionScanner(
+            InjectionScanner(config), cache_dir="/tmp/test_injection_cache"
+        )
+        result = scanner.scan("test text")
+        self.assertFalse(result.is_injection)
+        self.assertEqual(result.provider, "disabled")
+        # Cache should still be empty
+        self.assertEqual(scanner._cache, {})
+
+    @patch.object(CachedInjectionScanner, "_save_cache")
+    @patch.object(CachedInjectionScanner, "_load_cache", return_value={})
+    @patch.object(InjectionScanner, "scan")
+    def test_cached_scanner_does_not_cache_errors(self, mock_scan, mock_load, mock_save):
+        """Error results should not be cached — outage shouldn't permanently whitelist."""
+        mock_scan.return_value = InjectionResult(False, 0.0, "model_armor", "error: timeout")
+        scanner = CachedInjectionScanner(InjectionScanner(self.config_enabled))
+        scanner.scan("test text")
+        # Cache should be empty — errors aren't cached
+        self.assertEqual(scanner._cache, {})
+

@@ -18,7 +18,7 @@ import os
 import re
 import subprocess
 import sys
-from scripts.injection_scanner import CachedInjectionScanner, InjectionScanner
+
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,6 +35,7 @@ AGENTAPI_DIR = Path.home() / ".gemini" / "antigravity" / "bin"
 if AGENTAPI_DIR.is_dir():
     os.environ["PATH"] = str(AGENTAPI_DIR) + os.pathsep + os.environ.get("PATH", "")
 
+from injection_scanner import CachedInjectionScanner, InjectionScanner
 from liveness import record_dispatch, sweep_dispatches, agentapi_is_reachable
 
 

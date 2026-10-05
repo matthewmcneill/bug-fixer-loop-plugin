@@ -1023,3 +1023,67 @@ class TestPreToolGate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPR47Fixes(unittest.TestCase):
+    """Tests for fixes from PR #47 round 2."""
+
+    def test_stdin_body_file_denied_with_title(self):
+        """--body-file - combined with --title should still be denied."""
+        from pre_tool_gate import check_egress_leaks
+        # Even with a title, --body-file - should trigger denial
+        result = check_egress_leaks(
+            'gh issue create --title hello --body-file -',
+            ["ya29\\.[A-Za-z0-9_-]+"]
+        )
+        self.assertTrue(result, "stdin body should be detected even with --title")
+
+    def test_config_json_protected_by_gate_a(self):
+        """config.json should be denied by Gate A."""
+        from pre_tool_gate import evaluate_gate_a
+        result = evaluate_gate_a(
+            "write_to_file",
+            {"TargetFile": ".agents/plugins/bug-fixer-loop-workspace/config.json"},
+            "docs/design_specification.md",
+            [],
+        )
+        self.assertEqual(result["decision"], "deny")
+
+    def test_injection_cache_protected_by_gate_a(self):
+        """injection_cache.json should be denied by Gate A."""
+        from pre_tool_gate import evaluate_gate_a
+        result = evaluate_gate_a(
+            "write_to_file",
+            {"TargetFile": ".agents/plugins/bug-fixer-loop-workspace/injection_cache.json"},
+            "docs/design_specification.md",
+            [],
+        )
+        self.assertEqual(result["decision"], "deny")
+
+    def test_shell_mutation_allows_other_config_json(self):
+        """check_shell_mutation should NOT block writes to src/app/config.json."""
+        from pre_tool_gate import check_shell_mutation
+        result = check_shell_mutation(
+            'echo "{}" > src/app/config.json',
+            "docs/design_specification.md",
+            []
+        )
+        self.assertFalse(result, "Should not block writes to unrelated config.json files")
+
+    def test_shell_mutation_blocks_workspace_config(self):
+        """check_shell_mutation SHOULD block writes to the workspace config."""
+        from pre_tool_gate import check_shell_mutation
+        result = check_shell_mutation(
+            'echo "{}" > .agents/plugins/bug-fixer-loop-workspace/config.json',
+            "docs/design_specification.md",
+            []
+        )
+        self.assertTrue(result, "Should block writes to workspace config.json")
+
+    def test_betterleaks_does_not_use_default_excludes(self):
+        """BetterleaksBackend should NOT apply DEFAULT_REGEX_EXCLUDE_PATHS."""
+        from pre_tool_gate import BetterleaksBackend
+        backend = BetterleaksBackend()
+        # The scan method should not populate exclude_paths with defaults
+        # We can't run betterleaks, but we can verify the attribute isn't set
+        self.assertFalse(hasattr(backend, 'DEFAULT_REGEX_EXCLUDE_PATHS'))

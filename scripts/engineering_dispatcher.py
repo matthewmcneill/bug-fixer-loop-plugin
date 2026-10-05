@@ -18,7 +18,7 @@ import re
 import signal
 import subprocess
 import sys
-from scripts.injection_scanner import CachedInjectionScanner, InjectionScanner
+
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +27,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from injection_scanner import CachedInjectionScanner, InjectionScanner
 from liveness import (record_dispatch, sweep_dispatches,
                       transcript_age_seconds, transcript_path, is_stalled,
                       is_in_error_loop, should_skip_issue_dispatch,

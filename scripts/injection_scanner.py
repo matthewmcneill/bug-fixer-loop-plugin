@@ -1,4 +1,6 @@
+import os
 import sys
+from pathlib import Path
 import json
 import urllib.request
 import urllib.error
@@ -87,7 +89,7 @@ class ModelArmorProvider:
         pi_and_jailbreak = filter_results.get("pi_and_jailbreak", {})
         injection = pi_and_jailbreak.get("piAndJailbreakFilterResult", {})
         
-        execution_state = pi_and_jailbreak.get("executionState", "EXECUTION_UNSPECIFIED")
+        execution_state = injection.get("executionState", "EXECUTION_UNSPECIFIED")
         if execution_state != "EXECUTION_SUCCESS":
             raise RuntimeError(f"Model Armor execution failed: {execution_state}")
             
@@ -147,18 +149,39 @@ class InjectionScanner:
                                       f"error: {exc}")
             raise
 
-import os
+
 class CachedInjectionScanner:
-    """Wraps InjectionScanner with SHA-256 content-hash cache."""
-    
-    def __init__(self, scanner: InjectionScanner, max_cache: int = 1000):
+    """Wraps InjectionScanner with SHA-256 content-hash cache.
+
+    Only caches successful provider verdicts (not disabled/error results).
+    Cache key includes provider and template to prevent cross-config hits.
+    """
+
+    def __init__(self, scanner: InjectionScanner, cache_dir: str | None = None,
+                 max_cache: int = 1000):
         self.scanner = scanner
         self.max_cache = max_cache
-        self.cache_path = os.path.join(
-            os.getcwd(), ".agents", "plugins", "bug-fixer-loop-workspace", "injection_cache.json"
-        )
+        # Derive cache path from BUG_FIXER_CONFIG env or explicit dir
+        if cache_dir is None:
+            config_env = os.environ.get("BUG_FIXER_CONFIG", "")
+            if config_env:
+                cache_dir = str(Path(config_env).resolve().parent)
+            else:
+                cache_dir = os.path.join(
+                    os.getcwd(), ".agents", "plugins", "bug-fixer-loop-workspace"
+                )
+        self.cache_path = os.path.join(cache_dir, "injection_cache.json")
         self._cache: dict[str, dict] = self._load_cache()
-    
+
+    def _cache_key(self, text: str) -> str:
+        """Include provider + template in key to prevent cross-config hits."""
+        provider = self.scanner.provider if self.scanner.enabled else "disabled"
+        template = ""
+        if hasattr(self.scanner, '_provider_impl') and hasattr(self.scanner._provider_impl, 'template'):
+            template = self.scanner._provider_impl.template
+        prefix = f"{provider}:{template}:"
+        return hashlib.sha256((prefix + text).encode()).hexdigest()
+
     def _load_cache(self):
         if os.path.exists(self.cache_path):
             try:
@@ -167,7 +190,7 @@ class CachedInjectionScanner:
             except Exception:
                 pass
         return {}
-        
+
     def _save_cache(self):
         try:
             os.makedirs(os.path.dirname(self.cache_path), exist_ok=True)
@@ -175,9 +198,13 @@ class CachedInjectionScanner:
                 json.dump(self._cache, f)
         except Exception:
             pass
-            
+
     def scan(self, text: str) -> InjectionResult:
-        key = hashlib.sha256(text.encode()).hexdigest()
+        # Don't use cache when scanner is disabled — no verdict to cache
+        if not self.scanner.enabled:
+            return self.scanner.scan(text)
+
+        key = self._cache_key(text)
         if key in self._cache:
             cached = self._cache[key]
             return InjectionResult(
@@ -186,17 +213,18 @@ class CachedInjectionScanner:
                 provider=cached.get("provider", ""),
                 details=cached.get("details", "")
             )
-            
+
         result = self.scanner.scan(text)
-        
-        if len(self._cache) >= self.max_cache:
-            self._cache.pop(next(iter(self._cache)))
-            
-        self._cache[key] = {
-            "is_injection": result.is_injection,
-            "confidence": result.confidence,
-            "provider": result.provider,
-            "details": result.details
-        }
-        self._save_cache()
+
+        # Only cache successful provider verdicts, not errors
+        if result.provider != "disabled" and not result.details.startswith("error:"):
+            if len(self._cache) >= self.max_cache:
+                self._cache.pop(next(iter(self._cache)))
+            self._cache[key] = {
+                "is_injection": result.is_injection,
+                "confidence": result.confidence,
+                "provider": result.provider,
+                "details": result.details
+            }
+            self._save_cache()
         return result
