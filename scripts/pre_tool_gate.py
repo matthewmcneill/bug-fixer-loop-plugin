@@ -499,9 +499,22 @@ def evaluate_gate_b(
         return {"decision": "deny", "reason": REASON_APPROVAL_INJECTION}
     if RAW_GH_READ_REGEX.search(cmd):
         return {"decision": "deny", "reason": REASON_RAW_GH}
-    # safe_post.py is dispatcher-only; agents must use raw gh (+ regex gate)
-    if re.search(r"safe_post\.py\b", cmd):
-        return {"decision": "deny", "reason": "safe_post.py is reserved for dispatchers. Use raw gh commands."}
+    # Egress proxy is dispatcher-only; agents must use raw gh (+ regex gate).
+    # Match only execution (python3 ... safe_post args), not reads or test files.
+    # Also catch glob evasion (safe_pos?.py, safe_pos[t].py, safe_post*).
+    if re.search(
+        r"(?:python[23]?|/env\s+python)\s+"       # interpreter prefix
+        r"(?:\S+/)?"                               # optional path prefix
+        r"safe_pos"                                 # common stem
+        r"(?:"
+            r"t\.py"                               # literal: safe_post.py
+            r"|t[*?]"                               # glob after t: safe_post* safe_post?
+            r"|t(?:\s|$|[;&|])"                    # literal: safe_post (no .py)
+            r"|[?*\[]"                             # glob after safe_pos: safe_pos? safe_pos*
+        r")",
+        cmd
+    ):
+        return {"decision": "deny", "reason": "Egress proxy is reserved for dispatchers. Use raw gh commands."}
 
     if check_shell_mutation(cmd, spec_file_path, protected_files):
         return {"decision": "deny", "reason": REASON_SHELL_MUTATION}

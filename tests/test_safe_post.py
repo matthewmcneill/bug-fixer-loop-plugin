@@ -242,7 +242,7 @@ class TestGateBBlocksSafePost(unittest.TestCase):
     """Gate B should deny agent run_command calls to safe_post.py."""
 
     def test_gate_b_denies_safe_post(self):
-        """An agent running safe_post.py via run_command should be denied."""
+        """An agent running the egress proxy via run_command should be denied."""
         from pre_tool_gate import evaluate_gate_b
         result = evaluate_gate_b(
             "run_command",
@@ -253,7 +253,7 @@ class TestGateBBlocksSafePost(unittest.TestCase):
         )
         self.assertIsNotNone(result)
         self.assertEqual(result["decision"], "deny")
-        self.assertIn("safe_post.py", result["reason"])
+        self.assertIn("dispatcher", result["reason"].lower())
 
     def test_gate_b_allows_safe_ingest(self):
         """safe_ingest.py should NOT be blocked by this rule."""
@@ -292,6 +292,54 @@ class TestShellMutationRelativePaths(unittest.TestCase):
             []
         )
         self.assertTrue(result, "Relative path write to injection_cache.json should be blocked")
+
+
+class TestProxyDenyPrecision(unittest.TestCase):
+    """The proxy deny rule should be precise: only execution, not reads."""
+
+    def _gate_b(self, cmd):
+        from pre_tool_gate import evaluate_gate_b
+        return evaluate_gate_b("run_command", {"CommandLine": cmd},
+                               "docs/design_specification.md", [], {})
+
+    def test_cat_proxy_allowed(self):
+        """cat scripts/safe_post.py should NOT be denied."""
+        result = self._gate_b("cat scripts/safe_post.py")
+        if result:
+            self.assertNotEqual(result["decision"], "deny",
+                                "cat should not be denied by the proxy rule")
+
+    def test_grep_proxy_allowed(self):
+        """grep ... safe_post.py should NOT be denied."""
+        result = self._gate_b("grep -n 'def ' scripts/safe_post.py")
+        if result:
+            self.assertNotEqual(result["decision"], "deny",
+                                "grep should not be denied by the proxy rule")
+
+    def test_test_file_allowed(self):
+        """python3 -m unittest tests/test_safe_post.py should NOT be denied."""
+        result = self._gate_b("python3 -m unittest tests.test_safe_post -v")
+        if result:
+            self.assertNotEqual(result["decision"], "deny",
+                                "running test_safe_post should not be denied")
+
+    def test_glob_question_mark_denied(self):
+        """python3 scripts/safe_pos?.py should be denied (glob evasion)."""
+        result = self._gate_b("python3 scripts/safe_pos?.py issue-comment 1 --repo test/test --body hi")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["decision"], "deny")
+
+    def test_glob_bracket_denied(self):
+        """python3 scripts/safe_pos[t].py should be denied (glob evasion)."""
+        result = self._gate_b("python3 scripts/safe_pos[t].py issue-comment 1 --repo test/test --body hi")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["decision"], "deny")
+
+    def test_glob_star_denied(self):
+        """python3 scripts/safe_post* should be denied (glob evasion)."""
+        result = self._gate_b("python3 scripts/safe_post* issue-comment 1 --repo test/test --body hi")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["decision"], "deny")
 
 
 if __name__ == "__main__":
