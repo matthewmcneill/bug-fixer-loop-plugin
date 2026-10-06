@@ -113,57 +113,6 @@ with open(path, "w") as f:
 PY
 echo "Updated consumer plugins.json: $PLUGINS_JSON"
 
-# 3b. Inject hooks into consumer .agents/hooks.json
-# Workspace plugin hooks loaded via plugins.json do NOT fire (verified).
-# Hooks must be injected directly, pointing to installed scripts.
-HOOKS_JSON="$TARGET_REPO_DIR/.agents/hooks.json"
-SCRIPTS_PATH="$INSTALL_DIR/workspace-plugin/bug-fixer/scripts"
-
-python3 - <<PY
-import json
-import os
-
-path = "$HOOKS_JSON"
-scripts = "$SCRIPTS_PATH"
-
-bug_fixer_hooks = {
-    "bug-fixer-file-gate": {
-        "PreToolUse": [{"matcher": "write_to_file|replace_file_content",
-            "hooks": [{"type": "command", "command": f"python3 {scripts}/pre_tool_gate.py", "timeout": 10}]}]
-    },
-    "bug-fixer-command-gate": {
-        "PreToolUse": [{"matcher": "run_command",
-            "hooks": [{"type": "command", "command": f"python3 {scripts}/pre_tool_gate.py", "timeout": 10}]}],
-        "PostToolUse": [{"matcher": "run_command",
-            "hooks": [{"type": "command", "command": f"python3 {scripts}/integrity_monitor.py --post", "timeout": 10}]}]
-    },
-    "bug-fixer-integrity-snapshot": {
-        "PreToolUse": [{"matcher": "run_command",
-            "hooks": [{"type": "command", "command": f"python3 {scripts}/integrity_monitor.py --pre", "timeout": 10}]}]
-    },
-    "bug-fixer-url-gate": {
-        "PreToolUse": [{"matcher": "read_url_content",
-            "hooks": [{"type": "command", "command": f"python3 {scripts}/github_url_gate.py", "timeout": 10}]}]
-    }
-}
-
-data = {}
-if os.path.exists(path):
-    try:
-        with open(path, "r") as f:
-            data = json.load(f)
-    except:
-        pass
-
-# Merge: add/overwrite bug-fixer hooks, preserve other hooks
-data.update(bug_fixer_hooks)
-
-with open(path, "w") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-PY
-echo "Updated consumer hooks.json: $HOOKS_JSON"
-
 # 4. Migrate state if requested
 if [[ "$MIGRATE_STATE" == "true" ]]; then
   OLD_STATE_DIR="$TARGET_REPO_DIR/.agents/plugins/bug-fixer-loop-workspace"

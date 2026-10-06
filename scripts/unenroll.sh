@@ -75,28 +75,6 @@ except Exception as e:
 EOF
     echo "Removed entry from $PLUGINS_JSON"
   fi
-
-  # Also clean up injected hooks
-  HOOKS_JSON="$TARGET_REPO_DIR/.agents/hooks.json"
-  if [[ -f "$HOOKS_JSON" ]]; then
-    python3 - <<EOF2
-import json
-path = "$HOOKS_JSON"
-try:
-    with open(path, "r") as f:
-        data = json.load(f)
-    bf_keys = [k for k in data if k.startswith("bug-fixer-")]
-    for k in bf_keys:
-        del data[k]
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-    if bf_keys:
-        print(f"Removed {len(bf_keys)} bug-fixer hooks from {path}")
-except Exception as e:
-    print(f"Error updating {path}: {e}")
-EOF2
-  fi
 fi
 
 echo "Unenrollment complete for $TARGET_REPO."
