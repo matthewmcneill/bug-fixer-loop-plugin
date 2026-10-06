@@ -115,7 +115,7 @@ REASON_INLINE_GH = (
     "For GitHub reads use safe_ingest.py; for GitHub writes use: "
     "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py`"
 )
-REASON_PROXY = "DEPRECATED: safe_post.py is now allowed for all agents."
+# REASON_PROXY removed — safe_post.py is now allowed for all agents.
 REASON_SECRET_DISCLOSURE = (
     "Credential disclosure blocked: printing the GitHub token "
     "(gh auth token / --show-token) is prohibited."
@@ -298,11 +298,12 @@ def load_config(
                                     if Path(wp).resolve().is_relative_to(r_path):
                                         cands.append(cand_conf)
                                         break
-                        except json.JSONDecodeError:
+                        except json.JSONDecodeError as parse_err:
                             # Malformed config for a matching workspace → fail closed
                             raise ValueError(
-                                f"Malformed JSON in sidecar config {cand_conf} — "
-                                "refusing to treat workspace as unenrolled"
+                                f"Malformed JSON in sidecar config {cand_conf}: "
+                                f"{parse_err}. Fix or delete this file to restore "
+                                "normal gate behaviour."
                             )
                         except OSError:
                             pass
@@ -1945,7 +1946,7 @@ def _check_segment(
             if scripts[0].dynamic or scripts[0].globbed:
                 return _deny(REASON_DYNAMIC_EXEC), cwd
             if _targets_proxy(scripts[0], cwd):
-                return _deny(REASON_PROXY), cwd
+                return None, cwd  # allow safe_post.py — it scans content itself
             return _check_writer_words(seg, scripts[1:], ctx, cwd, include_stdin=False), cwd
         if (
             rest

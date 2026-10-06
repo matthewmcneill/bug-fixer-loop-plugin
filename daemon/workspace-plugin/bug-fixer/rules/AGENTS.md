@@ -128,7 +128,8 @@ inspect. Write commands so their effect is visible in the command itself:
   from shell variables, `$(...)`, or stdin from another program are refused.
 - Run `gh` directly — not through `bash -c`, `eval`, `xargs`, aliases, or code
   in `python -c` / `node -e`.
-- Do not run `scripts/safe_post.py`; it is reserved for the dispatchers.
+- Route all GitHub write operations through `scripts/safe_post.py` — it scans
+  content for leaked secrets before posting. Do not use raw `gh` write commands.
 - Redirect output only to files whose name is literal (e.g. `> "$STATE_DIR/claims/12.lock"`
   is fine; `> "$OUT"` is refused). Never write to protected files, the workspace
   `config.json`, or the plugin's scripts by any means.

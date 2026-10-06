@@ -64,12 +64,17 @@ def _configured_patterns(workspace_paths: list[str]) -> list[str]:
 
 
 def _is_enrolled(workspace_paths: list[str]) -> bool:
-    """Check if any workspace path matches a sidecar config's repo_dir."""
+    """Check if any workspace path matches a sidecar config's repo_dir.
+
+    Fails closed: returns True on error so GitHub URL blocking stays on.
+    """
     try:
         cfg = load_config(None, workspace_paths=workspace_paths)
         return cfg.get("_enrolled", True) is not False
-    except Exception:
-        return False
+    except Exception as exc:
+        import sys
+        print(f"github_url_gate: config error (failing closed): {exc}", file=sys.stderr)
+        return True  # fail closed — enforce blocking
 
 
 def main() -> int:

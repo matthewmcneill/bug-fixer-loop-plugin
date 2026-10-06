@@ -224,6 +224,10 @@ The plugin uses a two-step installation pattern:
 
 ### Installation Steps
 
+> **Note:** Run `install.sh` from a normal terminal, not from inside an
+> Antigravity agent session. The integrity monitor will revert security
+> script updates made during a live session.
+
 ```bash
 # 1. Install daemon plugin components
 ./scripts/install.sh
