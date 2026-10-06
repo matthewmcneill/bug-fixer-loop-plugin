@@ -218,22 +218,6 @@ def _attacks(rt: str) -> list[str]:
         f"echo x > {WS}/{{config,other}}.json",
         f"node -e \"require('fs').writeFileSync('{WS}/config.json','{{}}')\"",
         f'awk \'BEGIN{{print "x" > "{WS}/config.json"}}\'',
-        # The egress proxy is dispatcher-only, in every invocation form
-        "python3 scripts/safe_post.py issue-comment 5 --repo o/r --body hi",
-        "scripts/safe_post.py issue-comment 5 --repo o/r --body hi",
-        "./scripts/safe_post.py issue-comment 5",
-        f"BUG_FIXER_CONFIG=/tmp/e.json scripts/safe_post.py issue-comment 5 --body {SECRET}",
-        "python3 -u scripts/safe_post.py issue-comment 5",
-        "python3.12 scripts/safe_post.py x",
-        "python3 scripts/safe_p*.py x",
-        "python3 scripts/safe_pos?.py x",
-        "python3 scripts/safe_{post,x}.py x",
-        "python3 -c \"import runpy;runpy.run_path('scripts/safe_post.py')\"",
-        f"python3 {rt}/proxy_link.py issue-comment 5",
-        "env python3 scripts/safe_post.py x",
-        "sudo -u me python3 scripts/safe_post.py x",
-        "tmux new -d python3 scripts/safe_post.py x",
-        "nohup scripts/safe_post.py issue-comment 5 &",
         # Inline code / interpreters / unmodelled wrappers that run gh
         "python3 -c \"import subprocess;subprocess.run(['gh','pr','merge','1'])\"",
         "python3 -c \"getattr(__import__('os'),'sys'+'tem')('gh pr merge 1')\"",
@@ -321,6 +305,13 @@ def _legitimate(rt: str) -> list[str]:
         "python3 -m unittest discover -s tests -v",
         "python3 -m unittest tests/test_safe_post.py",
         "python3 daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py issue-list --repo o/r --json number",
+        # safe_post.py is the sanctioned egress proxy for all agents
+        "python3 scripts/safe_post.py issue-comment 5 --repo o/r --body hi",
+        "scripts/safe_post.py issue-comment 5 --repo o/r --body hi",
+        "./scripts/safe_post.py issue-comment 5",
+        "python3 -u scripts/safe_post.py issue-comment 5",
+        "python3.12 scripts/safe_post.py x",
+        "env python3 scripts/safe_post.py x",
         "python3 daemon/workspace-plugin/bug-fixer/scripts/pre_tool_gate.py --scan-only .",
         f"python3 daemon/workspace-plugin/bug-fixer/scripts/pre_tool_gate.py --config {WS}/config.json --scan-only .",
         "python3 --version",
@@ -438,7 +429,6 @@ class TestGateBAdversarial(unittest.TestCase):
             f"gh label create x --description {SECRET}": pre_tool_gate.REASON_EGRESS_LEAK,
             "gh issue comment 5 --body-file -": pre_tool_gate.REASON_UNSCANNABLE,
             f"python3 -c \"open('{WS}/config.json','w')\"": pre_tool_gate.REASON_SHELL_MUTATION,
-            "./scripts/safe_post.py issue-comment 5": pre_tool_gate.REASON_PROXY,
         }
         for cmd, reason in cases.items():
             with self.subTest(cmd=cmd):

@@ -47,3 +47,26 @@ python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scr
 ```
 
 If the URL contains `/pull/` instead of `/issues/`, use `pr-view`.
+
+## GitHub Writes — use safe_post.py
+
+All GitHub write operations (comments, reviews, issue creation) MUST go through
+`safe_post.py`. This proxy scans outbound content for leaked secrets before
+posting. Raw `gh` write commands are blocked by the pre-tool hook.
+
+```bash
+SAFE_POST=~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py
+
+# Post a PR review comment
+python3 $SAFE_POST pr-review <number> --body "Review text here"
+
+# Post an issue comment
+python3 $SAFE_POST issue-comment <number> --body "Comment text"
+
+# Post a PR comment
+python3 $SAFE_POST pr-comment <number> --body "Comment text"
+```
+
+Run from the repository root. The proxy accepts the same flags as `gh` for
+body text (`--body`, `--body-file`), scans for configured leak patterns, and
+calls `gh` only if the scan passes.
