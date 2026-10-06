@@ -76,7 +76,8 @@ REASON_APPROVAL_INJECTION = (
 )
 REASON_RAW_GH = (
     "Use safe_ingest.py instead of raw gh commands: Direct `gh issue/pr list` "
-    "and `gh issue/pr view` commands are prohibited. Use `python3 scripts/safe_ingest.py` instead."
+    "and `gh issue/pr view` commands are prohibited. Use "
+    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py` instead, run from the repository root."
 )
 REASON_SHELL_MUTATION = (
     "Protected file shell mutation blocked: Shell mutation targeting spec or "

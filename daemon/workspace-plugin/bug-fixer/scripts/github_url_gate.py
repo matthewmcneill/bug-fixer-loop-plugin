@@ -25,8 +25,8 @@ REASON = (
     "Use safe_ingest.py instead of fetching GitHub URLs: Direct HTTP fetches of "
     "GitHub issue/PR pages are prohibited (private repos return 404). Extract the "
     "issue/PR number from the URL and run: "
-    "`python3 scripts/safe_ingest.py issue-view <number>` (or `pr-view <number>` "
-    "for PRs). Run from the project root."
+    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py issue-view <number>` "
+    "(or `pr-view <number>` for PRs). Run from the repository root."
 )
 
 REASON_URL_LEAK = (
