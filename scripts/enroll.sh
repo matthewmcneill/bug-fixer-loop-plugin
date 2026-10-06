@@ -67,7 +67,7 @@ if [[ "$MIGRATE_STATE" == "true" ]]; then
     echo "Migrating config from $OLD_CONFIG"
     # Use old config as base, ensuring repo_dir and target_repo are set
     python3 - "$OLD_CONFIG" "$CONFIG_PATH" "$TARGET_REPO" "$TARGET_REPO_DIR" <<'PY'
-import json, sys
+import json, sys, re
 old_path, new_path, repo, repo_dir = sys.argv[1:]
 with open(old_path) as f:
     cfg = json.load(f)
@@ -77,12 +77,22 @@ cfg["repo_dir"] = repo_dir
 # Normalise legacy key names
 if "trajectory_review_interval_min" in cfg and "trajectory_interval_min" not in cfg:
     cfg["trajectory_interval_min"] = cfg.pop("trajectory_review_interval_min")
+# Convert legacy *_cron keys to *_interval_min (cron "*/N * * * *" → N minutes)
+for old_key in list(cfg.keys()):
+    if old_key.endswith("_cron"):
+        new_key = old_key.replace("_cron", "_interval_min")
+        if new_key not in cfg:
+            cron_val = cfg[old_key]
+            m = re.match(r"\*/(\d+)\s", str(cron_val)) if cron_val else None
+            cfg[new_key] = int(m.group(1)) if m else 60
+        del cfg[old_key]
 with open(new_path, "w") as f:
     json.dump(cfg, f, indent=2)
     f.write("\n")
 PY
   else
     echo "No old config at $OLD_CONFIG — creating default"
+    echo "  (If you've already merged the migration PR, the old config has been deleted.)"
     MIGRATE_STATE=false
   fi
 
@@ -116,6 +126,16 @@ if [[ "$MIGRATE_STATE" != "true" ]] && [[ ! -f "$CONFIG_PATH" ]]; then
   "trajectory_model": "flash"
 }
 JSON
+  echo ""
+  echo "⚠  Default config created. Please edit it before enabling the sidecar:"
+  echo "   $CONFIG_PATH"
+  echo ""
+  echo "   At minimum, set:"
+  echo "     - maintainer        (GitHub username)"
+  echo "     - test_command      (e.g., 'pytest', 'pio test -e native')"
+  echo "     - protected_files   (files agents must not modify)"
+  echo "     - spec_file_path    (architecture/design doc path)"
+  echo ""
 elif [[ "$MIGRATE_STATE" != "true" ]] && [[ -f "$CONFIG_PATH" ]]; then
   echo "Config already exists at $CONFIG_PATH — keeping it"
 fi

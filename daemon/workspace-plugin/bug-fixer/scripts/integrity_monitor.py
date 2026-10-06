@@ -30,22 +30,24 @@ import sys
 from pathlib import Path
 
 
-def _get_snapshot_file() -> Path:
-    """Snapshot file lives alongside the config in the sidecar dir."""
+def _get_snapshot_file(conversation_id: str = "") -> Path:
+    """Snapshot file lives alongside the config in the sidecar dir, scoped by conversation."""
+    suffix = f".{conversation_id}" if conversation_id else ""
     config_env = os.environ.get("BUG_FIXER_CONFIG", "")
     if config_env and Path(config_env).is_file():
-        return Path(config_env).resolve().parent / ".integrity_snapshot.json"
+        return Path(config_env).resolve().parent / f".integrity_snapshot{suffix}.json"
     # Legacy fallback
-    return Path(__file__).resolve().parent.parent / ".integrity_snapshot.json"
+    return Path(__file__).resolve().parent.parent / f".integrity_snapshot{suffix}.json"
 
 
-def _get_snapshot_dir() -> Path:
+def _get_snapshot_dir(conversation_id: str = "") -> Path:
     """Directory where copies of protected files are saved for reversion."""
-    return _get_snapshot_file().parent / ".integrity_snapshot"
+    suffix = f".{conversation_id}" if conversation_id else ""
+    return _get_snapshot_file(conversation_id).parent / f".integrity_snapshot{suffix}"
 
 
-# Module-level alias for backward compatibility
-SNAPSHOT_FILE = _get_snapshot_file()
+# Module-level alias for backward compatibility (no conversation scoping)
+SNAPSHOT_FILE = _get_snapshot_file("")
 
 
 def _get_protected_files() -> list[str]:
@@ -115,10 +117,10 @@ def _sha256(path: str) -> str:
         return ""
 
 
-def snapshot() -> None:
+def snapshot(conversation_id: str = "") -> None:
     """Take a snapshot of all protected file checksums (called by --pre)."""
-    snapshot_file = _get_snapshot_file()
-    snapshot_dir = _get_snapshot_dir()
+    snapshot_file = _get_snapshot_file(conversation_id)
+    snapshot_dir = _get_snapshot_dir(conversation_id)
     snapshot_file.parent.mkdir(parents=True, exist_ok=True)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
 
@@ -137,10 +139,10 @@ def snapshot() -> None:
         json.dump(checksums, f)
 
 
-def verify() -> None:
+def verify(conversation_id: str = "") -> None:
     """Verify protected files against snapshot, revert if tampered (called by --post)."""
-    snapshot_file = _get_snapshot_file()
-    snapshot_dir = _get_snapshot_dir()
+    snapshot_file = _get_snapshot_file(conversation_id)
+    snapshot_dir = _get_snapshot_dir(conversation_id)
     if not snapshot_file.exists():
         return
 
@@ -235,13 +237,15 @@ def main() -> int:
     if not os.environ.get("BUG_FIXER_CONFIG"):
         _resolve_config_from_workspace(stdin_data.get("workspacePaths", []))
 
+    conversation_id = stdin_data.get("conversationId", "") if isinstance(stdin_data, dict) else ""
+
     if "--post" in sys.argv:
-        verify()
+        verify(conversation_id)
         # PostToolUse contract: return empty object
         print(json.dumps({}))
     else:
         # Default: --pre (snapshot)
-        snapshot()
+        snapshot(conversation_id)
         # PreToolUse contract: return decision
         print(json.dumps({"decision": "allow"}))
 
