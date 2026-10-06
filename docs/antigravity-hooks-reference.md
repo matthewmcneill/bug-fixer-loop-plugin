@@ -136,16 +136,64 @@
 
 ---
 
-## 5. Plugin Hook Discovery
+## 5. Plugin Hook Discovery — `hooks.json` Paths
 
-### Documented paths (plugins.md):
-- `plugins/<name>/hooks.json` — at plugin root, alongside `plugin.json`
-- Automatically ingested when plugin is discovered and enabled
+### Discovery Paths
 
-### Empirical finding (Check 9, October 2026):
-- Hooks from workspace plugins referenced via `.agents/plugins.json` did NOT fire in fresh CLI sessions.
-- **Workaround:** Inject hooks directly into consumer repo's `.agents/hooks.json` with absolute paths to installed scripts. This is handled by `enroll.sh`.
-- The workspace plugin still provides value for skills, rules, and agents via `plugins.json`.
+Antigravity discovers `hooks.json` from three locations:
+
+- **Workspace:** `<workspace>/.agents/hooks.json` (or `.agent/hooks.json`)
+- **Global:** `~/.gemini/config/hooks.json`
+- **Plugin:** `<plugin-root>/hooks.json` (e.g., `~/.gemini/config/plugins/<plugin-name>/hooks.json`
+  or `<workspace>/.agents/plugins/<plugin-name>/hooks.json`)
+
+### `<plugin>/hooks.json` vs `<plugin>/hooks/hooks.json`
+
+> [!IMPORTANT]
+> At runtime, Antigravity **ONLY** loads `<plugin-root>/hooks.json`.
+> It never reads `<plugin-root>/hooks/hooks.json` directly.
+
+Why `hooks/hooks.json` can appear to work in some contexts:
+
+1. **Native Antigravity plugins** — `hooks.json` sits at the plugin root,
+   alongside `plugin.json`. This is the only path the runtime loader reads.
+
+2. **Imported Claude Code / Gemini CLI extensions** — When you run
+   `agy plugin install <path>` or `agy plugin import [claude|gemini]` on a
+   **pure Claude Code plugin** (containing `.claude-plugin/plugin.json` and no
+   top-level `plugin.json`) or a **Gemini CLI extension** (`gemini-extension.json`),
+   the CLI's foreign-plugin importer stages the extension by reading
+   `<source>/hooks/hooks.json` (interpolating `${extensionPath}` and
+   `${workspacePath}`) and writing the result to
+   `~/.gemini/config/plugins/<name>/hooks.json` at the plugin root.
+
+3. **If the directory already contains a native Antigravity manifest**
+   (`plugin.json`, `.antigravity-plugin/plugin.json`, or
+   `.gemini-plugin/plugin.json`), `agy plugin install` treats it as a native
+   Antigravity plugin and copies the directory as-is **without** staging
+   `hooks/hooks.json` into `hooks.json`.
+
+### Dual-Host (Antigravity + Claude Code) Plugins
+
+The hook schema differs between hosts:
+
+| | Antigravity | Claude Code |
+|---|---|---|
+| **File** | `<plugin-root>/hooks.json` | `<plugin-root>/hooks/hooks.json` |
+| **Top-level key** | `<hook-group-name>` map wrapping event arrays | `"hooks": { "<Event>": [...] }` |
+| **cwd** | `<plugin-root>` | varies |
+
+A dual-host repository can safely keep both files without collision.
+
+### Empirical Verification (Check 9, October 2026)
+
+- **Workspace plugin hooks via `plugins.json`:** Hooks on the workspace plugin
+  (nested under `workspace-plugin/bug-fixer/`) were NOT discovered — the runtime
+  does not load hooks from nested/referenced workspace plugins.
+- **Daemon plugin hooks at root:** Hooks at `<daemon-plugin-root>/hooks.json`
+  (the globally-installed plugin) ARE discovered and fire correctly.
+- **Resolution:** Place `hooks.json` on the daemon plugin (global), use the
+  workspace plugin (via `plugins.json`) only for skills, rules, and agents.
 
 ---
 
