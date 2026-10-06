@@ -306,8 +306,9 @@ def load_config(
     if target_path is None or not target_path.is_file():
         return normalise_config(
             {
-                "spec_file_path": "docs/plugin-architecture.md",
-                "protected_files": ["docs/plugin-architecture.md"],
+                "_enrolled": False,
+                "spec_file_path": "",
+                "protected_files": [],
                 "leak_patterns": [],
                 "scan_exclude_paths": ["tests/"],
             }
@@ -2937,8 +2938,9 @@ def main() -> int:
     except Exception as exc:
         sys.stderr.write(f"Config loading error: {exc}\n")
         config = {
-            "spec_file_path": "docs/plugin-architecture.md",
-            "protected_files": ["docs/plugin-architecture.md"],
+            "_enrolled": False,
+            "spec_file_path": "",
+            "protected_files": [],
             "leak_patterns": [],
         }
 

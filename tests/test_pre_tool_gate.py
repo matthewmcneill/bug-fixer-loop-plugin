@@ -71,25 +71,32 @@ class TestPreToolGate(unittest.TestCase):
 
     # Gate A: File Write Protection Tests
     def test_gate_a_deny_write_to_spec_file(self):
-        payload = {
-            "toolCall": {
-                "name": "write_to_file",
-                "args": {"TargetFile": "docs/plugin-architecture.md"},
+        # Provide explicit config since unenrolled workspaces have empty spec_file_path
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+            json.dump({"spec_file_path": "docs/plugin-architecture.md"}, tf)
+            cfg_path = tf.name
+        try:
+            payload = {
+                "toolCall": {
+                    "name": "write_to_file",
+                    "args": {"TargetFile": "docs/plugin-architecture.md"},
+                }
             }
-        }
-        res = self._run_gate_stdin(payload)
-        self.assertEqual(res["decision"], "deny")
-        self.assertEqual(res["reason"], REASON_SPEC_IMMUTABLE)
+            res = self._run_gate_stdin(payload, config_path=cfg_path)
+            self.assertEqual(res["decision"], "deny")
+            self.assertEqual(res["reason"], REASON_SPEC_IMMUTABLE)
 
-        payload_replace = {
-            "toolCall": {
-                "name": "replace_file_content",
-                "args": {"TargetFile": "/path/to/docs/plugin-architecture.md"},
+            payload_replace = {
+                "toolCall": {
+                    "name": "replace_file_content",
+                    "args": {"TargetFile": "/path/to/docs/plugin-architecture.md"},
+                }
             }
-        }
-        res_replace = self._run_gate_stdin(payload_replace)
-        self.assertEqual(res_replace["decision"], "deny")
-        self.assertEqual(res_replace["reason"], REASON_SPEC_IMMUTABLE)
+            res_replace = self._run_gate_stdin(payload_replace, config_path=cfg_path)
+            self.assertEqual(res_replace["decision"], "deny")
+            self.assertEqual(res_replace["reason"], REASON_SPEC_IMMUTABLE)
+        finally:
+            os.unlink(cfg_path)
 
     def test_gate_a_deny_write_to_protected_file(self):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
@@ -208,21 +215,27 @@ class TestPreToolGate(unittest.TestCase):
             self.assertEqual(res["reason"], REASON_RAW_GH)
 
     def test_gate_b_deny_shell_mutation_of_spec_file(self):
-        for cmd in (
-            "sed -i '' 's/old/new/' docs/plugin-architecture.md",
-            "cat patch.txt > docs/plugin-architecture.md",
-            "rm docs/plugin-architecture.md",
-            "cp new.md docs/plugin-architecture.md",
-        ):
-            payload = {
-                "toolCall": {
-                    "name": "run_command",
-                    "args": {"CommandLine": cmd},
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+            json.dump({"spec_file_path": "docs/plugin-architecture.md"}, tf)
+            cfg_path = tf.name
+        try:
+            for cmd in (
+                "sed -i '' 's/old/new/' docs/plugin-architecture.md",
+                "cat patch.txt > docs/plugin-architecture.md",
+                "rm docs/plugin-architecture.md",
+                "cp new.md docs/plugin-architecture.md",
+            ):
+                payload = {
+                    "toolCall": {
+                        "name": "run_command",
+                        "args": {"CommandLine": cmd},
+                    }
                 }
-            }
-            res = self._run_gate_stdin(payload)
-            self.assertEqual(res["decision"], "deny")
-            self.assertEqual(res["reason"], REASON_SHELL_MUTATION)
+                res = self._run_gate_stdin(payload, config_path=cfg_path)
+                self.assertEqual(res["decision"], "deny")
+                self.assertEqual(res["reason"], REASON_SHELL_MUTATION)
+        finally:
+            os.unlink(cfg_path)
 
     def test_gate_b_deny_shell_mutation_of_security_script(self):
         for cmd in (

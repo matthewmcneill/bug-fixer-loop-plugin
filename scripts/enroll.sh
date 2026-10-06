@@ -38,6 +38,12 @@ if [[ -z "$TARGET_REPO" || -z "$TARGET_REPO_DIR" ]]; then
   usage
 fi
 
+if [[ -z "${ANTIGRAVITY_PROJECT_ID:-}" ]]; then
+  echo "WARNING: ANTIGRAVITY_PROJECT_ID not set in environment."
+  echo "  The sidecar will use the repo slug as a fallback."
+  echo "  For full agentapi support, export ANTIGRAVITY_PROJECT_ID first."
+fi
+
 REPO_SLUG="${TARGET_REPO//\//--}"
 SIDECAR_DIR="$INSTALL_DIR/sidecars/$REPO_SLUG"
 
@@ -132,7 +138,7 @@ sidecar = {
         "BUG_FIXER_CONFIG": config_path,
         "BUG_FIXER_STATE_DIR": state_dir,
         "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin"),
-        "ANTIGRAVITY_PROJECT_ID": repo
+        "ANTIGRAVITY_PROJECT_ID": os.environ.get("ANTIGRAVITY_PROJECT_ID", repo)
     }
 }
 with open(out_path, "w") as f:

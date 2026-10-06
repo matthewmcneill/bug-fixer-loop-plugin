@@ -75,6 +75,19 @@ def _get_protected_files() -> list[str]:
                 if p.exists() and str(p) not in files:
                     files.append(str(p))
 
+    # Plugin manifest and hooks files
+    for d in [plugin_dir, plugin_dir.parent]:
+        for name in ["hooks.json", "plugin.json"]:
+            p = d / name
+            if p.exists() and str(p) not in files:
+                files.append(str(p))
+
+    # Consumer plugins.json and sidecar.json
+    if config_env and Path(config_env).is_file():
+        sidecar_json = Path(config_env).resolve().parent / "sidecar.json"
+        if sidecar_json.exists() and str(sidecar_json) not in files:
+            files.append(str(sidecar_json))
+
     # Scanner config files at repo root or plugin dir
     for d in [plugin_dir, plugin_dir.parent, Path.cwd()]:
         for name in [".betterleaks.toml", ".betterleaksignore"]:
@@ -85,7 +98,8 @@ def _get_protected_files() -> list[str]:
     # Host security scripts themselves
     for name in ["pre_tool_gate.py", "safe_ingest.py",
                   "safe_post.py", "injection_scanner.py",
-                  "integrity_monitor.py"]:
+                  "integrity_monitor.py", "shell_analysis.py",
+                  "github_url_gate.py"]:
         p = script_dir / name
         if p.exists() and str(p) not in files:
             files.append(str(p))
@@ -169,7 +183,21 @@ def verify() -> None:
 
 def _resolve_config_from_workspace(workspace_paths: list[str]) -> None:
     """Try to set BUG_FIXER_CONFIG from workspacePaths by scanning sidecars."""
-    sidecars_dir = Path.home() / ".gemini" / "config" / "plugins" / "bug-fixer-daemon" / "sidecars"
+    # Find daemon dir by walking up from this script
+    script_dir = Path(__file__).resolve().parent
+    daemon_dir = script_dir
+    for _ in range(5):
+        if (daemon_dir / "plugin.json").is_file():
+            try:
+                manifest = json.loads((daemon_dir / "plugin.json").read_text())
+                if manifest.get("name") == "bug-fixer-daemon":
+                    break
+            except (json.JSONDecodeError, OSError):
+                pass
+        daemon_dir = daemon_dir.parent
+    else:
+        daemon_dir = Path.home() / ".gemini" / "config" / "plugins" / "bug-fixer-daemon"
+    sidecars_dir = daemon_dir / "sidecars"
     if not sidecars_dir.is_dir():
         return
     for sidecar in sidecars_dir.iterdir():
@@ -197,7 +225,9 @@ def main() -> int:
     if not sys.stdin.isatty():
         raw = sys.stdin.read()
         try:
-            stdin_data = json.loads(raw)
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                stdin_data = parsed
         except (json.JSONDecodeError, ValueError):
             pass
 

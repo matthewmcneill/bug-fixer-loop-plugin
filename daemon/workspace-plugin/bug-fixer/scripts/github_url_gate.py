@@ -61,6 +61,31 @@ def _configured_patterns(workspace_paths: list[str]) -> list[str]:
         return []
 
 
+def _is_enrolled(workspace_paths: list[str]) -> bool:
+    """Check if any workspace path matches a sidecar config's repo_dir."""
+    import os
+    from pathlib import Path
+    sidecars_dir = Path.home() / ".gemini" / "config" / "plugins" / "bug-fixer-daemon" / "sidecars"
+    if not sidecars_dir.is_dir():
+        return False
+    for sidecar in sidecars_dir.iterdir():
+        cfg_path = sidecar / "config.json"
+        if not cfg_path.is_file():
+            continue
+        try:
+            cfg = json.loads(cfg_path.read_text())
+            repo_dir = cfg.get("repo_dir", "")
+            if not repo_dir:
+                continue
+            repo_resolved = Path(repo_dir).resolve()
+            for wp in workspace_paths:
+                if Path(wp).resolve().is_relative_to(repo_resolved):
+                    return True
+        except (json.JSONDecodeError, OSError):
+            continue
+    return False
+
+
 def main() -> int:
     if sys.stdin.isatty():
         print("GitHub URL gate for read_url_content PreToolUse hook.")
@@ -90,7 +115,10 @@ def main() -> int:
         args = payload.get("tool_input") or payload.get("args") or {}
     url = str(args.get("Url") or args.get("url") or "").strip() if isinstance(args, dict) else ""
 
-    if url and GITHUB_ISSUE_PR_URL.search(url):
+    # Only enforce in enrolled workspaces (sidecar config exists for this repo)
+    enrolled = _is_enrolled(workspace_paths)
+
+    if url and GITHUB_ISSUE_PR_URL.search(url) and enrolled:
         print(json.dumps({"decision": "deny", "reason": REASON}))
     elif url and url_leaks(url, _configured_patterns(workspace_paths)):
         print(json.dumps({"decision": "deny", "reason": REASON_URL_LEAK}))

@@ -89,10 +89,28 @@ class TestGateHook(unittest.TestCase):
             {"decision": "deny", "reason": REASON_URL_LEAK},
         )
 
-    def test_github_issue_page_still_redirected(self):
+    def test_github_issue_page_allowed_when_unenrolled(self):
+        """Unenrolled workspaces should not block GitHub URLs."""
         self.assertEqual(
-            self._run("https://github.com/o/r/issues/22"), {"decision": "deny", "reason": REASON}
+            self._run("https://github.com/o/r/issues/22"), {"decision": "allow"}
         )
+
+    def test_github_issue_page_denied_when_enrolled(self):
+        """Enrolled workspaces should block GitHub issue URLs."""
+        # Use a workspacePath matching a live enrolled repo
+        payload = {
+            "toolCall": {"name": "read_url_content", "args": {"Url": "https://github.com/o/r/issues/22"}},
+            "workspacePaths": [str(REPO)],
+        }
+        env = {k: v for k, v in os.environ.items() if k != "BUG_FIXER_CONFIG"}
+        out = subprocess.run(
+            [sys.executable, str(GATE)],
+            input=json.dumps(payload),
+            capture_output=True, text=True, env=env, check=True,
+        )
+        res = json.loads(out.stdout)
+        self.assertEqual(res["decision"], "deny")
+        self.assertEqual(res["reason"], REASON)
 
     def test_ordinary_url_allowed(self):
         self.assertEqual(self._run(ORDINARY_URLS[0]), {"decision": "allow"})

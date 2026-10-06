@@ -96,7 +96,10 @@ class TestWO2a(unittest.TestCase):
         try:
             pre_tool_gate._find_daemon_dir = lambda x: None
             config = load_config()
-            self.assertEqual(config["spec_file_path"], "docs/plugin-architecture.md")
+            # Unenrolled workspaces get empty protections
+            self.assertEqual(config["spec_file_path"], "")
+            self.assertEqual(config["protected_files"], [])
+            self.assertFalse(config.get("_enrolled", True))
         finally:
             pre_tool_gate._find_daemon_dir = original_find
 
