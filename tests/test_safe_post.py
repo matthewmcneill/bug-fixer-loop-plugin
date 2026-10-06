@@ -17,10 +17,19 @@ SCRIPT = str(SCRIPTS_DIR / "safe_post.py")
 class TestSafePost(unittest.TestCase):
     """Test safe_post.py as a subprocess (the way it's actually used)."""
 
-    def _run(self, *args, env=None) -> subprocess.CompletedProcess:
+    def setUp(self):
+        self.default_config_path = self._make_config([])
+
+    def tearDown(self):
+        if os.path.exists(self.default_config_path):
+            os.unlink(self.default_config_path)
+
+    def _run(self, *args, env=None, **kwargs) -> subprocess.CompletedProcess:
+        if env is None:
+            env = self._env_with_config(self.default_config_path)
         return subprocess.run(
             [sys.executable, SCRIPT, *args],
-            capture_output=True, text=True, env=env,
+            capture_output=True, text=True, env=env, **kwargs,
         )
 
     def _make_config(self, patterns):
@@ -196,15 +205,21 @@ class TestSafePost(unittest.TestCase):
 
     def test_invalid_env_config_uses_fallback(self):
         """When BUG_FIXER_CONFIG points to a nonexistent file, falls back to plugin config."""
-        env = os.environ.copy()
-        env["BUG_FIXER_CONFIG"] = "/nonexistent/path/config.json"
-        # Plugin's own config exists, so a clean body should pass scanning
-        r = self._run("pr-comment", "1",
-                       "--repo", "test/test",
-                       "--body", "This is a clean comment with no secrets",
-                       env=env)
-        # Should NOT be denied by fail-closed since fallback config exists
-        self.assertNotIn("failing closed", r.stderr.lower())
+        with tempfile.TemporaryDirectory() as td:
+            fallback_ws = Path(td) / ".agents" / "plugins" / "bug-fixer-loop-workspace"
+            fallback_ws.mkdir(parents=True)
+            (fallback_ws / "config.json").write_text(json.dumps({
+                "scanning": {"secrets": {"patterns": []}}
+            }))
+            env = os.environ.copy()
+            env["BUG_FIXER_CONFIG"] = "/nonexistent/path/config.json"
+            # Plugin's own config exists, so a clean body should pass scanning
+            r = self._run("pr-comment", "1",
+                           "--repo", "test/test",
+                           "--body", "This is a clean comment with no secrets",
+                           env=env, cwd=td)
+            # Should NOT be denied by fail-closed since fallback config exists
+            self.assertNotIn("failing closed", r.stderr.lower())
 
     def test_fail_closed_no_config_reachable(self):
         """load_leak_patterns returns a catch-all when no workspace config is reachable."""

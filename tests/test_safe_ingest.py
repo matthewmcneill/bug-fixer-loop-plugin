@@ -581,12 +581,25 @@ class TestSafeIngest(unittest.TestCase):
     def test_load_config_v2_workspace(self):
         """Test that load_config correctly loads the v2 workspace config and populates patterns."""
         from safe_ingest import load_config
-        config = load_config(".agents/plugins/bug-fixer-loop-workspace/config.json")
-        self.assertIn("scanning", config)
-        self.assertIn("secrets", config["scanning"])
-        self.assertIn("patterns", config["scanning"]["secrets"])
-        self.assertTrue(isinstance(config["scanning"]["secrets"]["patterns"], list))
-        self.assertTrue(len(config["scanning"]["secrets"]["patterns"]) > 0)
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump({
+                "scanning": {
+                    "secrets": {
+                        "patterns": ["ya29\\.[A-Za-z0-9_-]+"]
+                    }
+                }
+            }, f)
+            temp_path = f.name
+        try:
+            with patch.dict(os.environ, {"BUG_FIXER_CONFIG": temp_path}):
+                config = load_config()
+            self.assertIn("scanning", config)
+            self.assertIn("secrets", config["scanning"])
+            self.assertIn("patterns", config["scanning"]["secrets"])
+            self.assertTrue(isinstance(config["scanning"]["secrets"]["patterns"], list))
+            self.assertTrue(len(config["scanning"]["secrets"]["patterns"]) > 0)
+        finally:
+            os.unlink(temp_path)
 
 if __name__ == "__main__":
 

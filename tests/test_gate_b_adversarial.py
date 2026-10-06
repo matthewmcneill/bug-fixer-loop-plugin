@@ -10,6 +10,7 @@ bypasses here before fixing them.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -30,6 +31,41 @@ import shell_analysis  # noqa: E402
 WS = ".agents/plugins/bug-fixer-loop-workspace"
 SECRET = "ya29.AbCdEfGh123"
 GH_TOKEN = "ghp_" + "A" * 36
+
+_CONFIG_DIR = None
+_CONFIG_PATH = None
+_ORIG_CONFIG_ENV = None
+
+
+def setUpModule():
+    global _CONFIG_DIR, _CONFIG_PATH, _ORIG_CONFIG_ENV
+    _CONFIG_DIR = tempfile.mkdtemp(prefix="gateb-cfg-")
+    _CONFIG_PATH = Path(_CONFIG_DIR) / "config.json"
+    _CONFIG_PATH.write_text(
+        json.dumps({
+            "repo_dir": str(REPO),
+            "github_repo": "matthewmcneill/bug-fixer-loop-plugin",
+            "spec_file_path": "docs/plugin-architecture.md",
+            "protected_files": ["docs/plugin-architecture.md"],
+            "leak_patterns": [
+                r"ya29\.[A-Za-z0-9_-]+",
+                r"AKIA[0-9A-Z]{16}",
+                r"-----BEGIN (?:RSA |EC )?PRIVATE KEY-----",
+            ],
+        })
+    )
+    _ORIG_CONFIG_ENV = os.environ.get("BUG_FIXER_CONFIG")
+    os.environ["BUG_FIXER_CONFIG"] = str(_CONFIG_PATH)
+
+
+def tearDownModule():
+    global _CONFIG_DIR, _ORIG_CONFIG_ENV
+    if _ORIG_CONFIG_ENV is None:
+        os.environ.pop("BUG_FIXER_CONFIG", None)
+    else:
+        os.environ["BUG_FIXER_CONFIG"] = _ORIG_CONFIG_ENV
+    if _CONFIG_DIR:
+        shutil.rmtree(_CONFIG_DIR, ignore_errors=True)
 
 
 def _attacks(rt: str) -> list[str]:
@@ -368,7 +404,7 @@ class TestGateBAdversarial(unittest.TestCase):
             Path(cls.rt, name).write_text(content)
         os.symlink(REPO / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts" / "safe_post.py", Path(cls.rt, "proxy_link.py"))
         os.mkfifo(Path(cls.rt, "fifo"))
-        cls.config = load_config(REPO / WS / "config.json")
+        cls.config = load_config(_CONFIG_PATH)
 
     @classmethod
     def tearDownClass(cls):
@@ -414,7 +450,7 @@ class TestPushToDefaultBranch(unittest.TestCase):
 
     def _decide(self, cmd: str, cwd: str) -> str:
         payload = {"toolCall": {"name": "run_command", "args": {"CommandLine": cmd, "Cwd": cwd}}}
-        return evaluate_pretool_call(payload, load_config(REPO / WS / "config.json"))["decision"]
+        return evaluate_pretool_call(payload, load_config(_CONFIG_PATH))["decision"]
 
     def _repo_on(self, branch: str) -> str:
         d = tempfile.mkdtemp(prefix="gateb-push-")
