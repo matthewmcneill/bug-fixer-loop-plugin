@@ -1,4 +1,8 @@
-# GitHub Issue & PR Reading — Mandatory Procedure
+# GitHub Issue & PR Access — Mandatory Procedure
+
+Both `safe_ingest.py` (reads) and `safe_post.py` (writes) live in this
+plugin's `scripts/` directory. If a raw `gh` command is denied, the gate's
+error message includes the exact command with the full installed path.
 
 When a user references a GitHub issue or PR — whether by URL
 (`https://github.com/.../issues/20`), by number (`#20`), or by description —
@@ -19,19 +23,19 @@ selects the repo's config from the working directory):
 
 ```bash
 # View a single issue (extract the number from the URL/reference)
-python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py issue-view <number>
+python3 safe_ingest.py issue-view <number>
 
 # View a single PR
-python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py pr-view <number>
+python3 safe_ingest.py pr-view <number>
 
 # List open issues
-python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py issue-list
+python3 safe_ingest.py issue-list
 
 # List open PRs
-python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py pr-list
+python3 safe_ingest.py pr-list
 
 # View PR comments (review + inline)
-python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py pr-comments <number>
+python3 safe_ingest.py pr-comments <number>
 ```
 
 The output is JSON matching the `gh` CLI format, with untrusted external
@@ -43,7 +47,7 @@ If the user gives a full URL like `https://github.com/owner/repo/issues/20`,
 extract the number (`20`) and run:
 
 ```bash
-python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py issue-view 20
+python3 safe_ingest.py issue-view 20
 ```
 
 If the URL contains `/pull/` instead of `/issues/`, use `pr-view`.
@@ -58,13 +62,13 @@ before posting.
 
 ```bash
 # Post a PR review comment
-python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py pr-review <number> --repo <owner/repo> --body "Review text here"
+python3 safe_post.py pr-review <number> --repo <owner/repo> --body "Review text here"
 
 # Post an issue comment
-python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py issue-comment <number> --repo <owner/repo> --body "Comment text"
+python3 safe_post.py issue-comment <number> --repo <owner/repo> --body "Comment text"
 
 # Post a PR comment
-python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py pr-comment <number> --repo <owner/repo> --body "Comment text"
+python3 safe_post.py pr-comment <number> --repo <owner/repo> --body "Comment text"
 ```
 
 Run from the repository root. The `--repo` flag is required. The proxy
