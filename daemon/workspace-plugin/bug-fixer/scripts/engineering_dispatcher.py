@@ -550,7 +550,9 @@ def main():
                 _clear_failure(branch_name)
 
             prompt = (f"You are the bug-fixer agent. REATTACH to orphaned issue #{issue_num} in repository {TARGET_REPO}.\n\n"
-                      f"Issue title: {issue_title}\n\n"
+                      f"<user_content>\n"
+                      f"Issue title: {issue_title}\n"
+                      f"</user_content>\n\n"
                       f"{reattach_context}\n\n"
                       f"Read the full engineering skill instructions at: {SKILL_PATH}\n"
                       f"Read config from: {CONFIG_FILE}\n"
@@ -694,7 +696,9 @@ def main():
                       f"Work in: {wt_path}\n\n"
                       f"After pushing changes, remove the bug-fixer:engineer:needs-iteration label and add bug-fixer:architect:awaiting-review:\n"
                       f"  gh pr edit {pr_num} --repo {TARGET_REPO} --remove-label bug-fixer:engineer:needs-iteration --add-label bug-fixer:architect:awaiting-review\n\n"
-                      f"Architect comments:\n{comments_text}") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=pr_branch)
+                      f"<review_content>\n"
+                      f"Architect comments:\n{comments_text}\n"
+                      f"</review_content>") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=pr_branch)
 
             # Try to resume the existing developer conversation
             dev_conv_id_match = re.search(r"<!-- agy_dev_conv_id:\s*([a-zA-Z0-9-]+)\s*-->", pr_body)
@@ -729,8 +733,12 @@ def main():
                                f"IMPORTANT: After pushing, ensure the PR body ends with this HTML comment "
                                f"(replace YOUR_CONVERSATION_ID with your actual conversation ID):\n"
                                f"  <!-- agy_dev_conv_id: YOUR_CONVERSATION_ID -->\n\n"
-                               f"Architect comments:\n{comments_text}\n\n"
-                               f"Current PR diff for context:\n```diff\n{pr_diff}\n```") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=pr_branch)
+                               f"<review_content>\n"
+                               f"Architect comments:\n{comments_text}\n"
+                               f"</review_content>\n\n"
+                               f"<pr_diff>\n"
+                               f"Current PR diff for context:\n```diff\n{pr_diff}\n```\n"
+                               f"</pr_diff>") + CONTAINMENT.format(wt_path=wt_path, repo_dir=REPO_DIR, branch=pr_branch)
                 title = f"Fix PR #{pr_num} iteration (architect feedback)"
                 model = get_default_engineering_model()
                 new_r = run(["agentapi", "new-conversation", f"--model={model}", f"--title={title}", fresh_prompt])
@@ -873,7 +881,9 @@ def main():
         # Spawn LLM conversation — this shows up in the IDE
 
         prompt = (f"You are the bug-fixer agent. Fix issue #{issue_num} in repository {TARGET_REPO}.\n\n"
-                  f"Issue title: {issue_title}\n\n"
+                  f"<user_content>\n"
+                  f"Issue title: {issue_title}\n"
+                  f"</user_content>\n\n"
                   f"Read the full engineering skill instructions at: {SKILL_PATH}\n"
                   f"Read config from: {CONFIG_FILE}\n"
                   f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.\n"
