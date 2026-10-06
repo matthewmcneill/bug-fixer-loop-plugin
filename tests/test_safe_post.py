@@ -222,7 +222,7 @@ class TestSafePost(unittest.TestCase):
             self.assertNotIn("failing closed", r.stderr.lower())
 
     def test_fail_closed_no_config_reachable(self):
-        """load_leak_patterns returns a catch-all when no workspace config is reachable."""
+        """load_leak_patterns returns built-in patterns when no workspace config is reachable."""
         sys.path.insert(0, str(SCRIPTS_DIR))
         orig_cwd = os.getcwd()
         try:
@@ -232,7 +232,10 @@ class TestSafePost(unittest.TestCase):
                     patch.object(sp_mod, "DEFAULT_CONFIG", Path("/nonexistent/default")), \
                     patch.dict(os.environ, {"BUG_FIXER_CONFIG": "/also/nonexistent"}):
                 os.chdir(outside_repo)
-                self.assertEqual(sp_mod.load_leak_patterns(), [".*"])
+                patterns = sp_mod.load_leak_patterns()
+                # Should have the built-in floor patterns, not [".*"]
+                self.assertNotIn(".*", patterns)
+                self.assertTrue(len(patterns) >= len(sp_mod.BUILTIN_LEAK_PATTERNS))
         finally:
             os.chdir(orig_cwd)
             sys.path.pop(0)

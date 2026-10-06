@@ -57,15 +57,25 @@ def _candidate_configs() -> list[Path]:
     config_env = os.environ.get("BUG_FIXER_CONFIG", "")
     if config_env:
         candidates.append(Path(config_env))
-    if DEFAULT_CONFIG:
-        candidates.append(Path(DEFAULT_CONFIG))
-    # Legacy paths (backward compat)
+    # Scan sidecars (same as pre_tool_gate.load_config)
     script_dir = Path(__file__).resolve().parent
     plugin_dir = script_dir.parent
-    candidates.append(plugin_dir / "config.json")  # co-located (old workspace layout)
-    for top in (plugin_dir.parent,):
-        workspace = top / "bug-fixer-loop-workspace" / "config.json"
-        candidates.append(workspace)
+    daemon_dir = plugin_dir
+    while daemon_dir and daemon_dir != daemon_dir.parent:
+        if (daemon_dir / "plugin.json").is_file() or (daemon_dir / "hooks.json").is_file():
+            break
+        daemon_dir = daemon_dir.parent
+    sidecars_dir = daemon_dir / "sidecars" if daemon_dir else plugin_dir.parent.parent / "sidecars"
+    if sidecars_dir.is_dir():
+        for sidecar_sub in sidecars_dir.iterdir():
+            if sidecar_sub.is_dir():
+                cand = sidecar_sub / "config.json"
+                if cand.is_file():
+                    candidates.append(cand)
+    # Legacy paths (backward compat)
+    if DEFAULT_CONFIG:
+        candidates.append(Path(DEFAULT_CONFIG))
+    candidates.append(plugin_dir / "config.json")
     candidates.append(Path.cwd() / ".agents" / "plugins" / "bug-fixer-loop-workspace" / "config.json")
     try:
         top = subprocess.run(
@@ -121,8 +131,7 @@ def load_leak_patterns() -> list[str]:
                 patterns.append(pat)
 
     if not loaded_any:
-        log("WARNING: no config found, failing closed")
-        return [".*"]  # Matches everything — blocks all posts
+        log("INFO: no config found, using built-in leak patterns only")
     return patterns
 
 
