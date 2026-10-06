@@ -38,7 +38,7 @@ if [[ -z "$TARGET_REPO" || -z "$TARGET_REPO_DIR" ]]; then
   usage
 fi
 
-REPO_SLUG="${TARGET_REPO//\//-}"
+REPO_SLUG="${TARGET_REPO//\//--}"
 SIDECAR_DIR="$INSTALL_DIR/sidecars/$REPO_SLUG"
 
 mkdir -p "$SIDECAR_DIR/state"

@@ -39,17 +39,17 @@ This skill is part of the `bug-fixer-loop` plugin. Resolve two directories:
 PLUGIN_DIR="$(cd "$(dirname "<this_skill_file>")/../.." && pwd)"
 ```
 
-**State directory** (repo-specific config — in the workspace):
+**Config and state** (set by sidecar env):
 ```bash
-# Note: BUG_FIXER_STATE_DIR env var overrides default STATE_DIR if set
-STATE_DIR="${BUG_FIXER_STATE_DIR:-<workspace_root>/.agents/plugins/bug-fixer-loop-workspace}"
+# Config: BUG_FIXER_CONFIG env var points to sidecars/<repo>/config.json
+# State:  BUG_FIXER_STATE_DIR env var points to sidecars/<repo>/state/
 ```
 
-Read `${STATE_DIR}/config.json`. Extract `target_repo`, `maintainer`,
+Read `${BUG_FIXER_CONFIG}`. Extract `target_repo`, `maintainer`,
 `max_concurrent_prs`, `active_milestone`. If the file is missing or `target_repo`
-is empty, output `CONFIG_INCOMPLETE: Plugin not configured. Run ${PLUGIN_DIR}/scripts/configure.sh first.` and exit.
+is empty, output `CONFIG_INCOMPLETE: Repo not enrolled. Run scripts/enroll.sh first.` and exit.
 
-Use `${PLUGIN_DIR}` for scripts and `${STATE_DIR}` for config and local state.
+Use `${BUG_FIXER_STATE_DIR}` for local state (claims, dispatches, etc.).
 
 ### Step 1: Issues Awaiting Your Input
 
