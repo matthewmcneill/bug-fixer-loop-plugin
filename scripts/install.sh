@@ -26,9 +26,3 @@ fi
 echo ""
 echo "Installed successfully."
 echo "Next: ./scripts/enroll.sh -r <owner/repo> -d <repo-dir>"
-
-# Legacy model defaults (for tests)
-# "triage_model": "flash"
-# "engineering_model": "pro"
-# "architect_model": "pro"
-# "trajectory_model": "flash"

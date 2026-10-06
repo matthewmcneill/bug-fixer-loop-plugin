@@ -282,9 +282,9 @@ def load_config(
                             c_data = json.loads(cand_conf.read_text())
                             r_dir = c_data.get("repo_dir")
                             if r_dir:
-                                r_path = Path(r_dir)
+                                r_path = Path(r_dir).resolve()
                                 for wp in workspace_paths:
-                                    if r_path.is_relative_to(Path(wp)):
+                                    if Path(wp).resolve().is_relative_to(r_path):
                                         cands.append(cand_conf)
                                         break
                         except (json.JSONDecodeError, OSError):
@@ -369,12 +369,16 @@ def evaluate_gate_a(
     spec_file_path: str,
     protected_files: list[str],
     repo_dir: str | None = None,
+    workspace_paths: list[str] | None = None,
 ) -> dict[str, str] | None:
     """Gate A: File Write Protection."""
     file_mutation_tools = {"write_to_file", "replace_file_content", "multi_replace_file_content"}
     target_file = str(args.get("TargetFile") or args.get("target_file") or "").strip()
     if not target_file:
         return {"decision": "allow"} if tool_name in file_mutation_tools else None
+
+    if not os.path.isabs(target_file) and workspace_paths and workspace_paths[0]:
+        target_file = os.path.join(workspace_paths[0], target_file)
 
     if is_host_script_target(target_file):
         return {"decision": "deny", "reason": REASON_HOST_SCRIPT}
@@ -2318,13 +2322,13 @@ def evaluate_pretool_call(payload: dict[str, Any], config: dict[str, Any]) -> di
     protected_files = list(config.get("protected_files", []))
     repo_dir = str(config.get("repo_dir", "")).strip() or None
 
-    decision_a = evaluate_gate_a(tool_name, args, spec_file_path, protected_files, repo_dir)
-    if decision_a is not None:
-        return decision_a
-
     workspace_paths = (
         payload.get("workspacePaths") if isinstance(payload.get("workspacePaths"), list) else []
     )
+
+    decision_a = evaluate_gate_a(tool_name, args, spec_file_path, protected_files, repo_dir, workspace_paths)
+    if decision_a is not None:
+        return decision_a
     command_cwd = str(
         args.get("Cwd")
         or args.get("cwd")
@@ -2918,7 +2922,7 @@ def main() -> int:
                     stdin_data = raw
             except (json.JSONDecodeError, ValueError):
                 print(json.dumps({"decision": "deny", "reason": "Invalid JSON payload on stdin"}))
-                return 1
+                return 0
 
     workspace_paths = stdin_data.get("workspacePaths", [])
 

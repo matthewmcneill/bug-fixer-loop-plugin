@@ -13,23 +13,24 @@ approach first.
 
 ## Correct approach — use safe_ingest.py
 
-Run relative to the workspace plugin directory (the hooks working directory):
+When the hook blocks a prohibited approach, the deny message includes the exact
+command to use. Run it with `run_command`:
 
 ```bash
 # View a single issue (extract the number from the URL/reference)
-python3 scripts/safe_ingest.py issue-view <number>
+python3 workspace-plugin/bug-fixer/scripts/safe_ingest.py issue-view <number>
 
 # View a single PR
-python3 scripts/safe_ingest.py pr-view <number>
+python3 workspace-plugin/bug-fixer/scripts/safe_ingest.py pr-view <number>
 
 # List open issues
-python3 scripts/safe_ingest.py issue-list
+python3 workspace-plugin/bug-fixer/scripts/safe_ingest.py issue-list
 
 # List open PRs
-python3 scripts/safe_ingest.py pr-list
+python3 workspace-plugin/bug-fixer/scripts/safe_ingest.py pr-list
 
 # View PR comments (review + inline)
-python3 scripts/safe_ingest.py pr-comments <number>
+python3 workspace-plugin/bug-fixer/scripts/safe_ingest.py pr-comments <number>
 ```
 
 The output is JSON matching the `gh` CLI format, with untrusted external
@@ -41,7 +42,7 @@ If the user gives a full URL like `https://github.com/owner/repo/issues/20`,
 extract the number (`20`) and run:
 
 ```bash
-python3 scripts/safe_ingest.py issue-view 20
+python3 workspace-plugin/bug-fixer/scripts/safe_ingest.py issue-view 20
 ```
 
 If the URL contains `/pull/` instead of `/issues/`, use `pr-view`.

@@ -32,13 +32,12 @@ engineering dispatcher and potentially block all bug-fixer activity for hours.
 ## Step 0: Configuration Guard
 This skill is part of the `bug-fixer-loop` plugin. Resolve:
 ```bash
-PLUGIN_DIR="$(cd "$(dirname "<this_skill_file>")/../.." && pwd)"
-# Note: BUG_FIXER_STATE_DIR env var overrides default STATE_DIR if set
-STATE_DIR="${BUG_FIXER_STATE_DIR:-<workspace_root>/.agents/plugins/bug-fixer-loop-workspace}"
+# Config: BUG_FIXER_CONFIG env var points to sidecars/<repo>/config.json
+# State:  BUG_FIXER_STATE_DIR env var points to sidecars/<repo>/state/
 ```
-Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missing, output `CONFIG_INCOMPLETE: Plugin not configured. Run ${PLUGIN_DIR}/scripts/configure.sh first.` and exit immediately.
+Read `${BUG_FIXER_CONFIG}`. If `target_repo` is empty or the file is missing, output `CONFIG_INCOMPLETE: Repo not enrolled. Run scripts/enroll.sh first.` and exit immediately.
 
-1. **Load Configuration:** Read `${STATE_DIR}/config.json`. Extract all fields (`target_repo`, `maintainer`, `trusted_users`, `spec_file_path`, `additional_design_docs`, `test_command`, `lint_command`, `max_concurrent_prs`, `pr_prefix`, `branch_prefix`, `active_milestone`, `milestone_priority_boost`).
+1. **Load Configuration:** Read `${BUG_FIXER_CONFIG}`. Extract all fields (`target_repo`, `maintainer`, `trusted_users`, `spec_file_path`, `additional_design_docs`, `test_command`, `lint_command`, `max_concurrent_prs`, `pr_prefix`, `branch_prefix`, `active_milestone`, `milestone_priority_boost`).
 
 ### Step 2: Reconcile In-Progress Issues
 

@@ -214,9 +214,17 @@ def load_config(
         if daemon_dir:
             sidecars_dir = daemon_dir / "sidecars"
             if sidecars_dir.is_dir():
+                cwd = Path.cwd().resolve()
                 for sidecar_sub in sidecars_dir.iterdir():
-                    if sidecar_sub.is_dir() and (sidecar_sub / "config.json").is_file():
-                        candidates.append(sidecar_sub / "config.json")
+                    cand_conf = sidecar_sub / "config.json"
+                    if sidecar_sub.is_dir() and cand_conf.is_file():
+                        try:
+                            c_data = json.loads(cand_conf.read_text())
+                            r_dir = c_data.get("repo_dir")
+                            if r_dir and cwd.is_relative_to(Path(r_dir).resolve()):
+                                candidates.append(cand_conf)
+                        except (json.JSONDecodeError, OSError):
+                            pass
         candidates.extend([
             plugin_dir / "config.json",
             plugin_dir.parent / "bug-fixer-loop-workspace" / "config.json",

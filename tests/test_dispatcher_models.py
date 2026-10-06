@@ -25,13 +25,6 @@ class TestDispatcherModels(unittest.TestCase):
             self.repo_root / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"
         )
 
-    def test_install_script_contains_default_models(self):
-        """Verify install.sh defines the expected model tier defaults."""
-        install_script = (self.scripts_dir / "install.sh").read_text()
-        self.assertIn('"triage_model": "flash"', install_script)
-        self.assertIn('"engineering_model": "pro"', install_script)
-        self.assertIn('"architect_model": "pro"', install_script)
-        self.assertIn('"trajectory_model": "flash"', install_script)
 
     def test_enroll_script_contains_default_models(self):
         """Verify enroll.sh provisions the default model tiers."""

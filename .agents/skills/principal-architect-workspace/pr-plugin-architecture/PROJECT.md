@@ -1,6 +1,6 @@
 # Plugin Architecture Migration — PROJECT.md
 
-**Base Branch:** `scanning-infra/wo5-injection-classifier`
+**Base Branch:** `main`
 **PR Title:** `[Plugin Architecture]: Split daemon + workspace plugin with per-repo sidecars`
 
 ## Architectural Context
@@ -24,16 +24,16 @@ this design review (see `final-architecture.md` in brain session `6521d39f`):
 
 ## Status
 
-- **Human approval of decomposition:** ⏳ PENDING
-- **Current WO:** Planning
+- **Human approval of decomposition:** ✅ Approved 2026-10-05T23:23Z (plan v3.1)
+- **Current WO:** WO1 — Daemon Scaffold + File Move
 
 ## Work Order Ledger
 
-- **[ ] [wo0-spike](wo0-spike/WORKORDER.md):** Phase 0 spike — validate undocumented Antigravity behaviors with throwaway plugin (`interactive`)
+- **[x] [wo0-spike](wo0-spike/WORKORDER.md):** Phase 0 spike ✅ — 10/14 checks answered, 4 deferred to WO5
 - **[ ] [wo1-daemon-scaffold](wo1-daemon-scaffold/WORKORDER.md):** Create global daemon plugin structure with workspace plugin bundle (hooks, skills, rules, agents)
 - **[ ] [wo2-hook-config-resolution](wo2-hook-config-resolution/WORKORDER.md):** Update `pre_tool_gate.py` and `github_url_gate.py` to resolve config via `workspacePaths` + sidecars scan
 - **[ ] [wo3-tick-dispatchers](wo3-tick-dispatchers/WORKORDER.md):** Create `tick.py`, `tick_receiver.py`, adapt dispatchers to read repo from env vars
-- **[ ] [wo4-install-enroll](wo4-install-enroll/WORKORDER.md):** Rewrite `install.sh` as `install` + `enroll`/`unenroll`/`enable`/`disable` commands
+- **[ ] [wo4-install-enroll](wo4-install-enroll/WORKORDER.md):** Rewrite `install.sh` + rename `configure.sh` → `enroll.sh` with `unenroll.sh` companion
 - **[ ] [wo5-consumer-cleanup](wo5-consumer-cleanup/WORKORDER.md):** Remove submodule, injected hooks, old sidecar stubs from esp32-app-foundation
 - **[ ] [wo6-cleanup-docs-tests](wo6-cleanup-docs-tests/WORKORDER.md):** Delete legacy files, update README, add/update tests, uninstall script
 
@@ -81,3 +81,10 @@ WO0 (spike) is `interactive` — not spawned as a subagent.
 - Adopted command naming: install/uninstall (machine), enroll/unenroll (repo), enable/disable (toggle)
 - Phase 0 spike defined (8 checks for undocumented behaviors)
 - Decomposition created, awaiting human approval
+
+### Session 2 — 2026-10-05 — WO0 Spike + Plan v3.1
+- Plan v3.1 approved by user (5 blocking bugs + stdin guard fixed)
+- WO0 spike executed autonomously via sub-agents and CLI probes
+- **Key spike findings:** `plugins.json` key is `entries` (not `plugins`); `PLUGIN_ROOT`/`PLUGIN_DATA` are MCP-only; no `${...}` substitution in skills/rules; hook cwd = hooks.json dir; `workspacePaths` in stdin; schedule doesn't kill prior runs; `agy plugin enable` exists
+- Check 9 (hooks in sidecar conversations) deferred to WO5 cutover
+- Plan updated with spike-driven corrections

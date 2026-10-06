@@ -69,19 +69,18 @@ Scrutinize every line of the PR diff against these four pillars:
 This skill is part of the `bug-fixer-loop` plugin. Resolve directories and read configuration:
 
 ```bash
-PLUGIN_DIR="$(cd "$(dirname "<this_skill_file>")/../.." && pwd)"
-# Note: BUG_FIXER_STATE_DIR env var overrides default STATE_DIR if set
-STATE_DIR="${BUG_FIXER_STATE_DIR:-<workspace_root>/.agents/plugins/bug-fixer-loop-workspace}"
+# Config: BUG_FIXER_CONFIG env var points to sidecars/<repo>/config.json
+# State:  BUG_FIXER_STATE_DIR env var points to sidecars/<repo>/state/
 ```
 
-Read `${STATE_DIR}/config.json`. Extract:
+Read `${BUG_FIXER_CONFIG}`. Extract:
 - `target_repo`: Target GitHub repository (e.g., `owner/repo`)
 - `spec_file_path`: Path to primary architecture/spec document (if configured)
 - `additional_design_docs`: Additional architecture reference documents (if configured)
 - `maintainer`: Maintainer username
 
 If `target_repo` is empty or the config file is missing, abort with:
-`CONFIG_INCOMPLETE: Plugin not configured. Run ${PLUGIN_DIR}/scripts/configure.sh first.`
+`CONFIG_INCOMPLETE: Repo not enrolled. Run scripts/enroll.sh first.`
 
 Identify the target PR number:
 - Provided via dispatcher prompt or user argument: `<pr_number>`.

@@ -72,8 +72,6 @@ def main() -> int:
 
         # Write exit status when child finishes (best-effort, non-blocking)
         # The child writes its own exit code on completion — this is for
-        # the case where a subsequent tick wants to check the last result.
-        exit_file = STATE_DIR / f"{name}.exit"
         # We don't wait — the child runs independently.
 
     return 0

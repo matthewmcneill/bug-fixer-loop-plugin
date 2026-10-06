@@ -15,13 +15,12 @@ This skill classifies open issues into 5 tiers of complexity, handles approach r
 ## Step 0: Configuration Guard
 This skill is part of the `bug-fixer-loop` plugin. Resolve:
 ```bash
-PLUGIN_DIR="$(cd "$(dirname "<this_skill_file>")/../.." && pwd)"
-# Note: BUG_FIXER_STATE_DIR env var overrides default STATE_DIR if set
-STATE_DIR="${BUG_FIXER_STATE_DIR:-<workspace_root>/.agents/plugins/bug-fixer-loop-workspace}"
+# Config: BUG_FIXER_CONFIG env var points to sidecars/<repo>/config.json
+# State:  BUG_FIXER_STATE_DIR env var points to sidecars/<repo>/state/
 ```
-Read `${STATE_DIR}/config.json`. If `target_repo` is empty or the file is missing, output `CONFIG_INCOMPLETE: Plugin not configured. Run ${PLUGIN_DIR}/scripts/configure.sh first.` and exit immediately.
+Read `${BUG_FIXER_CONFIG}`. If `target_repo` is empty or the file is missing, output `CONFIG_INCOMPLETE: Repo not enrolled. Run scripts/enroll.sh first.` and exit immediately.
 
-1. **Load Configuration:** Read `${STATE_DIR}/config.json`. Extract `target_repo`, `maintainer`, `exclusion_labels`, `milestone_priority_boost`, and `active_milestone`.
+1. **Load Configuration:** Read `${BUG_FIXER_CONFIG}`. Extract `target_repo`, `maintainer`, `exclusion_labels`, `milestone_priority_boost`, and `active_milestone`.
 
 2. **Query Open Issues:** Run the safe ingest proxy to list all open issues:
    ```bash
