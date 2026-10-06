@@ -54,8 +54,22 @@ TEST_CONFIG = {
 
 
 class TestPreToolGate(unittest.TestCase):
-    def _run_gate_stdin(self, payload: dict[str, Any], config_path: str | None = None) -> dict[str, Any]:
+    @classmethod
+    def setUpClass(cls):
+        """Create a temp config file so tests run in an 'enrolled' context."""
+        cls._config_tf = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        json.dump(TEST_CONFIG, cls._config_tf)
+        cls._config_tf.close()
+        cls._default_config_path = cls._config_tf.name
+
+    @classmethod
+    def tearDownClass(cls):
+        os.unlink(cls._default_config_path)
+
+    def _run_gate_stdin(self, payload: dict[str, Any], config_path: str | None = "USE_DEFAULT") -> dict[str, Any]:
         """Invokes pre_tool_gate.py via subprocess passing JSON payload on stdin."""
+        if config_path == "USE_DEFAULT":
+            config_path = self._default_config_path
         cmd = [sys.executable, str(GATE_SCRIPT)]
         if config_path:
             cmd.extend(["--config", config_path])
@@ -213,6 +227,18 @@ class TestPreToolGate(unittest.TestCase):
             res = self._run_gate_stdin(payload)
             self.assertEqual(res["decision"], "deny")
             self.assertEqual(res["reason"], REASON_RAW_GH)
+
+    def test_gate_b_allows_gh_in_unenrolled_workspace(self):
+        """Gate B should not block gh commands in unenrolled workspaces."""
+        payload = {
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": "gh issue view 5"},
+            }
+        }
+        # Pass config_path=None to skip default config → unenrolled
+        res = self._run_gate_stdin(payload, config_path=None)
+        self.assertEqual(res["decision"], "allow")
 
     def test_gate_b_deny_shell_mutation_of_spec_file(self):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:

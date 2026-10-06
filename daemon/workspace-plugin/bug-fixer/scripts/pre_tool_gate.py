@@ -2338,11 +2338,15 @@ def evaluate_pretool_call(payload: dict[str, Any], config: dict[str, Any]) -> di
         or repo_dir
         or _repo_root(config, None)
     )
-    decision_b = evaluate_gate_b(
-        tool_name, args, spec_file_path, protected_files, config, cwd=command_cwd
-    )
-    if decision_b is not None:
-        return decision_b
+    # Gate B only enforces in enrolled workspaces — unenrolled repos
+    # should not have gh commands blocked or shell mutation checks.
+    # Leak scanning (Gate C / outbound content) still runs everywhere.
+    if config.get("_enrolled", True) is not False:
+        decision_b = evaluate_gate_b(
+            tool_name, args, spec_file_path, protected_files, config, cwd=command_cwd
+        )
+        if decision_b is not None:
+            return decision_b
 
     return {"decision": "allow"}
 

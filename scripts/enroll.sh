@@ -39,9 +39,11 @@ if [[ -z "$TARGET_REPO" || -z "$TARGET_REPO_DIR" ]]; then
 fi
 
 if [[ -z "${ANTIGRAVITY_PROJECT_ID:-}" ]]; then
-  echo "WARNING: ANTIGRAVITY_PROJECT_ID not set in environment."
-  echo "  The sidecar will use the repo slug as a fallback."
-  echo "  For full agentapi support, export ANTIGRAVITY_PROJECT_ID first."
+  echo "ERROR: ANTIGRAVITY_PROJECT_ID not set in environment."
+  echo "  The sidecar needs this for agentapi. Set it with:"
+  echo "    export ANTIGRAVITY_PROJECT_ID=\"<your-project-id>\""
+  echo "  You can find it in the Antigravity UI or via 'agy project list'."
+  exit 1
 fi
 
 REPO_SLUG="${TARGET_REPO//\//--}"
@@ -74,18 +76,28 @@ with open(old_path) as f:
 # Ensure required fields
 cfg["target_repo"] = repo
 cfg["repo_dir"] = repo_dir
-# Normalise legacy key names
-if "trajectory_review_interval_min" in cfg and "trajectory_interval_min" not in cfg:
-    cfg["trajectory_interval_min"] = cfg.pop("trajectory_review_interval_min")
-# Convert legacy *_cron keys to *_interval_min (cron "*/N * * * *" → N minutes)
+# Convert legacy *_cron keys to *_interval_min FIRST (before renames)
 for old_key in list(cfg.keys()):
     if old_key.endswith("_cron"):
         new_key = old_key.replace("_cron", "_interval_min")
         if new_key not in cfg:
-            cron_val = cfg[old_key]
-            m = re.match(r"\*/(\d+)\s", str(cron_val)) if cron_val else None
-            cfg[new_key] = int(m.group(1)) if m else 60
+            cron_val = str(cfg[old_key]) if cfg[old_key] else ""
+            m_every = re.match(r"\*/(\d+)\s", cron_val)
+            m_hourly = re.match(r"\d+\s+\*\s", cron_val)
+            m_daily = re.match(r"\d+\s+\d+\s+\*\s+\*\s+\*", cron_val)
+            if m_every:
+                cfg[new_key] = int(m_every.group(1))
+            elif m_hourly:
+                cfg[new_key] = 60
+            elif m_daily:
+                cfg[new_key] = 1440
+            else:
+                print(f"WARNING: cannot convert cron '{cron_val}' for {old_key} — skipping", file=sys.stderr)
+                continue
         del cfg[old_key]
+# Normalise legacy key names (after cron conversion)
+if "trajectory_review_interval_min" in cfg and "trajectory_interval_min" not in cfg:
+    cfg["trajectory_interval_min"] = cfg.pop("trajectory_review_interval_min")
 with open(new_path, "w") as f:
     json.dump(cfg, f, indent=2)
     f.write("\n")
@@ -158,7 +170,7 @@ sidecar = {
         "BUG_FIXER_CONFIG": config_path,
         "BUG_FIXER_STATE_DIR": state_dir,
         "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin"),
-        "ANTIGRAVITY_PROJECT_ID": os.environ.get("ANTIGRAVITY_PROJECT_ID", repo)
+        "ANTIGRAVITY_PROJECT_ID": os.environ["ANTIGRAVITY_PROJECT_ID"]
     }
 }
 with open(out_path, "w") as f:

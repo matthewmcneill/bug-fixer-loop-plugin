@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import hashlib
+import re
 import json
 import os
 import shutil
@@ -77,8 +78,9 @@ def _get_protected_files() -> list[str]:
                 if p.exists() and str(p) not in files:
                     files.append(str(p))
 
-    # Plugin manifest and hooks files
-    for d in [plugin_dir, plugin_dir.parent]:
+    # Plugin manifest and hooks files (daemon root is two levels above scripts/)
+    daemon_root = plugin_dir.parent.parent
+    for d in [plugin_dir, plugin_dir.parent, daemon_root]:
         for name in ["hooks.json", "plugin.json"]:
             p = d / name
             if p.exists() and str(p) not in files:
@@ -237,7 +239,9 @@ def main() -> int:
     if not os.environ.get("BUG_FIXER_CONFIG"):
         _resolve_config_from_workspace(stdin_data.get("workspacePaths", []))
 
-    conversation_id = stdin_data.get("conversationId", "") if isinstance(stdin_data, dict) else ""
+    raw_cid = stdin_data.get("conversationId", "") if isinstance(stdin_data, dict) else ""
+    # Sanitise to prevent path traversal — only allow UUID-like IDs
+    conversation_id = raw_cid if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", raw_cid) else ""
 
     if "--post" in sys.argv:
         verify(conversation_id)

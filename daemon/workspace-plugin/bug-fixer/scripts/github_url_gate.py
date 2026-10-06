@@ -65,25 +65,11 @@ def _configured_patterns(workspace_paths: list[str]) -> list[str]:
 
 def _is_enrolled(workspace_paths: list[str]) -> bool:
     """Check if any workspace path matches a sidecar config's repo_dir."""
-    sidecars_dir = Path.home() / ".gemini" / "config" / "plugins" / "bug-fixer-daemon" / "sidecars"
-    if not sidecars_dir.is_dir():
+    try:
+        cfg = load_config(None, workspace_paths=workspace_paths)
+        return cfg.get("_enrolled", True) is not False
+    except Exception:
         return False
-    for sidecar in sidecars_dir.iterdir():
-        cfg_path = sidecar / "config.json"
-        if not cfg_path.is_file():
-            continue
-        try:
-            cfg = json.loads(cfg_path.read_text())
-            repo_dir = cfg.get("repo_dir", "")
-            if not repo_dir:
-                continue
-            repo_resolved = Path(repo_dir).resolve()
-            for wp in workspace_paths:
-                if Path(wp).resolve().is_relative_to(repo_resolved):
-                    return True
-        except (json.JSONDecodeError, OSError):
-            continue
-    return False
 
 
 def main() -> int:

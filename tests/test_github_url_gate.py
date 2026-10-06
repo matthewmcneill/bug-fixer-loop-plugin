@@ -97,20 +97,28 @@ class TestGateHook(unittest.TestCase):
 
     def test_github_issue_page_denied_when_enrolled(self):
         """Enrolled workspaces should block GitHub issue URLs."""
-        # Use a workspacePath matching a live enrolled repo
-        payload = {
-            "toolCall": {"name": "read_url_content", "args": {"Url": "https://github.com/o/r/issues/22"}},
-            "workspacePaths": [str(REPO)],
-        }
-        env = {k: v for k, v in os.environ.items() if k != "BUG_FIXER_CONFIG"}
-        out = subprocess.run(
-            [sys.executable, str(GATE)],
-            input=json.dumps(payload),
-            capture_output=True, text=True, env=env, check=True,
-        )
-        res = json.loads(out.stdout)
-        self.assertEqual(res["decision"], "deny")
-        self.assertEqual(res["reason"], REASON)
+        import tempfile
+        # Create a temp config that simulates enrollment
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+            json.dump({"repo_dir": str(REPO), "target_repo": "o/r"}, tf)
+            cfg_path = tf.name
+        try:
+            payload = {
+                "toolCall": {"name": "read_url_content", "args": {"Url": "https://github.com/o/r/issues/22"}},
+                "workspacePaths": [str(REPO)],
+            }
+            env = {k: v for k, v in os.environ.items()}
+            env["BUG_FIXER_CONFIG"] = cfg_path
+            out = subprocess.run(
+                [sys.executable, str(GATE)],
+                input=json.dumps(payload),
+                capture_output=True, text=True, env=env, check=True,
+            )
+            res = json.loads(out.stdout)
+            self.assertEqual(res["decision"], "deny")
+            self.assertEqual(res["reason"], REASON)
+        finally:
+            os.unlink(cfg_path)
 
     def test_ordinary_url_allowed(self):
         self.assertEqual(self._run(ORDINARY_URLS[0]), {"decision": "allow"})
