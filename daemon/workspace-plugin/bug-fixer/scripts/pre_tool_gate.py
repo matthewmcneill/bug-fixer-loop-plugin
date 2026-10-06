@@ -61,14 +61,17 @@ REASON_HOST_SCRIPT = (
 )
 REASON_AUTO_MERGE = (
     "Auto-merge is prohibited: Autonomous merging of PRs or stacks via "
-    "`gh pr merge` or `gh stack merge` is forbidden."
+    "`gh pr merge` or `gh stack merge` is forbidden. "
+    "Merging requires maintainer action."
 )
 REASON_SELF_APPROVAL = (
-    "Self-approval is prohibited: PR self-approval via `gh pr review --approve` is forbidden."
+    "Self-approval is prohibited: PR self-approval via `gh pr review --approve` is forbidden. "
+    "To post a non-approval review, use: "
+    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py pr-review <number> --body \"...\"`"
 )
 REASON_ISSUE_REOPEN = (
     "Issue reopening is prohibited: Autonomous agents are prohibited from running "
-    "`gh issue reopen`."
+    "`gh issue reopen`. Reopening requires maintainer action."
 )
 REASON_APPROVAL_INJECTION = (
     "Self-approval injection blocked: Posting maintainer approval comments "
@@ -85,25 +88,32 @@ REASON_SHELL_MUTATION = (
 )
 REASON_EGRESS_LEAK = (
     "Egress leak blocked: Outbound GitHub command body contains content "
-    "matching configured leak patterns. Content not sent."
+    "matching configured leak patterns. Content not sent. "
+    "Route all GitHub writes through: "
+    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py` which scans content before posting."
 )
 REASON_UNSCANNABLE = (
     "Egress blocked: outbound content comes from a source the gate cannot inspect "
-    "(stdin, a shell variable, a command substitution or a glob). Write the content "
-    "to a file and pass it with --body-file / --notes-file / --input."
+    "(stdin, a shell variable, a command substitution or a glob). "
+    "Route GitHub writes through: "
+    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py` which accepts body text as a CLI argument."
 )
 REASON_UNSCANNABLE_STDIN = REASON_UNSCANNABLE
 REASON_DYNAMIC_EXEC = (
     "Dynamic command execution blocked: the gate cannot inspect commands assembled at "
     'runtime (bash -c "$VAR", eval, piping into a shell or interpreter, xargs into gh, '
-    "gh aliases/extensions, git exec-config). Run the command directly."
+    "gh aliases/extensions, git exec-config). Run the command directly. "
+    "For GitHub reads use safe_ingest.py; for GitHub writes use: "
+    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py`"
 )
 REASON_DYNAMIC_WRITE = (
     "Write target must be a literal path: the gate cannot verify that a runtime-built "
     "redirection target is not a protected file."
 )
 REASON_INLINE_GH = (
-    "Inline code must not invoke gh: run gh commands directly so the gate can inspect them."
+    "Inline code must not invoke gh: run gh commands directly so the gate can inspect them. "
+    "For GitHub reads use safe_ingest.py; for GitHub writes use: "
+    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py`"
 )
 REASON_PROXY = "Egress proxy (safe_post.py) is reserved for dispatchers. Use gh commands directly."
 REASON_SECRET_DISCLOSURE = (
