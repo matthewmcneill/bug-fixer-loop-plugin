@@ -172,5 +172,140 @@ class TestArchitectDispatcherConflictMonitor(unittest.TestCase):
         self.assertEqual(mock_gh.call_count, 1)
 
 
+class TestApplyPendingApprovals(unittest.TestCase):
+    """Tests for apply_pending_approvals — dispatcher-only label application."""
+
+    def setUp(self):
+        self.target_repo = "matthewmcneill/bug-fixer-loop-plugin"
+
+    @patch("architect_dispatcher.gh")
+    def test_approval_comment_applies_label(self, mock_gh):
+        """When last [ARCHITECT] comment is 'Approved', label should be applied."""
+        list_output = json.dumps([
+            {"number": 50, "title": "Good PR"}
+        ])
+        comments_output = json.dumps({
+            "comments": [
+                {"body": "[ARCHITECT] Changes Requested:\n- Fix issue X"},
+                {"body": "[ARCHITECT] Approved:\n- All checks pass."},
+            ]
+        })
+        mock_gh.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=list_output, stderr=""),  # pr list
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=comments_output, stderr=""),  # pr view
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),  # pr edit
+        ]
+
+        from architect_dispatcher import apply_pending_approvals
+        apply_pending_approvals(self.target_repo)
+
+        # Should have: list + view + edit = 3 calls
+        self.assertEqual(mock_gh.call_count, 3)
+
+        # Verify the edit call applies the right labels
+        edit_args = mock_gh.call_args_list[2][0]
+        self.assertIn("--add-label", edit_args)
+        self.assertIn("bug-fixer:architect:approved", edit_args)
+        self.assertIn("--remove-label", edit_args)
+        self.assertIn("bug-fixer:architect:awaiting-review", edit_args)
+
+    @patch("architect_dispatcher.gh")
+    def test_rejection_comment_does_not_apply_label(self, mock_gh):
+        """When last [ARCHITECT] comment is 'Changes Requested', no label applied."""
+        list_output = json.dumps([
+            {"number": 51, "title": "Needs work PR"}
+        ])
+        comments_output = json.dumps({
+            "comments": [
+                {"body": "[ARCHITECT] Changes Requested:\n- Fix naming."},
+            ]
+        })
+        mock_gh.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=list_output, stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=comments_output, stderr=""),
+        ]
+
+        from architect_dispatcher import apply_pending_approvals
+        apply_pending_approvals(self.target_repo)
+
+        # Should have: list + view = 2 calls (no edit)
+        self.assertEqual(mock_gh.call_count, 2)
+
+    @patch("architect_dispatcher.gh")
+    def test_no_architect_comment_does_nothing(self, mock_gh):
+        """When there are no [ARCHITECT] comments, no label applied."""
+        list_output = json.dumps([
+            {"number": 52, "title": "New PR"}
+        ])
+        comments_output = json.dumps({
+            "comments": [
+                {"body": "Regular comment by someone"},
+            ]
+        })
+        mock_gh.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=list_output, stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=comments_output, stderr=""),
+        ]
+
+        from architect_dispatcher import apply_pending_approvals
+        apply_pending_approvals(self.target_repo)
+
+        self.assertEqual(mock_gh.call_count, 2)
+
+    @patch("architect_dispatcher.gh")
+    def test_empty_pr_list_exits_cleanly(self, mock_gh):
+        """When no PRs are awaiting review, exits without error."""
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="[]", stderr=""
+        )
+
+        from architect_dispatcher import apply_pending_approvals
+        apply_pending_approvals(self.target_repo)
+
+        self.assertEqual(mock_gh.call_count, 1)
+
+    @patch("architect_dispatcher.gh")
+    def test_comment_fetch_failure_handled(self, mock_gh):
+        """If fetching comments fails, skip the PR without crashing."""
+        list_output = json.dumps([
+            {"number": 53, "title": "Some PR"}
+        ])
+        mock_gh.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=list_output, stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="API error"),
+        ]
+
+        from architect_dispatcher import apply_pending_approvals
+        apply_pending_approvals(self.target_repo)
+
+        self.assertEqual(mock_gh.call_count, 2)
+
+    @patch("architect_dispatcher.gh")
+    def test_approval_after_rejection_applies_label(self, mock_gh):
+        """When rejection is followed by approval, the approval wins (last comment)."""
+        list_output = json.dumps([
+            {"number": 54, "title": "Iterated PR"}
+        ])
+        comments_output = json.dumps({
+            "comments": [
+                {"body": "[ARCHITECT] Changes Requested:\n- Fix X"},
+                {"body": "Developer: Fixed X"},
+                {"body": "[ARCHITECT] Approved:\n- All good now."},
+            ]
+        })
+        mock_gh.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=list_output, stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=comments_output, stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+        ]
+
+        from architect_dispatcher import apply_pending_approvals
+        apply_pending_approvals(self.target_repo)
+
+        self.assertEqual(mock_gh.call_count, 3)
+        edit_args = mock_gh.call_args_list[2][0]
+        self.assertIn("bug-fixer:architect:approved", edit_args)
+
+
 if __name__ == "__main__":
     unittest.main()

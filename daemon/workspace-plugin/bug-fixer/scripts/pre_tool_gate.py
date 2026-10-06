@@ -135,6 +135,13 @@ REASON_PARSE = (
     "Command could not be parsed safely (unbalanced quotes, substitution or heredoc). "
     "Fix the quoting and retry."
 )
+REASON_LABEL_ESCALATION = (
+    "Protected label blocked: adding trust-escalating labels (e.g. "
+    "bug-fixer:architect:approved) is restricted to dispatcher sidecars. "
+    "Signal approval via a structured [ARCHITECT] comment; the dispatcher "
+    "applies the label on its next tick."
+)
+
 
 # Leak patterns that are always enforced on egress, in addition to config.
 # Config can add patterns but never remove these.
@@ -145,6 +152,13 @@ BUILTIN_LEAK_PATTERNS = (
     r"gh[pousr]_[A-Za-z0-9]{36,}",
     r"github_pat_[A-Za-z0-9_]{22,}",
 )
+
+# Labels that only trusted dispatcher code (outside agent conversations) may
+# add.  Agents signal these transitions indirectly (e.g. via structured
+# comments); the sidecar dispatcher applies the label on its next tick.
+PROTECTED_ADD_LABELS = frozenset({
+    "bug-fixer:architect:approved",
+})
 
 HOST_SECURITY_SCRIPTS = frozenset({
     "pre_tool_gate.py", "safe_ingest.py", "safe_post.py",
@@ -1406,6 +1420,17 @@ def _check_gh_api(
             r'"state"\s*:\s*"open"', input_json, re.IGNORECASE
         ):
             return _deny(REASON_ISSUE_REOPEN)
+    # Block adding protected labels via REST labels endpoint
+    if re.search(r"(^|/)labels$", path) and method in ("POST", "PUT", "PATCH"):
+        label_fields = field("labels") + field("labels[]") + field("name")
+        for lbl in label_fields:
+            if not lbl.dynamic:
+                for individual in lbl.text.split(","):
+                    stripped = individual.strip()
+                    if stripped in PROTECTED_ADD_LABELS:
+                        return _deny(REASON_LABEL_ESCALATION)
+        if any(protected in input_json for protected in PROTECTED_ADD_LABELS):
+            return _deny(REASON_LABEL_ESCALATION)
     if method == "GET" and (
         path.startswith("search/")
         or re.search(
@@ -1467,6 +1492,14 @@ def _check_gh(
     flags, positionals = _parse_gh_args(group, sub, rest)
     if (group, sub) == ("pr", "review") and any(f in ("--approve", "-a") for f, _ in flags):
         return _deny(REASON_SELF_APPROVAL)
+
+    # Block adding trust-escalating labels (e.g. architect:approved)
+    for flag, value in flags:
+        if flag in ("--add-label", "--label", "-l") and value is not None and not value.dynamic:
+            for individual in value.text.split(","):
+                stripped = individual.strip()
+                if stripped in PROTECTED_ADD_LABELS:
+                    return _deny(REASON_LABEL_ESCALATION)
 
     bodies: list[str] = []  # text that is posted as a comment/body
     texts: list[str] = []  # every other outbound value
@@ -2610,7 +2643,7 @@ class BetterleaksBackend:
         if scope == ScanScope.STAGED:
             cmd.extend(["git", "--staged", repo_dir])
         elif scope == ScanScope.TREE:
-            cmd.extend(["fs", repo_dir])
+            cmd.extend(["dir", repo_dir])
         elif scope == ScanScope.HISTORY:
             cmd.extend(["git", repo_dir])
         else:
@@ -2618,15 +2651,16 @@ class BetterleaksBackend:
 
         cmd.extend(
             [
-                "--validate=false",
-                "--analyze=false",
+                "--validation=false",
                 "--redact",
                 "--no-banner",
-                "-o",
+                "-f",
+                "json",
+                "-r",
                 "-",
                 "--exit-code",
                 "1",
-                "--ignore-file",
+                "-i",
                 "/dev/null",
             ]
         )
@@ -2663,32 +2697,56 @@ class BetterleaksBackend:
                 raise RuntimeError(f"Betterleaks failed: {e.stderr}")
 
         if not out.strip():
-            raise RuntimeError("Betterleaks produced unparseable output — failing closed")
+            # No output means clean scan — return empty violations
+            self.last_config_hash = None
+            return []
 
         try:
             data = json.loads(out)
         except json.JSONDecodeError:
             raise RuntimeError("Betterleaks produced unparseable output — failing closed")
 
-        if not isinstance(data, dict) or "findings" not in data:
-            raise RuntimeError("Betterleaks output missing expected envelope structure")
-        scan_state = data.get("scan", {}).get("state", "")
-        if scan_state != "complete":
-            raise RuntimeError(f"Betterleaks scan did not complete (state={scan_state})")
-
-        self.last_config_hash = data.get("scan", {}).get("config_hash")
-        findings = data.get("findings", [])
+        # Support both v1 (flat array) and v2 (envelope dict) output formats
+        if isinstance(data, list):
+            # v1 / gitleaks-compat format: flat list of findings
+            findings = data
+            self.last_config_hash = None
+        elif isinstance(data, dict) and "findings" in data:
+            # v2 envelope format: {"findings": [...], "scan": {...}}
+            scan_state = data.get("scan", {}).get("state", "")
+            if scan_state and scan_state != "complete":
+                raise RuntimeError(f"Betterleaks scan did not complete (state={scan_state})")
+            self.last_config_hash = data.get("scan", {}).get("config_hash")
+            findings = data.get("findings", [])
+        else:
+            raise RuntimeError("Betterleaks output missing expected structure")
 
         if exclude_paths:
             exclude_paths = [p for p in exclude_paths if p and p != "/"]
 
         violations = []
         for finding in findings:
-            path = finding.get("location", {}).get("path", "")
+            # Support both v1 and v2 field names
+            # v1: File, StartLine, RuleID, Match
+            # v2: location.path, location.start_line, rule_id, match.value
+            if "location" in finding:
+                path = finding["location"].get("path", "")
+                line = finding["location"].get("start_line", 0)
+            else:
+                path = finding.get("File", "")
+                line = finding.get("StartLine", 0)
+
+            rule = finding.get("rule_id") or finding.get("RuleID", "unknown")
+
+            if isinstance(finding.get("match"), dict):
+                redacted_match = finding["match"].get("value", "REDACTED")
+            else:
+                redacted_match = finding.get("Match", "REDACTED")
+
             if not path or path.startswith(".git/") or path.startswith("_agents/"):
                 continue
 
-            # Betterleaks fs scans return absolute paths; make them relative
+            # Betterleaks dir scans return absolute paths; make them relative
             if os.path.isabs(path):
                 try:
                     path = os.path.relpath(path, repo_dir)
@@ -2698,10 +2756,6 @@ class BetterleaksBackend:
             if exclude_paths and any(path.startswith(ep) for ep in exclude_paths):
                 self.excluded_count += 1
                 continue
-
-            line = finding.get("location", {}).get("start_line", 0)
-            rule = finding.get("rule_id", "unknown")
-            redacted_match = finding.get("match", {}).get("value", "")
 
             violations.append(
                 ScanViolation(
