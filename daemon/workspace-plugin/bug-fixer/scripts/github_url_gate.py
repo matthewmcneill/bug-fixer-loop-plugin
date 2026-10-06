@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
+from pathlib import Path
 from urllib.parse import unquote_plus
 
 from pre_tool_gate import compile_leak_patterns, load_config
@@ -63,8 +65,6 @@ def _configured_patterns(workspace_paths: list[str]) -> list[str]:
 
 def _is_enrolled(workspace_paths: list[str]) -> bool:
     """Check if any workspace path matches a sidecar config's repo_dir."""
-    import os
-    from pathlib import Path
     sidecars_dir = Path.home() / ".gemini" / "config" / "plugins" / "bug-fixer-daemon" / "sidecars"
     if not sidecars_dir.is_dir():
         return False
