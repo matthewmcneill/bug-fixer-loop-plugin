@@ -167,11 +167,43 @@ def verify() -> None:
             pass
 
 
+def _resolve_config_from_workspace(workspace_paths: list[str]) -> None:
+    """Try to set BUG_FIXER_CONFIG from workspacePaths by scanning sidecars."""
+    sidecars_dir = Path.home() / ".gemini" / "config" / "plugins" / "bug-fixer-daemon" / "sidecars"
+    if not sidecars_dir.is_dir():
+        return
+    for sidecar in sidecars_dir.iterdir():
+        cfg_path = sidecar / "config.json"
+        if not cfg_path.is_file():
+            continue
+        try:
+            cfg = json.loads(cfg_path.read_text())
+            repo_dir = cfg.get("repo_dir", "")
+            if not repo_dir:
+                continue
+            repo_resolved = Path(repo_dir).resolve()
+            for wp in workspace_paths:
+                if Path(wp).resolve().is_relative_to(repo_resolved):
+                    os.environ["BUG_FIXER_CONFIG"] = str(cfg_path)
+                    return
+        except (json.JSONDecodeError, OSError):
+            continue
+
+
 def main() -> int:
     """Entry point — uses --pre or --post flag to determine mode."""
-    # Consume stdin (hooks always send payload on stdin)
+    # Parse stdin (hooks always send payload on stdin)
+    stdin_data = {}
     if not sys.stdin.isatty():
-        sys.stdin.read()
+        raw = sys.stdin.read()
+        try:
+            stdin_data = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # If BUG_FIXER_CONFIG isn't set, try to find it from workspacePaths
+    if not os.environ.get("BUG_FIXER_CONFIG"):
+        _resolve_config_from_workspace(stdin_data.get("workspacePaths", []))
 
     if "--post" in sys.argv:
         verify()
