@@ -1,0 +1,24 @@
+# BetterLeaks configuration for bug-fixer-loop-plugin
+# This file is protected by Gate A — autonomous agents cannot modify it.
+#
+# BetterLeaks scans the repo for leaked secrets using ~700 detection rules.
+# This config defines a global allowlist of test files that contain intentional
+# synthetic secrets (fake AWS keys, fake GitHub PATs, fake GCP tokens) used as
+# fixtures to verify that leak detection, redaction, and egress gating work
+# correctly. Without this allowlist, BetterLeaks would flag these test fixtures
+# as real findings.
+#
+# The paths are regexes matched against file paths relative to the repo root.
+#
+# Reference: https://github.com/zricethezav/betterleaks#configuration
+
+title = "bug-fixer-loop-plugin betterleaks config"
+
+[allowlist]
+  description = "Global allowlist — intentional test fixtures containing synthetic secrets"
+  paths = [
+    '''tests/test_gate_b_adversarial\.py''',
+    '''tests/test_safe_post\.py''',
+    '''tests/test_pre_tool_gate\.py''',
+    '''tests/test_safe_ingest\.py''',
+  ]
