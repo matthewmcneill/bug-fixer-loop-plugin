@@ -662,7 +662,7 @@ class TestPreToolGate(unittest.TestCase):
             backend = RegexBackend(patterns)
             backend_violations = backend.scan(temp_dir, ScanScope.TREE)
 
-            repo_violations, scanned, excluded = scan_repository(temp_dir, patterns)
+            repo_violations, scanned, excluded = scan_repository(temp_dir, patterns, config=TEST_CONFIG)
 
             self.assertEqual(len(backend_violations), len(repo_violations))
             self.assertEqual([str(v) for v in backend_violations], repo_violations)
@@ -717,8 +717,9 @@ class TestPreToolGate(unittest.TestCase):
         self.assertNotEqual(hash1, backend3.config_hash())
 
     def test_resolve_backend_returns_regex_for_regex_and_unknown(self):
-        # Default config without scanning block
-        b1 = resolve_backend({})
+        # Default config without scanning block — mock betterleaks not found
+        with unittest.mock.patch('subprocess.run', side_effect=FileNotFoundError()):
+            b1 = resolve_backend({})
         self.assertIsInstance(b1, RegexBackend)
         self.assertEqual(b1.name, "regex")
         self.assertEqual(b1.version, "builtin")
@@ -800,7 +801,7 @@ class TestPreToolGate(unittest.TestCase):
             ]
             proc = subprocess.run(cmd, capture_output=True, text=True)
             self.assertEqual(proc.returncode, 0)
-            self.assertIn("backend=regex (degraded)", proc.stdout)
+            self.assertIn("backend=regex", proc.stdout)
 
 
     # BetterleaksBackend Tests
@@ -846,10 +847,12 @@ class TestPreToolGate(unittest.TestCase):
         backend = BetterleaksBackend()
         
         cmd_staged = backend._build_cmd('/repo', ScanScope.STAGED)
-        self.assertEqual(cmd_staged[:4], ['betterleaks', 'git', '--staged', '/repo'])
+        self.assertTrue(cmd_staged[0].endswith('betterleaks'))
+        self.assertEqual(cmd_staged[1:4], ['git', '--staged', '/repo'])
         
         cmd_tree = backend._build_cmd('/repo', ScanScope.TREE)
-        self.assertEqual(cmd_tree[:3], ['betterleaks', 'dir', '/repo'])
+        self.assertTrue(cmd_tree[0].endswith('betterleaks'))
+        self.assertEqual(cmd_tree[1:3], ['dir', '/repo'])
 
     @unittest.mock.patch('subprocess.check_output')
     def test_betterleaks_scan_parses_json(self, mock_check_output):
@@ -941,6 +944,7 @@ class TestPreToolGate(unittest.TestCase):
         violations = backend.scan('/repo', ScanScope.TREE)
 
         self.assertEqual(violations, [])
+
 
 
     @unittest.mock.patch('subprocess.run')

@@ -259,6 +259,7 @@ def normalise_config(config: dict[str, Any] | None) -> dict[str, Any]:
     else:
         res["scanning"] = {
             "secrets": {
+                "backend": "regex",
                 "patterns": list(res.get("leak_patterns", [])),
                 "exclude_paths": list(res.get("scan_exclude_paths", [])),
             }
@@ -2795,6 +2796,8 @@ def resolve_backend(
     """Resolves and instantiates the configured ScanBackend."""
     if config is None:
         config = {}
+    # Normalise so v1 configs get scanning.secrets.backend defaulted to "regex"
+    config = normalise_config(config)
 
     scanning_cfg = config.get("scanning") if isinstance(config.get("scanning"), dict) else {}
     secrets_cfg = (
