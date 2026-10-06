@@ -186,7 +186,7 @@ mkdir -p "$(dirname "$PLUGINS_JSON")"
 python3 - "$PLUGINS_JSON" <<'PY'
 import json, os, sys
 path = sys.argv[1]
-entry = {"path": "~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin"}
+entry = {"path": "~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer"}
 
 data = {"entries": []}
 if os.path.exists(path):
