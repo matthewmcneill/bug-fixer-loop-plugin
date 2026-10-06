@@ -8,16 +8,28 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-SCRIPT = os.path.join(os.path.dirname(__file__), "..", "scripts", "safe_post.py")
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+SCRIPT = str(SCRIPTS_DIR / "safe_post.py")
 
 
 class TestSafePost(unittest.TestCase):
     """Test safe_post.py as a subprocess (the way it's actually used)."""
 
-    def _run(self, *args, env=None) -> subprocess.CompletedProcess:
+    def setUp(self):
+        self.default_config_path = self._make_config([])
+
+    def tearDown(self):
+        if os.path.exists(self.default_config_path):
+            os.unlink(self.default_config_path)
+
+    def _run(self, *args, env=None, **kwargs) -> subprocess.CompletedProcess:
+        if env is None:
+            env = self._env_with_config(self.default_config_path)
         return subprocess.run(
             [sys.executable, SCRIPT, *args],
-            capture_output=True, text=True, env=env,
+            capture_output=True, text=True, env=env, **kwargs,
         )
 
     def _make_config(self, patterns):
@@ -193,19 +205,25 @@ class TestSafePost(unittest.TestCase):
 
     def test_invalid_env_config_uses_fallback(self):
         """When BUG_FIXER_CONFIG points to a nonexistent file, falls back to plugin config."""
-        env = os.environ.copy()
-        env["BUG_FIXER_CONFIG"] = "/nonexistent/path/config.json"
-        # Plugin's own config exists, so a clean body should pass scanning
-        r = self._run("pr-comment", "1",
-                       "--repo", "test/test",
-                       "--body", "This is a clean comment with no secrets",
-                       env=env)
-        # Should NOT be denied by fail-closed since fallback config exists
-        self.assertNotIn("failing closed", r.stderr.lower())
+        with tempfile.TemporaryDirectory() as td:
+            fallback_ws = Path(td) / ".agents" / "plugins" / "bug-fixer-loop-workspace"
+            fallback_ws.mkdir(parents=True)
+            (fallback_ws / "config.json").write_text(json.dumps({
+                "scanning": {"secrets": {"patterns": []}}
+            }))
+            env = os.environ.copy()
+            env["BUG_FIXER_CONFIG"] = "/nonexistent/path/config.json"
+            # Plugin's own config exists, so a clean body should pass scanning
+            r = self._run("pr-comment", "1",
+                           "--repo", "test/test",
+                           "--body", "This is a clean comment with no secrets",
+                           env=env, cwd=td)
+            # Should NOT be denied by fail-closed since fallback config exists
+            self.assertNotIn("failing closed", r.stderr.lower())
 
     def test_fail_closed_no_config_reachable(self):
-        """load_leak_patterns returns a catch-all when no workspace config is reachable."""
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+        """load_leak_patterns returns built-in patterns when no workspace config is reachable."""
+        sys.path.insert(0, str(SCRIPTS_DIR))
         orig_cwd = os.getcwd()
         try:
             import safe_post as sp_mod  # noqa: PLC0415 - imported after sys.path setup
@@ -214,18 +232,26 @@ class TestSafePost(unittest.TestCase):
                     patch.object(sp_mod, "DEFAULT_CONFIG", Path("/nonexistent/default")), \
                     patch.dict(os.environ, {"BUG_FIXER_CONFIG": "/also/nonexistent"}):
                 os.chdir(outside_repo)
-                self.assertEqual(sp_mod.load_leak_patterns(), [".*"])
+                patterns = sp_mod.load_leak_patterns()
+                # Should have the built-in floor patterns, not [".*"]
+                self.assertNotIn(".*", patterns)
+                self.assertTrue(len(patterns) >= len(sp_mod.BUILTIN_LEAK_PATTERNS))
         finally:
             os.chdir(orig_cwd)
             sys.path.pop(0)
             sys.modules.pop("safe_post", None)
 
 
-class TestGateBBlocksSafePost(unittest.TestCase):
-    """Gate B should deny agent run_command calls to safe_post.py."""
+class TestGateBAllowsSafePost(unittest.TestCase):
+    """Gate B should allow agent run_command calls to safe_post.py.
 
-    def test_gate_b_denies_safe_post(self):
-        """An agent running the egress proxy via run_command should be denied."""
+    safe_post.py is the sanctioned egress proxy for all agents —
+    it scans content for leaks before posting. Raw `gh` writes are
+    blocked; safe_post.py is the approved alternative.
+    """
+
+    def test_gate_b_allows_safe_post(self):
+        """An agent running the egress proxy via run_command should be allowed."""
         from pre_tool_gate import evaluate_gate_b
         result = evaluate_gate_b(
             "run_command",
@@ -234,9 +260,9 @@ class TestGateBBlocksSafePost(unittest.TestCase):
             [],
             {}
         )
-        self.assertIsNotNone(result)
-        self.assertEqual(result["decision"], "deny")
-        self.assertIn("dispatcher", result["reason"].lower())
+        # Should be allowed (None means no deny, or explicit allow)
+        if result:
+            self.assertEqual(result["decision"], "allow")
 
     def test_gate_b_allows_safe_ingest(self):
         """safe_ingest.py should NOT be blocked by this rule."""
@@ -277,8 +303,8 @@ class TestShellMutationRelativePaths(unittest.TestCase):
         self.assertTrue(result, "Relative path write to injection_cache.json should be blocked")
 
 
-class TestProxyDenyPrecision(unittest.TestCase):
-    """The proxy deny rule should be precise: only execution, not reads."""
+class TestProxyAllowPrecision(unittest.TestCase):
+    """safe_post.py is allowed for all agents. Reads and tests are also allowed."""
 
     def _gate_b(self, cmd):
         from pre_tool_gate import evaluate_gate_b
@@ -306,23 +332,25 @@ class TestProxyDenyPrecision(unittest.TestCase):
             self.assertNotEqual(result["decision"], "deny",
                                 "running test_safe_post should not be denied")
 
-    def test_glob_question_mark_denied(self):
-        """python3 scripts/safe_pos?.py should be denied (glob evasion)."""
-        result = self._gate_b("python3 scripts/safe_pos?.py issue-comment 1 --repo test/test --body hi")
-        self.assertIsNotNone(result)
-        self.assertEqual(result["decision"], "deny")
+    def test_direct_safe_post_allowed(self):
+        """python3 scripts/safe_post.py should be allowed."""
+        result = self._gate_b("python3 scripts/safe_post.py issue-comment 1 --repo test/test --body hi")
+        if result:
+            self.assertNotEqual(result["decision"], "deny",
+                                "safe_post.py is the sanctioned write path for all agents")
 
-    def test_glob_bracket_denied(self):
-        """python3 scripts/safe_pos[t].py should be denied (glob evasion)."""
-        result = self._gate_b("python3 scripts/safe_pos[t].py issue-comment 1 --repo test/test --body hi")
-        self.assertIsNotNone(result)
-        self.assertEqual(result["decision"], "deny")
-
-    def test_glob_star_denied(self):
-        """python3 scripts/safe_post* should be denied (glob evasion)."""
-        result = self._gate_b("python3 scripts/safe_post* issue-comment 1 --repo test/test --body hi")
-        self.assertIsNotNone(result)
-        self.assertEqual(result["decision"], "deny")
+    def test_glob_safe_post_allowed(self):
+        """Glob patterns targeting safe_post.py should also be allowed."""
+        for cmd in (
+            "python3 scripts/safe_pos?.py issue-comment 1 --repo test/test --body hi",
+            "python3 scripts/safe_pos[t].py issue-comment 1 --repo test/test --body hi",
+            "python3 scripts/safe_post* issue-comment 1 --repo test/test --body hi",
+        ):
+            with self.subTest(cmd=cmd):
+                result = self._gate_b(cmd)
+                if result:
+                    self.assertNotEqual(result["decision"], "deny",
+                                        f"glob targeting safe_post.py should be allowed: {cmd}")
 
 
 if __name__ == "__main__":

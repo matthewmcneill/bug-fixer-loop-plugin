@@ -10,7 +10,11 @@ import unittest
 import unittest.mock
 from typing import Any
 
-from scripts.pre_tool_gate import (
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from pre_tool_gate import (
     REASON_APPROVAL_INJECTION,
     REASON_AUTO_MERGE,
     REASON_EGRESS_LEAK,
@@ -35,7 +39,7 @@ from scripts.pre_tool_gate import (
 )
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
-GATE_SCRIPT = PLUGIN_ROOT / "scripts" / "pre_tool_gate.py"
+GATE_SCRIPT = PLUGIN_ROOT / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts" / "pre_tool_gate.py"
 
 # Test config (config.json no longer lives in plugin root — it's in the consumer workspace)
 TEST_CONFIG = {
@@ -50,8 +54,22 @@ TEST_CONFIG = {
 
 
 class TestPreToolGate(unittest.TestCase):
-    def _run_gate_stdin(self, payload: dict[str, Any], config_path: str | None = None) -> dict[str, Any]:
+    @classmethod
+    def setUpClass(cls):
+        """Create a temp config file so tests run in an 'enrolled' context."""
+        cls._config_tf = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        json.dump(TEST_CONFIG, cls._config_tf)
+        cls._config_tf.close()
+        cls._default_config_path = cls._config_tf.name
+
+    @classmethod
+    def tearDownClass(cls):
+        os.unlink(cls._default_config_path)
+
+    def _run_gate_stdin(self, payload: dict[str, Any], config_path: str | None = "USE_DEFAULT") -> dict[str, Any]:
         """Invokes pre_tool_gate.py via subprocess passing JSON payload on stdin."""
+        if config_path == "USE_DEFAULT":
+            config_path = self._default_config_path
         cmd = [sys.executable, str(GATE_SCRIPT)]
         if config_path:
             cmd.extend(["--config", config_path])
@@ -67,25 +85,32 @@ class TestPreToolGate(unittest.TestCase):
 
     # Gate A: File Write Protection Tests
     def test_gate_a_deny_write_to_spec_file(self):
-        payload = {
-            "toolCall": {
-                "name": "write_to_file",
-                "args": {"TargetFile": "docs/plugin-architecture.md"},
+        # Provide explicit config since unenrolled workspaces have empty spec_file_path
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+            json.dump({"spec_file_path": "docs/plugin-architecture.md"}, tf)
+            cfg_path = tf.name
+        try:
+            payload = {
+                "toolCall": {
+                    "name": "write_to_file",
+                    "args": {"TargetFile": "docs/plugin-architecture.md"},
+                }
             }
-        }
-        res = self._run_gate_stdin(payload)
-        self.assertEqual(res["decision"], "deny")
-        self.assertEqual(res["reason"], REASON_SPEC_IMMUTABLE)
+            res = self._run_gate_stdin(payload, config_path=cfg_path)
+            self.assertEqual(res["decision"], "deny")
+            self.assertEqual(res["reason"], REASON_SPEC_IMMUTABLE)
 
-        payload_replace = {
-            "toolCall": {
-                "name": "replace_file_content",
-                "args": {"TargetFile": "/path/to/docs/plugin-architecture.md"},
+            payload_replace = {
+                "toolCall": {
+                    "name": "replace_file_content",
+                    "args": {"TargetFile": "/path/to/docs/plugin-architecture.md"},
+                }
             }
-        }
-        res_replace = self._run_gate_stdin(payload_replace)
-        self.assertEqual(res_replace["decision"], "deny")
-        self.assertEqual(res_replace["reason"], REASON_SPEC_IMMUTABLE)
+            res_replace = self._run_gate_stdin(payload_replace, config_path=cfg_path)
+            self.assertEqual(res_replace["decision"], "deny")
+            self.assertEqual(res_replace["reason"], REASON_SPEC_IMMUTABLE)
+        finally:
+            os.unlink(cfg_path)
 
     def test_gate_a_deny_write_to_protected_file(self):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
@@ -203,22 +228,54 @@ class TestPreToolGate(unittest.TestCase):
             self.assertEqual(res["decision"], "deny")
             self.assertEqual(res["reason"], REASON_RAW_GH)
 
-    def test_gate_b_deny_shell_mutation_of_spec_file(self):
-        for cmd in (
-            "sed -i '' 's/old/new/' docs/plugin-architecture.md",
-            "cat patch.txt > docs/plugin-architecture.md",
-            "rm docs/plugin-architecture.md",
-            "cp new.md docs/plugin-architecture.md",
-        ):
-            payload = {
-                "toolCall": {
-                    "name": "run_command",
-                    "args": {"CommandLine": cmd},
-                }
+    def test_gate_b_allows_gh_in_unenrolled_workspace(self):
+        """Gate B should not block gh commands in unenrolled workspaces."""
+        payload = {
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": "gh issue view 5"},
             }
-            res = self._run_gate_stdin(payload)
-            self.assertEqual(res["decision"], "deny")
-            self.assertEqual(res["reason"], REASON_SHELL_MUTATION)
+        }
+        # Pass config_path=None to skip default config → unenrolled
+        res = self._run_gate_stdin(payload, config_path=None)
+        self.assertEqual(res["decision"], "allow")
+
+    def test_gate_b_egress_leak_blocked_even_unenrolled(self):
+        """Egress leak scanning should apply even in unenrolled workspaces."""
+        # ghp_ token in a gh command body should be blocked everywhere
+        payload = {
+            "toolCall": {
+                "name": "run_command",
+                "args": {
+                    "CommandLine": "gh issue comment 1 --body 'token: ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'"
+                },
+            }
+        }
+        res = self._run_gate_stdin(payload, config_path=None)
+        self.assertEqual(res["decision"], "deny")
+
+    def test_gate_b_deny_shell_mutation_of_spec_file(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+            json.dump({"spec_file_path": "docs/plugin-architecture.md"}, tf)
+            cfg_path = tf.name
+        try:
+            for cmd in (
+                "sed -i '' 's/old/new/' docs/plugin-architecture.md",
+                "cat patch.txt > docs/plugin-architecture.md",
+                "rm docs/plugin-architecture.md",
+                "cp new.md docs/plugin-architecture.md",
+            ):
+                payload = {
+                    "toolCall": {
+                        "name": "run_command",
+                        "args": {"CommandLine": cmd},
+                    }
+                }
+                res = self._run_gate_stdin(payload, config_path=cfg_path)
+                self.assertEqual(res["decision"], "deny")
+                self.assertEqual(res["reason"], REASON_SHELL_MUTATION)
+        finally:
+            os.unlink(cfg_path)
 
     def test_gate_b_deny_shell_mutation_of_security_script(self):
         for cmd in (
@@ -256,7 +313,7 @@ class TestPreToolGate(unittest.TestCase):
     def test_gate_b_allow_normal_command(self):
         for cmd in (
             "pio test -e native",
-            "python3 scripts/safe_ingest.py issue-list",
+            "python3 daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py issue-list",
             "git status",
             "git checkout -b fix/issue-100",
             "git add src/main.cpp",
@@ -326,7 +383,7 @@ class TestPreToolGate(unittest.TestCase):
             subprocess.run(["git", "add", "secret.txt"], cwd=temp_dir, check=True, capture_output=True)
 
             patterns = TEST_CONFIG["leak_patterns"]
-            import scripts.pre_tool_gate as pre_tool_gate
+            import pre_tool_gate
             violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns)
             self.assertEqual(len(violations), 1)
             self.assertIn("secret.txt", violations[0])
@@ -386,7 +443,7 @@ class TestPreToolGate(unittest.TestCase):
             subprocess.run(["git", "add", "tests/credentials.txt"], cwd=temp_dir, check=True, capture_output=True)
             
             patterns = TEST_CONFIG["leak_patterns"]
-            import scripts.pre_tool_gate as pre_tool_gate
+            import pre_tool_gate
             violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns, exclude_paths=["tests/"])
             self.assertEqual(len(violations), 0)
             self.assertEqual(excluded, 1)
@@ -407,7 +464,7 @@ class TestPreToolGate(unittest.TestCase):
             subprocess.run(["git", "add", "tests/credentials.txt", "src/credentials.txt"], cwd=temp_dir, check=True, capture_output=True)
             
             patterns = TEST_CONFIG["leak_patterns"]
-            import scripts.pre_tool_gate as pre_tool_gate
+            import pre_tool_gate
             violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns, exclude_paths=["tests/"])
             self.assertEqual(len(violations), 1)
             self.assertIn("src/credentials.txt", violations[0])
@@ -738,7 +795,7 @@ class TestPreToolGate(unittest.TestCase):
 
     # BetterleaksBackend Tests
     def test_betterleaks_build_env_strips_vars(self):
-        from scripts.pre_tool_gate import BetterleaksBackend
+        from pre_tool_gate import BetterleaksBackend
         import os
         os.environ['BETTERLEAKS_VALIDATE'] = '1'
         os.environ['BETTERLEAKS_SOMETHING'] = 'abc'
@@ -752,7 +809,7 @@ class TestPreToolGate(unittest.TestCase):
         self.assertIn('OTHER_VAR', env)
 
     def test_betterleaks_build_cmd_flags(self):
-        from scripts.pre_tool_gate import BetterleaksBackend, ScanScope
+        from pre_tool_gate import BetterleaksBackend, ScanScope
         backend = BetterleaksBackend(config_path='/fake/path.toml')
         cmd = backend._build_cmd('/repo', ScanScope.TREE)
         
@@ -771,7 +828,7 @@ class TestPreToolGate(unittest.TestCase):
             self.assertIn(flag, cmd)
 
     def test_betterleaks_build_cmd_scopes(self):
-        from scripts.pre_tool_gate import BetterleaksBackend, ScanScope
+        from pre_tool_gate import BetterleaksBackend, ScanScope
         backend = BetterleaksBackend()
         
         cmd_staged = backend._build_cmd('/repo', ScanScope.STAGED)
@@ -782,7 +839,7 @@ class TestPreToolGate(unittest.TestCase):
 
     @unittest.mock.patch('subprocess.check_output')
     def test_betterleaks_scan_parses_json(self, mock_check_output):
-        from scripts.pre_tool_gate import BetterleaksBackend, ScanScope
+        from pre_tool_gate import BetterleaksBackend, ScanScope
         mock_output = '''{
             "scan": {"state": "complete", "files_scanned": 12},
             "findings": [
@@ -803,7 +860,7 @@ class TestPreToolGate(unittest.TestCase):
 
     @unittest.mock.patch('subprocess.check_output')
     def test_betterleaks_scan_no_raw_secret(self, mock_check_output):
-        from scripts.pre_tool_gate import BetterleaksBackend, ScanScope
+        from pre_tool_gate import BetterleaksBackend, ScanScope
         mock_output = '''{
             "scan": {"state": "complete", "files_scanned": 1},
             "findings": [
@@ -826,7 +883,7 @@ class TestPreToolGate(unittest.TestCase):
 
     @unittest.mock.patch('subprocess.run')
     def test_resolve_backend_fallback_to_regex(self, mock_run):
-        from scripts.pre_tool_gate import resolve_backend, RegexBackend
+        from pre_tool_gate import resolve_backend, RegexBackend
         import subprocess
         # Simulate betterleaks not found
         mock_run.side_effect = FileNotFoundError()
@@ -843,8 +900,8 @@ class TestPreToolGate(unittest.TestCase):
 
     @unittest.mock.patch('subprocess.run')
     def test_resolve_backend_returns_betterleaks(self, mock_run):
-        from scripts.pre_tool_gate import resolve_backend
-        from scripts.pre_tool_gate import BetterleaksBackend
+        from pre_tool_gate import resolve_backend
+        from pre_tool_gate import BetterleaksBackend
         # Simulate betterleaks found
         mock_run.return_value = None
         
@@ -923,7 +980,7 @@ class TestPreToolGate(unittest.TestCase):
 
     @unittest.mock.patch("subprocess.run")
     def test_resolve_backend_reads_normalised_v2_config(self, mock_run):
-        from scripts.pre_tool_gate import BetterleaksBackend, RegexBackend, resolve_backend
+        from pre_tool_gate import BetterleaksBackend, RegexBackend, resolve_backend
 
         mock_run.return_value = None
 
@@ -1007,7 +1064,7 @@ class TestPreToolGate(unittest.TestCase):
                 "scan_exclude_paths": ["tests/"],
             }
 
-            import scripts.pre_tool_gate as pre_tool_gate
+            import pre_tool_gate
 
             violations, scanned, excluded = pre_tool_gate.scan_repository(
                 temp_dir,

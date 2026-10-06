@@ -21,28 +21,70 @@ Modern software development often suffers from an accumulation of small bugs, DX
 
 ## Getting Started
 
-### 1. Install
+### 1. Install Daemon
 ```bash
 ./scripts/install.sh
 ```
-The plugin ships **disabled** by default. No sidecars will run until you configure and enable it.
+Deploys the bug-fixer daemon to `~/.gemini/config/plugins/bug-fixer-daemon/` and enables it via `agy plugin enable bug-fixer-daemon`.
 
-### 2. Configure
+### 2. Enroll Repository
 ```bash
-./scripts/configure.sh --repo <owner/repo> --repo-dir <path>
+./scripts/enroll.sh -r <owner/repo> -d <repo-dir>
 ```
-The wizard validates connectivity, creates labels, and tests required commands.
+Creates a per-repo sidecar, sets up configuration and state directories under `~/.gemini/config/plugins/bug-fixer-daemon/sidecars/<owner--repo>/`, and registers the shared workspace plugin in `<repo-dir>/.agents/plugins.json`.
 
-### 3. Enable
+### 3. Pause / Resume
 ```bash
-agy plugin enable bug-fixer-loop
+agy plugin disable bug-fixer-daemon   # pause daemon
+agy plugin enable bug-fixer-daemon    # resume daemon
 ```
-The 3 background sidecars will now run on their configured schedules.
 
-### 4. Pause / Resume
+### 4. Unenroll Repository
 ```bash
-agy plugin disable bug-fixer-loop   # pause
-agy plugin enable bug-fixer-loop    # resume
+./scripts/unenroll.sh -r <owner/repo> -d <repo-dir>
+```
+Safely removes the enrolled repository's sidecar and removes the plugin registration from `.agents/plugins.json`.
+
+
+---
+
+## Directory Structure
+
+The plugin uses a split-daemon architecture separating global scheduler concerns from workspace execution:
+
+```
+bug-fixer-loop-plugin/ (Source Repository)
+├── daemon/
+│   ├── plugin.json                               ← Daemon plugin manifest
+│   ├── scripts/
+│   │   └── tick.py                              ← Minimal heartbeat launcher
+│   └── workspace-plugin/
+│       └── bug-fixer/                            ← Workspace plugin bundle
+│           ├── plugin.json                       ← Workspace plugin manifest
+│           ├── hooks.json                        ← PreToolUse security hooks
+│           ├── rules/                            ← Agent rules (AGENTS.md, etc.)
+│           ├── skills/                           ← Agent skill definitions
+│           ├── agents/                           ← Agent profiles (leak-auditor.md)
+│           └── scripts/                          ← Dispatchers, gates, and APIs
+└── scripts/
+    ├── install.sh                                ← Deploys daemon to ~/.gemini/config/plugins/
+    ├── enroll.sh                                 ← Enrolls a repository into the daemon
+    ├── unenroll.sh                               ← Unenrolls a repository from the daemon
+    └── uninstall.sh                              ← Uninstalls the daemon and cleans global state
+
+~/.gemini/config/plugins/bug-fixer-daemon/ (Installed Daemon)
+├── plugin.json
+├── scripts/tick.py
+├── sidecars/                                     ← Per-repo sidecar registry
+│   └── <owner--repo>/
+│       ├── sidecar.json                          ← 5-minute cron sidecar manifest
+│       ├── config.json                           ← Target repository configuration
+│       └── state/                                ← Claims, locks, dispatches, and logs
+└── workspace-plugin/bug-fixer/                   ← Shared workspace plugin bundle
+
+<enrolled-repo>/ (Consumer Repository)
+└── .agents/
+    └── plugins.json                              ← Loads workspace-plugin for the repo
 ```
 
 ---
@@ -176,60 +218,67 @@ See [Consumer Hook API](docs/plugin-architecture.md#consumer-hook-api-bugfixer_a
 
 ## Installation
 
-The plugin includes an installation script (`scripts/install.sh`) to link skills, agents, rules, and sidecars, followed by an interactive configuration wizard (`scripts/configure.sh`) that validates connectivity, creates GitHub labels, and configures the plugin.
-
-The plugin ships **disabled** by default. After installation and configuration, enable the plugin using `agy plugin enable bug-fixer-loop`.
+The plugin uses a two-step installation pattern:
+1. Run `scripts/install.sh` to install the daemon plugin to `~/.gemini/config/plugins/bug-fixer-daemon/`.
+2. Run `scripts/enroll.sh` to enroll target repositories into the daemon's sidecar scheduler and register the workspace plugin.
 
 ### Installation Steps
 
+> **Note:** Run `install.sh` from a normal terminal, not from inside an
+> Antigravity agent session. The integrity monitor will revert security
+> script updates made during a live session.
+
 ```bash
-# 1. Install plugin components
-./scripts/install.sh \
-  --repo matthewmcneill/esp32-app-foundation \
-  --repo-dir /Users/mcneillm/Documents/Projects/esp32-app-foundation \
-  --maintainer matthewmcneill
+# 1. Install daemon plugin components
+./scripts/install.sh
 
-# 2. Run the configuration wizard (validates connectivity, labels)
-./scripts/configure.sh --repo matthewmcneill/esp32-app-foundation --repo-dir /Users/mcneillm/Documents/Projects/esp32-app-foundation
+# 2. Enroll a target repository (sets up sidecar, config, state, and registers plugin)
+./scripts/enroll.sh -r matthewmcneill/esp32-app-foundation -d /Users/mcneillm/Documents/Projects/esp32-app-foundation
 
-# 3. Enable the plugin
-agy plugin enable bug-fixer-loop
+# 3. Enable the daemon plugin (enabled automatically if agy CLI is present)
+agy plugin enable bug-fixer-daemon
 ```
 
-### Install Flags & Options
+### Install Script Options
 
 ```
-Usage: ./scripts/install.sh [OPTIONS]
+Usage: ./scripts/install.sh
+
+Deploys the daemon plugin from daemon/ to ~/.gemini/config/plugins/bug-fixer-daemon/
+using rsync (preserving existing sidecars/ data), and enables the plugin via agy.
+```
+
+### Enrollment Script Options
+
+```
+Usage: ./scripts/enroll.sh -r <owner/repo> -d <repo-dir> [--migrate-state]
 
 Options:
-  -r, --repo <owner/repo>       Target GitHub repository (required)
-  -d, --repo-dir <path>         Local checkout path (defaults to ~/projects/<repo_name>)
-  -m, --maintainer <login>      Trusted maintainer (defaults to gh api user -q .login)
-  --skills-only                 Install skills, agents, and scripts without configuring sidecars
-  -h, --help                    Show this help message
+  -r <owner/repo>       Target GitHub repository (required)
+  -d <repo-dir>         Local checkout path of target repository (required)
+  --migrate-state       Migrate existing state from .agents/plugins/bug-fixer-loop-workspace
 ```
 
-### Configuration Wizard Flags & Options
+### Unenrollment Script Options
+
+To remove an enrolled repository without uninstalling the daemon:
+
+```bash
+./scripts/unenroll.sh -r matthewmcneill/esp32-app-foundation -d /Users/mcneillm/Documents/Projects/esp32-app-foundation
+```
 
 ```
-Usage: ./scripts/configure.sh [OPTIONS]
+Usage: ./scripts/unenroll.sh -r <owner/repo> [-d <repo-dir>]
 
-Options:
-  -r, --repo <owner/repo>       Target GitHub repository (e.g. owner/repo)
-  -d, --repo-dir <path>         Local checkout path of target repository
-  -m, --maintainer <login>      Trusted maintainer GitHub login
-  --spec-file <path>            Path to design specification file (default: docs/design_specification.md)
-  --test-command <cmd>          Test command to run (default: pio test -e native)
-  --lint-command <cmd>          Lint command to run (optional)
-  -y, --yes                     Non-interactive mode (accept defaults)
-  -h, --help                    Show this help message
+Checks for active in-flight claims, deletes the repo sidecar directory from the daemon,
+and removes the workspace-plugin entry from the consumer repo's .agents/plugins.json.
 ```
 
 ---
 
 ## Configuration Reference
 
-Configuration is managed in `config.json` at the root of the plugin or target repository:
+Configuration is managed per enrolled repository at `~/.gemini/config/plugins/bug-fixer-daemon/sidecars/<owner--repo>/config.json` (generated during enrollment):
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
@@ -286,27 +335,33 @@ To prevent conflicts between autonomous background agent loops and human develop
 
 ## Enable & Disable
 
-Enable or disable the plugin at any time using standard Antigravity CLI commands:
+Enable or disable the daemon at any time using standard Antigravity CLI commands:
 
 ```bash
 # Enable the plugin
-agy plugin enable bug-fixer-loop
+agy plugin enable bug-fixer-daemon
 
 # Disable the plugin (pauses all sidecars and hooks)
-agy plugin disable bug-fixer-loop
+agy plugin disable bug-fixer-daemon
 ```
 
 ---
 
 ## Uninstallation
 
-To remove all deployed skills, sidecars, hooks, and agents while preserving `config.json`:
+To remove the bug-fixer daemon plugin and associated artifacts:
 
 ```bash
-./scripts/uninstall.sh \
-  --repo matthewmcneill/esp32-app-foundation \
-  --repo-dir /Users/mcneillm/Documents/Projects/esp32-app-foundation
+# Recommended: Unenroll repositories first
+./scripts/unenroll.sh -r <owner/repo> -d <repo-dir>
+
+# Uninstall the daemon
+./scripts/uninstall.sh
+
+# If enrolled sidecars remain and you want to remove everything:
+./scripts/uninstall.sh --force
 ```
+
 
 ---
 

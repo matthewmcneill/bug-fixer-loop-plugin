@@ -5,10 +5,15 @@ import os
 import shutil
 import tempfile
 import unittest
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.bugfixer_api import BugFixer, SessionContext, _find_dispatch, _load_config
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from bugfixer_api import BugFixer, SessionContext, _find_dispatch, _load_config
 
 
 class TestSessionContextDefaults(unittest.TestCase):
@@ -148,7 +153,7 @@ class TestBugFixerGetSessionContext(unittest.TestCase):
         (self.dispatches / f"{conv_id}.json").write_text(json.dumps(data))
 
     def _patch_workspace(self):
-        return patch("scripts.bugfixer_api._find_workspace_dir",
+        return patch("bugfixer_api._find_workspace_dir",
                      return_value=self.workspace)
 
     def test_empty_conversation_id(self):
@@ -216,7 +221,7 @@ class TestBugFixerGetSessionContext(unittest.TestCase):
         self.assertEqual(ctx.issue_number, 99)
 
     def test_no_workspace_returns_defaults(self):
-        with patch("scripts.bugfixer_api._find_workspace_dir",
+        with patch("bugfixer_api._find_workspace_dir",
                    return_value=None):
             ctx = BugFixer.get_session_context("any-id")
         self.assertFalse(ctx.is_autonomous)
@@ -242,7 +247,7 @@ class TestBugFixerConvenience(unittest.TestCase):
         shutil.rmtree(self.tmp)
 
     def _patch_workspace(self):
-        return patch("scripts.bugfixer_api._find_workspace_dir",
+        return patch("bugfixer_api._find_workspace_dir",
                      return_value=self.workspace)
 
     def test_is_autonomous_true(self):
@@ -270,7 +275,7 @@ class TestBugFixerConvenience(unittest.TestCase):
         self.assertEqual(config["engineering_model"], "pro")
 
     def test_get_config_no_workspace(self):
-        with patch("scripts.bugfixer_api._find_workspace_dir",
+        with patch("bugfixer_api._find_workspace_dir",
                    return_value=None):
             config = BugFixer.get_config()
         self.assertEqual(config, {})

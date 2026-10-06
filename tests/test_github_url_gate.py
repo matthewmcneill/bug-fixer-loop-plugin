@@ -10,8 +10,9 @@ import sys
 import unittest
 
 REPO = Path(__file__).resolve().parents[1]
-GATE = REPO / "scripts" / "github_url_gate.py"
-sys.path.insert(0, str(REPO / "scripts"))
+SCRIPTS_DIR = REPO / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"
+GATE = SCRIPTS_DIR / "github_url_gate.py"
+sys.path.insert(0, str(SCRIPTS_DIR))
 
 from github_url_gate import REASON, REASON_URL_LEAK, url_leaks  # noqa: E402
 
@@ -88,10 +89,36 @@ class TestGateHook(unittest.TestCase):
             {"decision": "deny", "reason": REASON_URL_LEAK},
         )
 
-    def test_github_issue_page_still_redirected(self):
+    def test_github_issue_page_allowed_when_unenrolled(self):
+        """Unenrolled workspaces should not block GitHub URLs."""
         self.assertEqual(
-            self._run("https://github.com/o/r/issues/22"), {"decision": "deny", "reason": REASON}
+            self._run("https://github.com/o/r/issues/22"), {"decision": "allow"}
         )
+
+    def test_github_issue_page_denied_when_enrolled(self):
+        """Enrolled workspaces should block GitHub issue URLs."""
+        import tempfile
+        # Create a temp config that simulates enrollment
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+            json.dump({"repo_dir": str(REPO), "target_repo": "o/r"}, tf)
+            cfg_path = tf.name
+        try:
+            payload = {
+                "toolCall": {"name": "read_url_content", "args": {"Url": "https://github.com/o/r/issues/22"}},
+                "workspacePaths": [str(REPO)],
+            }
+            env = {k: v for k, v in os.environ.items()}
+            env["BUG_FIXER_CONFIG"] = cfg_path
+            out = subprocess.run(
+                [sys.executable, str(GATE)],
+                input=json.dumps(payload),
+                capture_output=True, text=True, env=env, check=True,
+            )
+            res = json.loads(out.stdout)
+            self.assertEqual(res["decision"], "deny")
+            self.assertEqual(res["reason"], REASON)
+        finally:
+            os.unlink(cfg_path)
 
     def test_ordinary_url_allowed(self):
         self.assertEqual(self._run(ORDINARY_URLS[0]), {"decision": "allow"})

@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 
 import sys
 from pathlib import Path
-SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts"
+SCRIPT_DIR = Path(__file__).resolve().parent.parent / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from liveness import agentapi_is_reachable, check_orphaned_prs, _check_success

@@ -61,7 +61,9 @@ class FunctionScopedImportVisitor(ast.NodeVisitor):
 class TestImportHygiene(unittest.TestCase):
     def setUp(self):
         self.repo_root = Path(__file__).resolve().parent.parent
-        self.scripts_dir = self.repo_root / "scripts"
+        self.scripts_dir = (
+            self.repo_root / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"
+        )
 
     def test_no_function_scoped_imports_in_scripts(self):
         """Verify no script files define imports inside function or method bodies."""

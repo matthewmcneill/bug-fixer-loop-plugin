@@ -13,6 +13,9 @@ class TestEngineeringDispatcherPrompts(unittest.TestCase):
     def setUp(self):
         self.script_path = (
             Path(__file__).resolve().parent.parent
+            / "daemon"
+            / "workspace-plugin"
+            / "bug-fixer"
             / "scripts"
             / "engineering_dispatcher.py"
         )

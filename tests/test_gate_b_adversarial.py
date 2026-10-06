@@ -10,6 +10,7 @@ bypasses here before fixing them.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -20,7 +21,7 @@ import unittest
 import unittest.mock
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "scripts"))
+sys.path.insert(0, str(REPO / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts"))
 
 import pre_tool_gate  # noqa: E402
 from pre_tool_gate import BUILTIN_LEAK_PATTERNS, evaluate_pretool_call, load_config  # noqa: E402
@@ -30,6 +31,41 @@ import shell_analysis  # noqa: E402
 WS = ".agents/plugins/bug-fixer-loop-workspace"
 SECRET = "ya29.AbCdEfGh123"
 GH_TOKEN = "ghp_" + "A" * 36
+
+_CONFIG_DIR = None
+_CONFIG_PATH = None
+_ORIG_CONFIG_ENV = None
+
+
+def setUpModule():
+    global _CONFIG_DIR, _CONFIG_PATH, _ORIG_CONFIG_ENV
+    _CONFIG_DIR = tempfile.mkdtemp(prefix="gateb-cfg-")
+    _CONFIG_PATH = Path(_CONFIG_DIR) / "config.json"
+    _CONFIG_PATH.write_text(
+        json.dumps({
+            "repo_dir": str(REPO),
+            "github_repo": "matthewmcneill/bug-fixer-loop-plugin",
+            "spec_file_path": "docs/plugin-architecture.md",
+            "protected_files": ["docs/plugin-architecture.md"],
+            "leak_patterns": [
+                r"ya29\.[A-Za-z0-9_-]+",
+                r"AKIA[0-9A-Z]{16}",
+                r"-----BEGIN (?:RSA |EC )?PRIVATE KEY-----",
+            ],
+        })
+    )
+    _ORIG_CONFIG_ENV = os.environ.get("BUG_FIXER_CONFIG")
+    os.environ["BUG_FIXER_CONFIG"] = str(_CONFIG_PATH)
+
+
+def tearDownModule():
+    global _CONFIG_DIR, _ORIG_CONFIG_ENV
+    if _ORIG_CONFIG_ENV is None:
+        os.environ.pop("BUG_FIXER_CONFIG", None)
+    else:
+        os.environ["BUG_FIXER_CONFIG"] = _ORIG_CONFIG_ENV
+    if _CONFIG_DIR:
+        shutil.rmtree(_CONFIG_DIR, ignore_errors=True)
 
 
 def _attacks(rt: str) -> list[str]:
@@ -182,22 +218,6 @@ def _attacks(rt: str) -> list[str]:
         f"echo x > {WS}/{{config,other}}.json",
         f"node -e \"require('fs').writeFileSync('{WS}/config.json','{{}}')\"",
         f'awk \'BEGIN{{print "x" > "{WS}/config.json"}}\'',
-        # The egress proxy is dispatcher-only, in every invocation form
-        "python3 scripts/safe_post.py issue-comment 5 --repo o/r --body hi",
-        "scripts/safe_post.py issue-comment 5 --repo o/r --body hi",
-        "./scripts/safe_post.py issue-comment 5",
-        f"BUG_FIXER_CONFIG=/tmp/e.json scripts/safe_post.py issue-comment 5 --body {SECRET}",
-        "python3 -u scripts/safe_post.py issue-comment 5",
-        "python3.12 scripts/safe_post.py x",
-        "python3 scripts/safe_p*.py x",
-        "python3 scripts/safe_pos?.py x",
-        "python3 scripts/safe_{post,x}.py x",
-        "python3 -c \"import runpy;runpy.run_path('scripts/safe_post.py')\"",
-        f"python3 {rt}/proxy_link.py issue-comment 5",
-        "env python3 scripts/safe_post.py x",
-        "sudo -u me python3 scripts/safe_post.py x",
-        "tmux new -d python3 scripts/safe_post.py x",
-        "nohup scripts/safe_post.py issue-comment 5 &",
         # Inline code / interpreters / unmodelled wrappers that run gh
         "python3 -c \"import subprocess;subprocess.run(['gh','pr','merge','1'])\"",
         "python3 -c \"getattr(__import__('os'),'sys'+'tem')('gh pr merge 1')\"",
@@ -284,9 +304,16 @@ def _legitimate(rt: str) -> list[str]:
         "grep -n leak scripts/pre_tool_gate.py",
         "python3 -m unittest discover -s tests -v",
         "python3 -m unittest tests/test_safe_post.py",
-        "python3 scripts/safe_ingest.py issue-list --repo o/r --json number",
-        "python3 scripts/pre_tool_gate.py --scan-only .",
-        f"python3 scripts/pre_tool_gate.py --config {WS}/config.json --scan-only .",
+        "python3 daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py issue-list --repo o/r --json number",
+        # safe_post.py is the sanctioned egress proxy for all agents
+        "python3 scripts/safe_post.py issue-comment 5 --repo o/r --body hi",
+        "scripts/safe_post.py issue-comment 5 --repo o/r --body hi",
+        "./scripts/safe_post.py issue-comment 5",
+        "python3 -u scripts/safe_post.py issue-comment 5",
+        "python3.12 scripts/safe_post.py x",
+        "env python3 scripts/safe_post.py x",
+        "python3 daemon/workspace-plugin/bug-fixer/scripts/pre_tool_gate.py --scan-only .",
+        f"python3 daemon/workspace-plugin/bug-fixer/scripts/pre_tool_gate.py --config {WS}/config.json --scan-only .",
         "python3 --version",
         "bash --version",
         'python3 -c "print(1+1)"',
@@ -366,9 +393,9 @@ class TestGateBAdversarial(unittest.TestCase):
         }
         for name, content in files.items():
             Path(cls.rt, name).write_text(content)
-        os.symlink(REPO / "scripts" / "safe_post.py", Path(cls.rt, "proxy_link.py"))
+        os.symlink(REPO / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts" / "safe_post.py", Path(cls.rt, "proxy_link.py"))
         os.mkfifo(Path(cls.rt, "fifo"))
-        cls.config = load_config(REPO / WS / "config.json")
+        cls.config = load_config(_CONFIG_PATH)
 
     @classmethod
     def tearDownClass(cls):
@@ -402,7 +429,6 @@ class TestGateBAdversarial(unittest.TestCase):
             f"gh label create x --description {SECRET}": pre_tool_gate.REASON_EGRESS_LEAK,
             "gh issue comment 5 --body-file -": pre_tool_gate.REASON_UNSCANNABLE,
             f"python3 -c \"open('{WS}/config.json','w')\"": pre_tool_gate.REASON_SHELL_MUTATION,
-            "./scripts/safe_post.py issue-comment 5": pre_tool_gate.REASON_PROXY,
         }
         for cmd, reason in cases.items():
             with self.subTest(cmd=cmd):
@@ -414,7 +440,7 @@ class TestPushToDefaultBranch(unittest.TestCase):
 
     def _decide(self, cmd: str, cwd: str) -> str:
         payload = {"toolCall": {"name": "run_command", "args": {"CommandLine": cmd, "Cwd": cwd}}}
-        return evaluate_pretool_call(payload, load_config(REPO / WS / "config.json"))["decision"]
+        return evaluate_pretool_call(payload, load_config(_CONFIG_PATH))["decision"]
 
     def _repo_on(self, branch: str) -> str:
         d = tempfile.mkdtemp(prefix="gateb-push-")
