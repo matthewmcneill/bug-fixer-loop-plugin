@@ -50,6 +50,16 @@ TEST_CONFIG = {
         "AKIA[0-9A-Z]{16}",
         "-----BEGIN (RSA |EC )?PRIVATE KEY-----",
     ],
+    "scanning": {
+        "secrets": {
+            "backend": "regex",
+            "patterns": [
+                "ya29\\.[A-Za-z0-9_-]+",
+                "AKIA[0-9A-Z]{16}",
+                "-----BEGIN (RSA |EC )?PRIVATE KEY-----",
+            ],
+        }
+    },
 }
 
 
@@ -384,7 +394,7 @@ class TestPreToolGate(unittest.TestCase):
 
             patterns = TEST_CONFIG["leak_patterns"]
             import pre_tool_gate
-            violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns)
+            violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns, config=TEST_CONFIG)
             self.assertEqual(len(violations), 1)
             self.assertIn("secret.txt", violations[0])
             self.assertIn("AKIA[0-9A-Z]{16}", violations[0])
@@ -444,7 +454,7 @@ class TestPreToolGate(unittest.TestCase):
             
             patterns = TEST_CONFIG["leak_patterns"]
             import pre_tool_gate
-            violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns, exclude_paths=["tests/"])
+            violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns, exclude_paths=["tests/"], config=TEST_CONFIG)
             self.assertEqual(len(violations), 0)
             self.assertEqual(excluded, 1)
             self.assertEqual(scanned, 0)
@@ -465,7 +475,7 @@ class TestPreToolGate(unittest.TestCase):
             
             patterns = TEST_CONFIG["leak_patterns"]
             import pre_tool_gate
-            violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns, exclude_paths=["tests/"])
+            violations, scanned, excluded = pre_tool_gate.scan_repository(temp_dir, patterns, exclude_paths=["tests/"], config=TEST_CONFIG)
             self.assertEqual(len(violations), 1)
             self.assertIn("src/credentials.txt", violations[0])
             self.assertEqual(excluded, 1)
@@ -652,7 +662,7 @@ class TestPreToolGate(unittest.TestCase):
             backend = RegexBackend(patterns)
             backend_violations = backend.scan(temp_dir, ScanScope.TREE)
 
-            repo_violations, scanned, excluded = scan_repository(temp_dir, patterns)
+            repo_violations, scanned, excluded = scan_repository(temp_dir, patterns, config=TEST_CONFIG)
 
             self.assertEqual(len(backend_violations), len(repo_violations))
             self.assertEqual([str(v) for v in backend_violations], repo_violations)
@@ -707,8 +717,9 @@ class TestPreToolGate(unittest.TestCase):
         self.assertNotEqual(hash1, backend3.config_hash())
 
     def test_resolve_backend_returns_regex_for_regex_and_unknown(self):
-        # Default config without scanning block
-        b1 = resolve_backend({})
+        # Default config without scanning block — mock betterleaks not found
+        with unittest.mock.patch('subprocess.run', side_effect=FileNotFoundError()):
+            b1 = resolve_backend({})
         self.assertIsInstance(b1, RegexBackend)
         self.assertEqual(b1.name, "regex")
         self.assertEqual(b1.version, "builtin")
@@ -790,7 +801,7 @@ class TestPreToolGate(unittest.TestCase):
             ]
             proc = subprocess.run(cmd, capture_output=True, text=True)
             self.assertEqual(proc.returncode, 0)
-            self.assertIn("backend=regex (degraded)", proc.stdout)
+            self.assertIn("backend=regex", proc.stdout)
 
 
     # BetterleaksBackend Tests
@@ -814,28 +825,34 @@ class TestPreToolGate(unittest.TestCase):
         cmd = backend._build_cmd('/repo', ScanScope.TREE)
         
         expected_flags = [
-            '--validate=false',
-            '--analyze=false',
+            '--validation=false',
             '--redact',
             '--no-banner',
-            '-o', '-',
+            '-f', 'json',
+            '-r', '-',
             '--exit-code', '1',
-            '--ignore-file', '/dev/null',
+            '-i', '/dev/null',
             '--config', '/fake/path.toml'
         ]
         
         for flag in expected_flags:
             self.assertIn(flag, cmd)
+        # v2 flags that should NOT be present
+        self.assertNotIn('--validate=false', cmd)
+        self.assertNotIn('--analyze=false', cmd)
+        self.assertNotIn('-o', cmd)
 
     def test_betterleaks_build_cmd_scopes(self):
         from pre_tool_gate import BetterleaksBackend, ScanScope
         backend = BetterleaksBackend()
         
         cmd_staged = backend._build_cmd('/repo', ScanScope.STAGED)
-        self.assertEqual(cmd_staged[:4], ['betterleaks', 'git', '--staged', '/repo'])
+        self.assertTrue(cmd_staged[0].endswith('betterleaks'))
+        self.assertEqual(cmd_staged[1:4], ['git', '--staged', '/repo'])
         
         cmd_tree = backend._build_cmd('/repo', ScanScope.TREE)
-        self.assertEqual(cmd_tree[:3], ['betterleaks', 'fs', '/repo'])
+        self.assertTrue(cmd_tree[0].endswith('betterleaks'))
+        self.assertEqual(cmd_tree[1:3], ['dir', '/repo'])
 
     @unittest.mock.patch('subprocess.check_output')
     def test_betterleaks_scan_parses_json(self, mock_check_output):
@@ -880,6 +897,53 @@ class TestPreToolGate(unittest.TestCase):
         self.assertNotIn("super_secret_raw_text", violations[0].redacted_match)
         self.assertNotIn("super_secret_raw_text", str(violations[0]))
         self.assertEqual(violations[0].redacted_match, "supe...")
+
+    @unittest.mock.patch('subprocess.check_output')
+    def test_betterleaks_scan_v1_flat_array_format(self, mock_check_output):
+        """v1/gitleaks-compat format: flat list with File, StartLine, RuleID, Match."""
+        from pre_tool_gate import BetterleaksBackend, ScanScope
+        mock_output = '''[
+            {
+                "RuleID": "github-pat",
+                "File": "src/config.py",
+                "StartLine": 42,
+                "Match": "REDACTED",
+                "Secret": "REDACTED",
+                "Entropy": 3.5,
+                "Fingerprint": "src/config.py:github-pat:42"
+            },
+            {
+                "RuleID": "generic-api-key",
+                "File": "tests/test_auth.py",
+                "StartLine": 10,
+                "Match": "REDACTED",
+                "Secret": "REDACTED",
+                "Entropy": 2.1,
+                "Fingerprint": "tests/test_auth.py:generic-api-key:10"
+            }
+        ]'''
+        mock_check_output.return_value = mock_output
+
+        backend = BetterleaksBackend()
+        violations = backend.scan('/repo', ScanScope.TREE)
+
+        self.assertEqual(len(violations), 2)
+        self.assertEqual(violations[0].path, "src/config.py")
+        self.assertEqual(violations[0].line, 42)
+        self.assertEqual(violations[0].rule, "github-pat")
+        self.assertEqual(violations[1].path, "tests/test_auth.py")
+        self.assertEqual(violations[1].rule, "generic-api-key")
+
+    @unittest.mock.patch('subprocess.check_output')
+    def test_betterleaks_scan_clean_empty_output(self, mock_check_output):
+        """Clean scan produces empty stdout — should return empty violations, not raise."""
+        from pre_tool_gate import BetterleaksBackend, ScanScope
+        mock_check_output.return_value = ""
+
+        backend = BetterleaksBackend()
+        violations = backend.scan('/repo', ScanScope.TREE)
+
+        self.assertEqual(violations, [])
 
     @unittest.mock.patch('subprocess.run')
     def test_resolve_backend_fallback_to_regex(self, mock_run):

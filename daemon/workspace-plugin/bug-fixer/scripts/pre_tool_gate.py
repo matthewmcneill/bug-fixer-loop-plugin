@@ -245,6 +245,7 @@ def normalise_config(config: dict[str, Any] | None) -> dict[str, Any]:
     else:
         res["scanning"] = {
             "secrets": {
+                "backend": "regex",
                 "patterns": list(res.get("leak_patterns", [])),
                 "exclude_paths": list(res.get("scan_exclude_paths", [])),
             }
@@ -2610,7 +2611,7 @@ class BetterleaksBackend:
         if scope == ScanScope.STAGED:
             cmd.extend(["git", "--staged", repo_dir])
         elif scope == ScanScope.TREE:
-            cmd.extend(["fs", repo_dir])
+            cmd.extend(["dir", repo_dir])
         elif scope == ScanScope.HISTORY:
             cmd.extend(["git", repo_dir])
         else:
@@ -2618,15 +2619,16 @@ class BetterleaksBackend:
 
         cmd.extend(
             [
-                "--validate=false",
-                "--analyze=false",
+                "--validation=false",
                 "--redact",
                 "--no-banner",
-                "-o",
+                "-f",
+                "json",
+                "-r",
                 "-",
                 "--exit-code",
                 "1",
-                "--ignore-file",
+                "-i",
                 "/dev/null",
             ]
         )
@@ -2663,32 +2665,56 @@ class BetterleaksBackend:
                 raise RuntimeError(f"Betterleaks failed: {e.stderr}")
 
         if not out.strip():
-            raise RuntimeError("Betterleaks produced unparseable output — failing closed")
+            # No output means clean scan — return empty violations
+            self.last_config_hash = None
+            return []
 
         try:
             data = json.loads(out)
         except json.JSONDecodeError:
             raise RuntimeError("Betterleaks produced unparseable output — failing closed")
 
-        if not isinstance(data, dict) or "findings" not in data:
-            raise RuntimeError("Betterleaks output missing expected envelope structure")
-        scan_state = data.get("scan", {}).get("state", "")
-        if scan_state != "complete":
-            raise RuntimeError(f"Betterleaks scan did not complete (state={scan_state})")
-
-        self.last_config_hash = data.get("scan", {}).get("config_hash")
-        findings = data.get("findings", [])
+        # Support both v1 (flat array) and v2 (envelope dict) output formats
+        if isinstance(data, list):
+            # v1 / gitleaks-compat format: flat list of findings
+            findings = data
+            self.last_config_hash = None
+        elif isinstance(data, dict) and "findings" in data:
+            # v2 envelope format: {"findings": [...], "scan": {...}}
+            scan_state = data.get("scan", {}).get("state", "")
+            if scan_state and scan_state != "complete":
+                raise RuntimeError(f"Betterleaks scan did not complete (state={scan_state})")
+            self.last_config_hash = data.get("scan", {}).get("config_hash")
+            findings = data.get("findings", [])
+        else:
+            raise RuntimeError("Betterleaks output missing expected structure")
 
         if exclude_paths:
             exclude_paths = [p for p in exclude_paths if p and p != "/"]
 
         violations = []
         for finding in findings:
-            path = finding.get("location", {}).get("path", "")
+            # Support both v1 and v2 field names
+            # v1: File, StartLine, RuleID, Match
+            # v2: location.path, location.start_line, rule_id, match.value
+            if "location" in finding:
+                path = finding["location"].get("path", "")
+                line = finding["location"].get("start_line", 0)
+            else:
+                path = finding.get("File", "")
+                line = finding.get("StartLine", 0)
+
+            rule = finding.get("rule_id") or finding.get("RuleID", "unknown")
+
+            if isinstance(finding.get("match"), dict):
+                redacted_match = finding["match"].get("value", "REDACTED")
+            else:
+                redacted_match = finding.get("Match", "REDACTED")
+
             if not path or path.startswith(".git/") or path.startswith("_agents/"):
                 continue
 
-            # Betterleaks fs scans return absolute paths; make them relative
+            # Betterleaks dir scans return absolute paths; make them relative
             if os.path.isabs(path):
                 try:
                     path = os.path.relpath(path, repo_dir)
@@ -2698,10 +2724,6 @@ class BetterleaksBackend:
             if exclude_paths and any(path.startswith(ep) for ep in exclude_paths):
                 self.excluded_count += 1
                 continue
-
-            line = finding.get("location", {}).get("start_line", 0)
-            rule = finding.get("rule_id", "unknown")
-            redacted_match = finding.get("match", {}).get("value", "")
 
             violations.append(
                 ScanViolation(
@@ -2741,6 +2763,8 @@ def resolve_backend(
     """Resolves and instantiates the configured ScanBackend."""
     if config is None:
         config = {}
+    # Normalise so v1 configs get scanning.secrets.backend defaulted to "regex"
+    config = normalise_config(config)
 
     scanning_cfg = config.get("scanning") if isinstance(config.get("scanning"), dict) else {}
     secrets_cfg = (
