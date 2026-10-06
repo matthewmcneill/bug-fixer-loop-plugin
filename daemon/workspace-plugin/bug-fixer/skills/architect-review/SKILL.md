@@ -145,22 +145,7 @@ The dispatcher passes the current review round (e.g., "Review round: 3 of 5") in
 
 If the PR is architecturally sound, introduces zero technical debt, has verified pointer/memory safety, satisfies all constraints, and includes adequate tests:
 
-1. **Add `bug-fixer:architect:approved` label:**
-   ```bash
-   gh pr edit <pr_number> --repo <target_repo> --add-label "bug-fixer:architect:approved"
-   ```
-
-2. **Mark PR "Ready for review" (remove draft status):**
-   ```bash
-   gh pr ready <pr_number> --repo <target_repo>
-   ```
-
-3. **Remove `bug-fixer:engineer:needs-iteration` and `bug-fixer:architect:awaiting-review` labels:**
-   ```bash
-   gh pr edit <pr_number> --repo <target_repo> --remove-label "bug-fixer:engineer:needs-iteration,bug-fixer:architect:awaiting-review" 2>/dev/null || true
-   ```
-
-4. **Post Approval Review Comment:**
+1. **Post Approval Review Comment (this is the approval signal):**
    ```bash
    gh pr comment <pr_number> --repo <target_repo> -b "[ARCHITECT] Approved:
    - Architectural design and module layering verified.
@@ -169,7 +154,21 @@ If the PR is architecturally sound, introduces zero technical debt, has verified
    - PR marked ready for human maintainer review."
    ```
 
-5. **Exit cleanly.**
+   > **Important:** The `[ARCHITECT] Approved` comment is the signal that triggers the dispatcher to apply the `bug-fixer:architect:approved` label on its next tick. Do NOT attempt to add the label directly — the PreToolUse gate will block it.
+
+2. **Mark PR "Ready for review" (remove draft status):**
+   ```bash
+   gh pr ready <pr_number> --repo <target_repo>
+   ```
+
+3. **Remove `bug-fixer:engineer:needs-iteration` label (if present):**
+   ```bash
+   gh pr edit <pr_number> --repo <target_repo> --remove-label "bug-fixer:engineer:needs-iteration" 2>/dev/null || true
+   ```
+
+   > **Note:** Do NOT remove `bug-fixer:architect:awaiting-review` — the dispatcher needs this label to detect your approval signal and apply `bug-fixer:architect:approved`.
+
+4. **Exit cleanly.**
 
 ---
 

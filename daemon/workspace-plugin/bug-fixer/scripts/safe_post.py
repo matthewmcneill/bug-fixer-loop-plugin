@@ -48,6 +48,14 @@ BUILTIN_LEAK_PATTERNS = (
     r"github_pat_[A-Za-z0-9_]{22,}",
 )
 
+# Labels that only trusted dispatcher code (outside agent conversations) may add.
+# Agents signal these transitions indirectly (e.g. via structured [ARCHITECT]
+# comments); the sidecar dispatcher applies the label on its next tick.
+PROTECTED_ADD_LABELS = frozenset({
+    "bug-fixer:architect:approved",
+})
+
+
 APPROVAL_TEXT_REGEX = re.compile(r"^\s*/?(?:approved?|lgtm)\s*[.!]*\s*$", re.IGNORECASE)
 
 
@@ -273,6 +281,16 @@ def main():
         for label in getattr(args, "remove_label", []):
             if label.startswith("security:"):
                 log(f"DENIED: removing security label '{label}' is prohibited")
+                sys.exit(1)
+
+    # Block adding trust-escalating labels (architect:approved, etc.)
+    all_label_args = list(getattr(args, "add_label", []) or [])
+    all_label_args += list(getattr(args, "label", []) or [])
+    for label_val in all_label_args:
+        for individual in label_val.split(","):
+            stripped = individual.strip()
+            if stripped in PROTECTED_ADD_LABELS:
+                log(f"DENIED: adding protected label '{stripped}' requires dispatcher privilege")
                 sys.exit(1)
 
     # Build the gh command

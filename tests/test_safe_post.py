@@ -59,6 +59,48 @@ class TestSafePost(unittest.TestCase):
                        "--add-label", "test-label")
         self.assertNotIn("DENIED", r.stderr)
 
+    def test_add_architect_approved_label_denied_pr_edit(self):
+        """Adding bug-fixer:architect:approved via pr-edit must be denied."""
+        r = self._run("pr-edit", "1",
+                       "--repo", "test/test",
+                       "--add-label", "bug-fixer:architect:approved")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("DENIED", r.stderr)
+        self.assertIn("protected label", r.stderr.lower())
+
+    def test_add_architect_approved_label_denied_label_only(self):
+        """Adding bug-fixer:architect:approved via label-only must be denied."""
+        r = self._run("label-only", "pr", "1",
+                       "--repo", "test/test",
+                       "--add-label", "bug-fixer:architect:approved")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("DENIED", r.stderr)
+        self.assertIn("protected label", r.stderr.lower())
+
+    def test_add_architect_approved_label_denied_issue_edit(self):
+        """Adding bug-fixer:architect:approved via issue-edit must be denied."""
+        r = self._run("issue-edit", "1",
+                       "--repo", "test/test",
+                       "--add-label", "bug-fixer:architect:approved")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("DENIED", r.stderr)
+
+    def test_add_architect_approved_comma_separated_denied(self):
+        """Comma-separated labels containing architect:approved must be denied."""
+        r = self._run("pr-edit", "1",
+                       "--repo", "test/test",
+                       "--add-label", "bug-fixer:system:pr,bug-fixer:architect:approved")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("DENIED", r.stderr)
+
+    def test_add_non_protected_label_allowed(self):
+        """Adding non-protected labels must be allowed (may fail at gh)."""
+        r = self._run("pr-edit", "1",
+                       "--repo", "test/test",
+                       "--add-label", "bug-fixer:architect:awaiting-review")
+        # Should NOT be denied by our check (may fail at gh call, but that's OK)
+        self.assertNotIn("protected label", r.stderr.lower())
+
     def test_body_with_leak_is_denied(self):
         """Body containing a leak pattern should be denied."""
         config_path = self._make_config(["SECRETTOKEN"])

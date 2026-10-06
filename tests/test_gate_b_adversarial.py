@@ -286,6 +286,12 @@ def _attacks(rt: str) -> list[str]:
         # Unparseable commands fail closed
         "echo 'unterminated",
         'gh issue comment 5 -b "$(cat',
+        # Label escalation: adding trust-escalating labels
+        'gh pr edit 5 --repo o/r --add-label "bug-fixer:architect:approved"',
+        'gh pr edit 5 --repo o/r --add-label bug-fixer:architect:approved',
+        'gh issue edit 5 --repo o/r --add-label "bug-fixer:system:pr,bug-fixer:architect:approved"',
+        'bash -c \'gh pr edit 5 --repo o/r --add-label "bug-fixer:architect:approved"\'',
+        'gh pr edit 5 -R o/r --add-label bug-fixer:architect:approved',
     ]
 
 
@@ -429,6 +435,7 @@ class TestGateBAdversarial(unittest.TestCase):
             f"gh label create x --description {SECRET}": pre_tool_gate.REASON_EGRESS_LEAK,
             "gh issue comment 5 --body-file -": pre_tool_gate.REASON_UNSCANNABLE,
             f"python3 -c \"open('{WS}/config.json','w')\"": pre_tool_gate.REASON_SHELL_MUTATION,
+            'gh pr edit 5 --repo o/r --add-label "bug-fixer:architect:approved"': pre_tool_gate.REASON_LABEL_ESCALATION,
         }
         for cmd, reason in cases.items():
             with self.subTest(cmd=cmd):

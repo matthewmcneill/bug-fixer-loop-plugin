@@ -165,6 +165,88 @@ def check_merge_conflicts(target_repo: str | None = None) -> None:
             log(f"PR #{number} ({title}): unexpected mergeable status '{mergeable}'.")
 
 
+def apply_pending_approvals(target_repo: str | None = None) -> None:
+    """Step 0.7: Detect architect approval comments and apply the label.
+
+    The architect agent signals approval by posting an ``[ARCHITECT] Approved``
+    comment.  Only this dispatcher (trusted sidecar code running outside any
+    agent conversation) applies the ``bug-fixer:architect:approved`` label.
+    Agent conversations are blocked from adding the label directly by the
+    PreToolUse gate and safe_post proxy.
+
+    Queries open PRs with ``bug-fixer:system:pr`` +
+    ``bug-fixer:architect:awaiting-review``.  For each, the last
+    ``[ARCHITECT]`` comment is inspected:
+      - Starts with ``[ARCHITECT] Approved``: applies
+        ``bug-fixer:architect:approved``, removes ``awaiting-review``.
+      - Anything else (or no architect comment): no-op.
+    """
+    repo = target_repo or TARGET_REPO
+    if not repo:
+        log("No target repo configured for pending approvals check.")
+        return
+
+    log(f"Checking for pending architect approvals in {repo}")
+    r = gh("pr", "list", "--repo", repo,
+           "--label", "bug-fixer:system:pr",
+           "--label", "bug-fixer:architect:awaiting-review",
+           "--state", "open",
+           "--json", "number,title")
+
+    if r.returncode != 0:
+        log(f"Error fetching awaiting-review PRs: {r.stderr.strip()}")
+        return
+
+    try:
+        prs = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        log("Failed to decode awaiting-review PRs JSON.")
+        return
+
+    if not prs:
+        log("No PRs awaiting review to check for approval signals.")
+        return
+
+    for pr in prs:
+        number = pr.get("number")
+        title = pr.get("title", "")
+
+        # Fetch comments to find the last [ARCHITECT] comment
+        r_comments = gh("pr", "view", str(number), "--repo", repo,
+                        "--comments", "--json", "comments")
+        if r_comments.returncode != 0:
+            log(f"PR #{number}: failed to fetch comments: {r_comments.stderr.strip()}")
+            continue
+
+        try:
+            comments = json.loads(r_comments.stdout).get("comments", [])
+        except json.JSONDecodeError:
+            continue
+
+        # Find the LAST [ARCHITECT] comment
+        last_architect_body = None
+        for c in comments:
+            body = c.get("body", "")
+            if "[ARCHITECT]" in body:
+                last_architect_body = body
+
+        if not last_architect_body:
+            continue
+
+        if last_architect_body.lstrip().startswith("[ARCHITECT] Approved"):
+            log(f"PR #{number} ({title}): Detected architect approval signal. "
+                f"Applying bug-fixer:architect:approved label.")
+            r_edit = gh("pr", "edit", str(number), "--repo", repo,
+                        "--add-label", "bug-fixer:architect:approved",
+                        "--remove-label", "bug-fixer:architect:awaiting-review")
+            if r_edit.returncode != 0:
+                log(f"PR #{number}: Failed to apply approved label: {r_edit.stderr.strip()}")
+            else:
+                log(f"PR #{number}: Successfully promoted to architect:approved.")
+        else:
+            log(f"PR #{number} ({title}): Last architect comment is not an approval — skipping.")
+
+
 def main():
     global TARGET_REPO
 
@@ -232,6 +314,17 @@ def main():
     # ---------------------------------------------------------------------------
 
     check_merge_conflicts(TARGET_REPO)
+
+    # ---------------------------------------------------------------------------
+    # Step 0.7: Apply Pending Architect Approvals
+    #
+    # The architect agent signals approval via an [ARCHITECT] Approved comment.
+    # Only this dispatcher applies the bug-fixer:architect:approved label.
+    # This must run BEFORE Step 1 so that newly-approved PRs are skipped by
+    # the polling loop (which skips PRs with architect:approved).
+    # ---------------------------------------------------------------------------
+
+    apply_pending_approvals(TARGET_REPO)
 
     # ---------------------------------------------------------------------------
     # Step 1: PR Polling Logic
