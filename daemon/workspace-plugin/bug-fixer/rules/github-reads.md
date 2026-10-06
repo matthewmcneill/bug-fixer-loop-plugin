@@ -52,8 +52,9 @@ If the URL contains `/pull/` instead of `/issues/`, use `pr-view`.
 
 All GitHub write operations (comments, reviews, issue creation) MUST go through
 `safe_post.py`. This proxy scans outbound content for leaked secrets before
-posting. In enrolled workspaces, raw `gh` write commands are blocked by the pre-tool
-hook and the gate's deny message directs you here.
+posting. The gate scans all outbound `gh` content for leaked secrets and blocks
+unscannable payloads. Use `safe_post.py` to ensure your content is scanned
+before posting.
 
 ```bash
 # Post a PR review comment

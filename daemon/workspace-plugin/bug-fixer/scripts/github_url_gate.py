@@ -72,7 +72,6 @@ def _is_enrolled(workspace_paths: list[str]) -> bool:
         cfg = load_config(None, workspace_paths=workspace_paths)
         return cfg.get("_enrolled", True) is not False
     except Exception as exc:
-        import sys
         print(f"github_url_gate: config error (failing closed): {exc}", file=sys.stderr)
         return True  # fail closed — enforce blocking
 
