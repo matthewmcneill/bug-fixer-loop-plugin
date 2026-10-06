@@ -1029,6 +1029,7 @@ class _ProtectedPaths:
 class _GateContext:
     protected: _ProtectedPaths
     patterns: list[re.Pattern[str]]
+    enrolled: bool = True
     # Files written earlier in the command being checked: path -> known content (None = unknown).
     written: dict[str, str | None] = field(default_factory=dict)
     # Set once an earlier segment could have modified arbitrary files.
@@ -2215,11 +2216,13 @@ def _build_context(
     config: dict[str, Any] | None, spec_file_path: str, protected_files: list[str], cwd: str | None
 ) -> _GateContext:
     patterns = compile_leak_patterns((config or {}).get("leak_patterns"))
+    enrolled = (config or {}).get("_enrolled", True) is not False
     return _GateContext(
         protected=_ProtectedPaths.build(
             spec_file_path, list(protected_files), _repo_root(config, cwd)
         ),
         patterns=patterns,
+        enrolled=enrolled,
     )
 
 
@@ -2348,15 +2351,23 @@ def evaluate_pretool_call(payload: dict[str, Any], config: dict[str, Any]) -> di
         or repo_dir
         or _repo_root(config, None)
     )
-    # Gate B only enforces in enrolled workspaces — unenrolled repos
-    # should not have gh commands blocked or shell mutation checks.
-    # Leak scanning (Gate C / outbound content) still runs everywhere.
-    if config.get("_enrolled", True) is not False:
-        decision_b = evaluate_gate_b(
-            tool_name, args, spec_file_path, protected_files, config, cwd=command_cwd
-        )
-        if decision_b is not None:
-            return decision_b
+    # Gate B always runs — daemon prefix protection and egress leak
+    # scanning apply everywhere. In unenrolled workspaces, workflow-
+    # specific gh rules (raw reads, merge, approve, reopen) are
+    # converted to allow.
+    decision_b = evaluate_gate_b(
+        tool_name, args, spec_file_path, protected_files, config, cwd=command_cwd
+    )
+    if decision_b is not None:
+        if config.get("_enrolled", True) is False:
+            # Only enforce security rules in unenrolled workspaces
+            _workflow_reasons = {
+                REASON_RAW_GH, REASON_AUTO_MERGE, REASON_SELF_APPROVAL,
+                REASON_ISSUE_REOPEN, REASON_APPROVAL_INJECTION,
+            }
+            if decision_b.get("reason") in _workflow_reasons:
+                return {"decision": "allow"}
+        return decision_b
 
     return {"decision": "allow"}
 
@@ -2950,11 +2961,10 @@ def main() -> int:
         if config_loaded_from:
             SCANNER_PROTECTED_FILES = _derive_workspace_paths(Path(config_loaded_from))
     except Exception as exc:
-        sys.stderr.write(f"Config loading error: {exc}\n")
+        sys.stderr.write(f"Config loading error: {exc} — enforcing with defaults\n")
         config = {
-            "_enrolled": False,
-            "spec_file_path": "",
-            "protected_files": [],
+            "spec_file_path": "docs/plugin-architecture.md",
+            "protected_files": ["docs/plugin-architecture.md"],
             "leak_patterns": [],
         }
 
