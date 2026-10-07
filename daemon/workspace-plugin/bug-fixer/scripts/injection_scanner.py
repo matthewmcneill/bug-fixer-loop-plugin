@@ -6,6 +6,7 @@ import urllib.request
 import urllib.error
 import subprocess
 import hashlib
+import random
 import time
 
 class InjectionResult:
@@ -79,7 +80,6 @@ class ModelArmorProvider:
             }
         }).encode()
         
-        import random
         last_error: Exception | None = None
 
         for attempt in range(self.MAX_RETRIES + 1):

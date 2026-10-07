@@ -165,6 +165,10 @@ HOST_SECURITY_SCRIPTS = frozenset({
     "injection_scanner.py", "shell_analysis.py", "github_url_gate.py",
     "integrity_monitor.py",
 })
+# Scripts in the daemon scripts/ dir that agents may execute (but not write).
+DAEMON_TRUSTED_SCRIPTS = frozenset({
+    "manage.py", "tick.py",
+})
 # Protected workspace paths are derived at runtime from the config that
 # was actually loaded (which lives in the TARGET repo's workspace, not
 # necessarily the plugin repo). Static scanner files are always protected.
@@ -973,6 +977,9 @@ class _ProtectedPaths:
                     if basename in ("injection_cache.json", ".integrity_snapshot.json"):
                         return True   # still protected
                     return False      # allow
+                # Allow execution of trusted daemon scripts (manage.py, tick.py)
+                if len(parts) == 2 and parts[0] == "scripts" and parts[1] in DAEMON_TRUSTED_SCRIPTS:
+                    return False      # allow execution
                 return True           # protected
         return False
 
