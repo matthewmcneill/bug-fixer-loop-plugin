@@ -65,6 +65,89 @@ class TestWO2bIntegrityMonitor(unittest.TestCase):
             self.assertFalse(snap_file.exists())
             self.assertFalse(snap_dir.exists())
 
+    def test_verify_allows_sidecar_change_from_manage_enroll(self):
+        """sidecar.json changes are accepted when command was manage.py enroll."""
+        sidecar_file = self.sidecar_dir / "sidecar.json"
+        sidecar_file.write_text('{"env": {}}')
+
+        manage_payload = {
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": "python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py enroll --repo o/r --dir /tmp --project-id abc"}
+            }
+        }
+
+        with unittest.mock.patch.dict(os.environ, {"BUG_FIXER_CONFIG": str(self.config_path)}):
+            integrity_monitor.snapshot()
+            # Legitimate mutation
+            sidecar_file.write_text('{"env": {"ANTIGRAVITY_PROJECT_ID": "abc"}}')
+            integrity_monitor.verify(stdin_data=manage_payload)
+            # Should NOT be reverted
+            data = json.loads(sidecar_file.read_text())
+            self.assertEqual(data["env"]["ANTIGRAVITY_PROJECT_ID"], "abc")
+
+    def test_verify_still_reverts_security_script_even_with_manage_command(self):
+        """Security scripts are ALWAYS reverted, even if command was manage.py."""
+        # Use the config file itself as a proxy for a "security-tier" protected file
+        # that is NOT in MANAGEMENT_MUTABLE_BASENAMES — we need a file the monitor
+        # actually tracks. Create a fake script file.
+        scripts_dir = self.tmp_path / "scripts"
+        scripts_dir.mkdir()
+        fake_script = scripts_dir / "pre_tool_gate.py"
+        fake_script.write_text("# original")
+
+        # Patch _get_protected_files to include our fake script
+        original_get = integrity_monitor._get_protected_files
+
+        def patched_get():
+            return original_get() + [str(fake_script)]
+
+        manage_payload = {
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": "python3 manage.py config --set key=val --repo o/r"}
+            }
+        }
+
+        with unittest.mock.patch.dict(os.environ, {"BUG_FIXER_CONFIG": str(self.config_path)}):
+            with unittest.mock.patch.object(integrity_monitor, "_get_protected_files", patched_get):
+                integrity_monitor.snapshot()
+                fake_script.write_text("# tampered")
+                integrity_monitor.verify(stdin_data=manage_payload)
+                # Security script MUST be reverted
+                self.assertEqual(fake_script.read_text(), "# original")
+
+    def test_verify_reverts_sidecar_when_not_manage_command(self):
+        """sidecar.json changes are reverted when command is NOT manage.py."""
+        sidecar_file = self.sidecar_dir / "sidecar.json"
+        sidecar_file.write_text('{"env": {}}')
+
+        evil_payload = {
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": "python3 /tmp/evil.py"}
+            }
+        }
+
+        with unittest.mock.patch.dict(os.environ, {"BUG_FIXER_CONFIG": str(self.config_path)}):
+            integrity_monitor.snapshot()
+            sidecar_file.write_text('{"env": {"TAMPERED": true}}')
+            integrity_monitor.verify(stdin_data=evil_payload)
+            # Must be reverted
+            self.assertEqual(json.loads(sidecar_file.read_text()), {"env": {}})
+
+    def test_verify_reverts_sidecar_without_stdin_data(self):
+        """Backward compat: no stdin_data means all changes are reverted."""
+        sidecar_file = self.sidecar_dir / "sidecar.json"
+        sidecar_file.write_text('{"env": {}}')
+
+        with unittest.mock.patch.dict(os.environ, {"BUG_FIXER_CONFIG": str(self.config_path)}):
+            integrity_monitor.snapshot()
+            sidecar_file.write_text('{"env": {"TAMPERED": true}}')
+            integrity_monitor.verify()  # no stdin_data
+            # Must be reverted
+            self.assertEqual(json.loads(sidecar_file.read_text()), {"env": {}})
+
 
 class TestWO2bSafePost(unittest.TestCase):
     def setUp(self):
