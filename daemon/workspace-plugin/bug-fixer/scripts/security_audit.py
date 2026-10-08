@@ -20,16 +20,15 @@ def log_security_event(provider: str, reason: str, confidence: float, input_text
     with open(log_path, "a+", encoding="utf-8") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         f.seek(0)
-        lines = f.readlines()
-        
-        if not lines:
+        last_line = ""
+        for line in f:
+            if line.strip():
+                last_line = line.strip()
+                
+        if not last_line:
             prev_hash = ""
         else:
-            last_line = lines[-1].strip()
-            if not last_line:
-                prev_hash = ""
-            else:
-                prev_hash = hashlib.sha256(last_line.encode("utf-8")).hexdigest()
+            prev_hash = hashlib.sha256(last_line.encode("utf-8")).hexdigest()
         
         event = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -52,33 +51,24 @@ def verify_log_chain(log_path: Path, old_log_path: Path | None = None) -> bool:
             return False
         return True
     try:
-        new_lines = []
-        with open(log_path, "r", encoding="utf-8") as f:
-            for line in f:
-                new_lines.append(line)
-                
         if old_log_path and old_log_path.exists():
-            with open(old_log_path, "r", encoding="utf-8") as f:
-                old_lines = f.readlines()
-                
-            if len(new_lines) < len(old_lines):
-                return False
-                
-            for i in range(len(old_lines)):
-                if new_lines[i] != old_lines[i]:
+            with open(log_path, "r", encoding="utf-8") as f_new, open(old_log_path, "r", encoding="utf-8") as f_old:
+                for old_line in f_old:
+                    new_line = f_new.readline()
+                    if not new_line or new_line != old_line:
+                        return False
+
+        with open(log_path, "r", encoding="utf-8") as f:
+            prev_hash = ""
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                record = json.loads(line)
+                if record.get("prev_hash") != prev_hash:
                     return False
-                    
-        # Now verify the chain
-        prev_hash = ""
-        for line in new_lines:
-            line = line.strip()
-            if not line:
-                continue
-            record = json.loads(line)
-            if record.get("prev_hash") != prev_hash:
-                return False
-            prev_hash = hashlib.sha256(line.encode("utf-8")).hexdigest()
-            
+                prev_hash = hashlib.sha256(line.encode("utf-8")).hexdigest()
+        
         return True
     except Exception:
         return False
