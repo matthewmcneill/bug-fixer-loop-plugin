@@ -8,6 +8,7 @@ import subprocess
 import hashlib
 import random
 import time
+from security_audit import log_security_event
 
 class InjectionResult:
     """Result of an injection scan."""
@@ -166,16 +167,21 @@ class InjectionScanner:
         Rate-limit errors (429) always fail closed to prevent abuse.
         Other errors respect the fail_open setting.
         """
+
         if not self.enabled:
             return InjectionResult(False, 0.0, "disabled")
         try:
-            return self._provider_impl.scan(text)
+            res = self._provider_impl.scan(text)
+            if res.is_injection:
+                log_security_event(self.provider, "injection_detected", res.confidence, text)
+            return res
         except RateLimitError as exc:
             # 429 after retries — ALWAYS fail closed (potential DDoS bypass)
             sys.stderr.write(
                 f"INJECTION_SCAN_RATE_LIMITED: {self.provider}: {exc} "
                 f"(fail_closed — potential abuse)\n"
             )
+            log_security_event(self.provider, "rate_limited_fail_closed", 1.0, text)
             return InjectionResult(True, 1.0, self.provider,
                                    f"rate_limited: {exc}")
         except Exception as exc:
@@ -185,9 +191,11 @@ class InjectionScanner:
                     f"INJECTION_SCAN_ERROR: {self.provider}: {exc} "
                     f"(fail_open=true, allowing through)\n"
                 )
+                log_security_event(self.provider, f"provider_error_fail_open", 0.0, text)
                 return InjectionResult(False, 0.0, self.provider,
                                       f"error: {exc}")
             raise
+
 
 
 def _get_cache_path(config_path: str | None = None) -> Path:

@@ -25,9 +25,14 @@ import hashlib
 import re
 import json
 import os
-import shutil
 import subprocess
+import shutil
 import sys
+try:
+    import security_audit
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import security_audit
 from pathlib import Path
 
 
@@ -99,7 +104,7 @@ def _get_protected_files() -> list[str]:
     config_env = os.environ.get("BUG_FIXER_CONFIG", "")
     if config_env and Path(config_env).is_file():
         sidecar_dir = Path(config_env).resolve().parent
-        for name in ["config.json", "injection_cache.json"]:
+        for name in ["config.json", "injection_cache.json", "security_refusals.jsonl"]:
             p = sidecar_dir / name
             if p.exists():
                 files.append(str(p))
@@ -111,7 +116,7 @@ def _get_protected_files() -> list[str]:
             plugin_dir / ".agents" / "plugins" / "bug-fixer-loop-workspace",
         ]
         for workspace in legacy_workspaces:
-            for name in ["config.json", "injection_cache.json"]:
+            for name in ["config.json", "injection_cache.json", "security_refusals.jsonl"]:
                 p = workspace / name
                 if p.exists() and str(p) not in files:
                     files.append(str(p))
@@ -140,7 +145,7 @@ def _get_protected_files() -> list[str]:
     # Host security scripts themselves
     for name in ["pre_tool_gate.py", "safe_ingest.py",
                   "safe_post.py", "injection_scanner.py",
-                  "integrity_monitor.py", "shell_analysis.py",
+                  "integrity_monitor.py", "shell_analysis.py", "security_audit.py",
                   "github_url_gate.py"]:
         p = script_dir / name
         if p.exists() and str(p) not in files:
@@ -197,6 +202,23 @@ def verify(conversation_id: str = "", stdin_data: dict | None = None) -> None:
         if actual_hash != expected_hash:
             # Check if this was a legitimate management mutation
             basename = os.path.basename(path)
+            
+            if basename == "security_refusals.jsonl":
+                # Check if it's a valid hash-chained append
+                try:
+                    
+                    
+                    if security_audit.verify_log_chain(Path(path)):
+                        expected[path] = actual_hash
+                        backup_name = hashlib.sha256(path.encode("utf-8")).hexdigest()
+                        backup_path = snapshot_dir / backup_name
+                        if backup_path.is_file():
+                            shutil.copy2(path, backup_path)
+                        sys.stderr.write(f"INTEGRITY: {path} valid hash-chained append — accepted.\n")
+                        continue
+                except Exception as e:
+                    sys.stderr.write(f"INTEGRITY: failed to verify {path} chain: {e}\n")
+
             if (basename in MANAGEMENT_MUTABLE_BASENAMES
                     and stdin_data is not None
                     and _was_trusted_management_command(stdin_data)):
