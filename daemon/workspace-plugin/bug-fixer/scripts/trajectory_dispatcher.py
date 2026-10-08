@@ -183,6 +183,33 @@ r = run(["gh", "pr", "list", "--repo", TARGET_REPO,
          "--json", "number", "--jq", "length"])
 recent_prs = int(r.stdout.strip() or "0")
 
+# ---------------------------------------------------------------------------
+# Check for security refusals in the last 24h
+# ---------------------------------------------------------------------------
+
+security_summary = "No security refusals recorded in the last 24 hours."
+audit_log_path = WORKSPACE_CONFIG.parent / "security_refusals.jsonl"
+if audit_log_path.exists():
+    cutoff_iso = datetime.fromtimestamp(cutoff, timezone.utc).isoformat()
+    refusals = []
+    try:
+        with open(audit_log_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip(): continue
+                try:
+                    record = json.loads(line)
+                    if record.get("timestamp", "") >= cutoff_iso:
+                        refusals.append(record)
+                except json.JSONDecodeError:
+                    continue
+        if refusals:
+            summary_lines = [f"Found {len(refusals)} security refusal(s) in the last 24h:"]
+            for r in refusals:
+                summary_lines.append(f"- {r.get('timestamp')} | {r.get('provider')} | {r.get('reason')} (conf: {r.get('confidence')})")
+            security_summary = "\n".join(summary_lines)
+    except Exception as e:
+        security_summary = f"Error reading security audit log: {e}"
+
 # Build context summary for the LLM
 context_lines = [
     f"- {len(recent_transcripts)} bug-fixer conversation(s) in last 24h",
@@ -206,6 +233,9 @@ Workspace tmp directory for scratch files: {WORKSPACE_TMP_DIR}
 
 Activity summary for the last 24 hours:
 {context_summary}
+
+Security Refusal Summary:
+{security_summary}
 
 Recent bug-fixer transcripts to analyze:
 {chr(10).join(recent_transcripts[:20])}

@@ -25,6 +25,8 @@ This skill performs a daily review of the bug-fixer's performance to catch recur
 
 3. **Analyze Quality Trends:**
    Track the following metrics:
+   - Security Refusals: Summarize any security refusal events (Model Armor 429s, injection blocks, pre-tool gate rejections) provided in the prompt. Note if there are any unusual patterns or bursts of refusals.
+
    - Issues triaged
    - PRs opened
    - PRs merged

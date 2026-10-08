@@ -49,6 +49,11 @@ import unicodedata
 from shell_analysis import DYN, Segment, ShellParseError, Word, expand_braces
 from shell_analysis import parse as parse_shell
 
+try:
+    from security_audit import log_security_event
+except ImportError:
+    def log_security_event(*args, **kwargs): pass
+
 # Gate Denial Reasons
 REASON_SPEC_IMMUTABLE = (
     "Specification file is immutable: Direct modification of the specification "
