@@ -206,12 +206,10 @@ def verify(conversation_id: str = "", stdin_data: dict | None = None) -> None:
             if basename == "security_refusals.jsonl":
                 # Check if it's a valid hash-chained append
                 try:
-                    
-                    
-                    if security_audit.verify_log_chain(Path(path)):
+                    backup_name = hashlib.sha256(path.encode("utf-8")).hexdigest()
+                    backup_path = snapshot_dir / backup_name
+                    if security_audit.verify_log_chain(Path(path), backup_path):
                         expected[path] = actual_hash
-                        backup_name = hashlib.sha256(path.encode("utf-8")).hexdigest()
-                        backup_path = snapshot_dir / backup_name
                         if backup_path.is_file():
                             shutil.copy2(path, backup_path)
                         sys.stderr.write(f"INTEGRITY: {path} valid hash-chained append — accepted.\n")
