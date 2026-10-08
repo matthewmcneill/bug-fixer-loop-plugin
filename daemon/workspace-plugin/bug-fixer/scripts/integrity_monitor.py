@@ -31,6 +31,44 @@ import sys
 from pathlib import Path
 
 
+# Files that manage.py is allowed to mutate.  Security scripts, hooks,
+# manifests are NEVER in this set — only operational config/sidecar files.
+MANAGEMENT_MUTABLE_BASENAMES = frozenset({
+    "sidecar.json",
+    "config.json",
+})
+
+# Basename of the trusted management CLI.
+_TRUSTED_MANAGER = "manage.py"
+
+# Subcommands of manage.py that justify management-tier file changes.
+_MUTABLE_SUBCOMMANDS = frozenset({
+    "enroll", "unenroll", "config", "reset",
+    "labels", "refresh-sidecars",
+})
+
+
+def _was_trusted_management_command(stdin_data: dict) -> bool:
+    """True when the just-executed command was a trusted manage.py mutation.
+
+    Inspects the PostToolUse hook payload to determine whether the command
+    that just ran was 'python3 .../manage.py <mutable-subcommand>'.
+    """
+    tool_call = stdin_data.get("toolCall", {})
+    if not isinstance(tool_call, dict):
+        return False
+    if tool_call.get("name") != "run_command":
+        return False
+    cmd = str((tool_call.get("args") or {}).get("CommandLine") or "").strip()
+    if _TRUSTED_MANAGER not in cmd:
+        return False
+    # Tokenise and check: must contain manage.py and a mutable subcommand
+    parts = cmd.split()
+    has_manager = any(_TRUSTED_MANAGER in p for p in parts)
+    has_subcmd = any(p in _MUTABLE_SUBCOMMANDS for p in parts)
+    return has_manager and has_subcmd
+
+
 def _get_snapshot_file(conversation_id: str = "") -> Path:
     """Snapshot file lives alongside the config in the sidecar dir, scoped by conversation."""
     suffix = f".{conversation_id}" if conversation_id else ""
@@ -141,7 +179,7 @@ def snapshot(conversation_id: str = "") -> None:
         json.dump(checksums, f)
 
 
-def verify(conversation_id: str = "") -> None:
+def verify(conversation_id: str = "", stdin_data: dict | None = None) -> None:
     """Verify protected files against snapshot, revert if tampered (called by --post)."""
     snapshot_file = _get_snapshot_file(conversation_id)
     snapshot_dir = _get_snapshot_dir(conversation_id)
@@ -157,6 +195,25 @@ def verify(conversation_id: str = "") -> None:
     for path, expected_hash in expected.items():
         actual_hash = _sha256(path)
         if actual_hash != expected_hash:
+            # Check if this was a legitimate management mutation
+            basename = os.path.basename(path)
+            if (basename in MANAGEMENT_MUTABLE_BASENAMES
+                    and stdin_data is not None
+                    and _was_trusted_management_command(stdin_data)):
+                # Legitimate management operation — update baseline
+                expected[path] = actual_hash
+                backup_name = hashlib.sha256(path.encode("utf-8")).hexdigest()
+                backup_path = snapshot_dir / backup_name
+                if backup_path.is_file():
+                    try:
+                        shutil.copy2(path, backup_path)
+                    except OSError:
+                        pass
+                sys.stderr.write(
+                    f"INTEGRITY: {path} updated by trusted management command — accepted.\n"
+                )
+                continue
+
             # TAMPERING DETECTED — revert from snapshot
             sys.stderr.write(
                 f"INTEGRITY VIOLATION: {path} was modified by an "
@@ -244,7 +301,7 @@ def main() -> int:
     conversation_id = raw_cid if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", raw_cid) else ""
 
     if "--post" in sys.argv:
-        verify(conversation_id)
+        verify(conversation_id, stdin_data)
         # PostToolUse contract: return empty object
         print(json.dumps({}))
     else:
