@@ -89,7 +89,7 @@ This deploys the daemon plugin to `~/.gemini/config/plugins/bug-fixer-daemon/` a
 
 Open Antigravity in your target repository's workspace and ask:
 
-> *"Enroll this repo in bug-fixer please"*
+> */bug-fixer-manage enroll this repo*
 
 The agent will detect the repo, gather the required values, and ask you to confirm before enrolling.
 
@@ -109,11 +109,11 @@ This creates a per-repo sidecar with its own config and state, and registers the
 
 After enrollment, configure your project settings via the agent:
 
-> *"Set bug-fixer maintainer to my-github-username"*
+> */bug-fixer-manage set maintainer to my-github-username*
 >
-> *"Set bug-fixer test command to pytest"*
+> */bug-fixer-manage set test command to pytest*
 >
-> *"Add docs/architecture.md to bug-fixer protected files"*
+> */bug-fixer-manage add docs/architecture.md to protected files*
 
 The agent will show you the proposed change and ask for confirmation before applying it.
 
