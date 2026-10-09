@@ -1,25 +1,23 @@
-# Bug Fixer Loop
+# Bug-Fixer
 
 ![version](https://img.shields.io/badge/version-0.1.0-blue.svg)
 ![python](https://img.shields.io/badge/python-3.10%2B-green.svg)
 ![security](https://img.shields.io/badge/security-pre--tool--enforced-purple.svg)
 ![platform](https://img.shields.io/badge/platform-Antigravity%20(AGY)-orange.svg)
 
-**Your codebase accumulates small bugs faster than your team can fix them.** TODO comments pile up, flaky edge cases get deferred, and DX papercuts erode developer productivity — all while your engineers are (rightly) focused on shipping features.
-
-Bug Fixer Loop is an autonomous agent plugin for [Google Antigravity](https://github.com/google/antigravity) that works like a guard-railed junior engineer running in the background. It triages issues, implements surgical fixes, runs your test suite, and opens clean pull requests — all without touching your working tree or auto-merging anything. You stay in control; it handles the backlog.
+Bug-Fixer is an autonomous agent plugin for [Google Antigravity](https://github.com/google/antigravity) that works like a guard-railed engineer and team-lead running in the background. It triages issues, implements surgical fixes, runs your test suite, reviews the code and, when satisfied, and opens clean pull requests — all without touching your working tree or auto-merging anything. You stay in control; it handles the backlog.
 
 ---
 
-## Why Bug Fixer Loop?
+## Why Bug-Fixer?
 
 - **Fully autonomous, never unsupervised.** Four coordinated loops handle triage → fix → review → quality audit. Every change lands as a PR for human review. Nothing merges without you.
 
-- **Security-first architecture.** A multi-layered gate system (PreToolUse hooks, safe ingestion, egress leak scanning, cryptographic receipts) defends against prompt injection, secret leakage, and model drift — even from malicious issue content.
+- **Security-first architecture.** A multi-layered gate system (PreToolUse hooks, safe ingestion, egress leak scanning, cryptographic receipts) defends against prompt injection, secret leakage, and model drift — even from malicious issue content. Optionally integrates with [Google Cloud Model Armor](https://cloud.google.com/security/products/model-armor) and [BetterLeaks](https://github.com/zricethezav/gitleaks).
 
 - **Zero interference with your work.** An active-PR exclusion zone detects files you're already working on and avoids them. Fixes run in ephemeral git worktrees, completely isolated from your working tree.
 
-- **Works with any project.** Configurable test commands, lint commands, and protected file lists. If your project has a test suite, Bug Fixer Loop can work with it — whether it's `pytest`, `npm test`, `pio test`, or anything else.
+- **Works with any project.** Configurable test commands, lint commands, and protected file lists. If your project has a test suite, Bug-Fixer can work with it — whether it's `pytest`, `npm test`, `pio test`, or anything else.
 
 - **Multi-repo from day one.** Enroll as many repositories as you need. Each gets its own config, state, and scheduled loops from a single daemon installation.
 
@@ -27,7 +25,7 @@ Bug Fixer Loop is an autonomous agent plugin for [Google Antigravity](https://gi
 
 ## How It Works
 
-Bug Fixer Loop runs as a background daemon plugin inside Antigravity. A single heartbeat sidecar per enrolled repository ticks every 5 minutes and delegates work to four specialised loops:
+Bug-Fixer runs as a background daemon plugin inside Antigravity. A single heartbeat sidecar per enrolled repository ticks every 5 minutes and delegates work to four specialised loops:
 
 ```mermaid
 flowchart LR
@@ -89,16 +87,38 @@ This deploys the daemon plugin to `~/.gemini/config/plugins/bug-fixer-daemon/` a
 
 ### 2. Enroll a Repository
 
+Open Antigravity in your target repository's workspace and ask:
+
+> *"Enroll this repo in bug-fixer please"*
+
+The agent will detect the repo, gather the required values, and ask you to confirm before enrolling.
+
+<details>
+<summary>Manual alternative (shell script)</summary>
+
 ```bash
 export ANTIGRAVITY_PROJECT_ID="<your-project-id>"  # from agy project list
 ./scripts/enroll.sh -r <owner/repo> -d <path/to/local/checkout>
 ```
 
+</details>
+
 This creates a per-repo sidecar with its own config and state, and registers the workspace plugin in your repo's `.agents/plugins.json`.
 
 ### 3. Configure
 
-Edit the generated config to match your project:
+After enrollment, configure your project settings via the agent:
+
+> *"Set bug-fixer maintainer to my-github-username"*
+>
+> *"Set bug-fixer test command to pytest"*
+>
+> *"Add docs/architecture.md to bug-fixer protected files"*
+
+The agent will show you the proposed change and ask for confirmation before applying it.
+
+<details>
+<summary>Manual alternative (edit config.json directly)</summary>
 
 ```bash
 # The config lives at:
@@ -109,6 +129,8 @@ At minimum, set:
 - `maintainer` — your GitHub username
 - `test_command` — the command that must pass before any PR (e.g., `"pytest"`, `"npm test"`)
 - `protected_files` — files the agent must never modify
+
+</details>
 
 ### 4. Done
 
