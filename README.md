@@ -195,6 +195,73 @@ All GitHub issue and PR content enters through a deterministic ingestion layer t
 
 ---
 
+## Optional Integrations
+
+Bug Fixer's built-in security gates catch a broad range of threats using deterministic rules and regex patterns. For public repositories — or any repo where untrusted users can file issues — we strongly recommend enabling both integrations below for defence in depth.
+
+### BetterLeaks — Secret Scanning
+
+[BetterLeaks](https://github.com/zricethezav/gitleaks) (a gitleaks-compatible scanner) adds ~700 detection rules for leaked credentials, API keys, and tokens. Bug Fixer uses it as an upgrade over the default regex-based secret scanner, catching secrets that simple patterns miss.
+
+**Set up via the agent:**
+
+> */bug-fixer-manage set scanning.secrets.backend to betterleaks*
+
+Or configure manually in `config.json`:
+
+```json
+{
+  "scanning": {
+    "secrets": {
+      "backend": "betterleaks"
+    }
+  }
+}
+```
+
+**Prerequisites:** Install the `betterleaks` binary ([install guide](https://github.com/zricethezav/gitleaks#installing)). Bug Fixer will auto-detect it on `PATH`. You can optionally pin a specific version and SHA-256 checksum in config for supply-chain safety.
+
+> [!TIP]
+> Add a `.betterleaks.toml` to your repo root to allowlist intentional test fixtures containing synthetic secrets. See [`.betterleaks.toml`](.betterleaks.toml) in this repo for an example.
+
+### Google Cloud Model Armor — Prompt Injection Detection
+
+[Google Cloud Model Armor](https://cloud.google.com/security/products/model-armor) provides ML-based detection of prompt injection and jailbreak attempts in issue content. When enabled, the triage loop scans every issue body and comment through Model Armor before processing — quarantining anything flagged as an injection attempt.
+
+**Set up:**
+
+```bash
+# Interactive setup script — handles GCP project, API enablement,
+# service account, template creation, and config update
+./scripts/setup_model_armor.sh
+```
+
+This creates a dedicated GCP project with the Model Armor API, a scoped service account, and a detection template. The script updates your `config.json` automatically.
+
+The resulting config block looks like:
+
+```json
+{
+  "scanning": {
+    "injection": {
+      "enabled": true,
+      "provider": "model_armor",
+      "fail_open": true,
+      "model_armor": {
+        "project": "your-gcp-project",
+        "location": "europe-west2",
+        "service_account": "model-armor-scanner@your-project.iam.gserviceaccount.com"
+      }
+    }
+  }
+}
+```
+
+> [!IMPORTANT]
+> **Recommended for public repositories.** On public repos, anyone can file an issue — including adversarial content designed to manipulate the agent. Model Armor catches injection patterns that deterministic rules cannot.
+
+---
+
 ## Configuration
 
 Each enrolled repository has its own `config.json` at:
