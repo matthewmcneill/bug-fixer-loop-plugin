@@ -259,9 +259,9 @@ The project maintains documentation at multiple levels:
 | Document | Purpose | When to Update |
 |----------|---------|---------------|
 | [README.md](README.md) | User-facing overview, quick start, configuration | When adding user-visible features or changing install steps |
-| [docs/plugin-architecture.md](docs/plugin-architecture.md) | Deep architecture guide — internals, patterns, anti-patterns | When changing dispatcher logic, hook wiring, or install scripts |
+| [docs/plugin-architecture.md](docs/plugin-architecture.md) | Bug-fixer-specific architecture — internals, patterns, anti-patterns | When changing dispatcher logic, hook wiring, or install scripts |
 | [docs/label-taxonomy.md](docs/label-taxonomy.md) | Label registry, state machines, routing tables | When adding/modifying labels or changing dispatcher routing |
-| [docs/antigravity-hooks-reference.md](docs/antigravity-hooks-reference.md) | Hook system reference, plugin discovery | When discovering new Antigravity hook behaviours |
+| [docs/building-antigravity-plugins.md](docs/building-antigravity-plugins.md) | Generalised Antigravity plugin guide — hooks, discovery, sidecars, enrollment | When discovering new platform behaviours or patterns |
 | `CONTRIBUTING.md` (this file) | How to contribute | When changing development process or tooling |
 
 When your change affects user-visible behaviour, update the relevant docs in the same PR.

@@ -382,19 +382,14 @@ The project maintains detailed reference documentation beyond this README:
 
 | Document | What it covers |
 |----------|---------------|
-| [Plugin Architecture Guide](docs/plugin-architecture.md) | Split-daemon design, hook system, dispatcher internals, sidecar lifecycle, circuit breakers, installation architecture, anti-patterns, and multi-project support |
+| [Plugin Architecture Guide](docs/plugin-architecture.md) | Bug-fixer-specific architecture: split-daemon design, dispatcher internals, sidecar lifecycle, circuit breakers, installation scripts, and anti-patterns |
 | [Label Taxonomy & State Machine](docs/label-taxonomy.md) | Complete label registry, issue/PR lifecycle state machines, dispatcher routing table, and dashboard quick-filters |
-| [Antigravity Hooks Reference](docs/antigravity-hooks-reference.md) | Hook event reference, `injectSteps` support, plugin discovery paths, and custom agent configuration |
+| [Building Antigravity Plugins](docs/building-antigravity-plugins.md) | Generalised guide for building any Antigravity plugin — hooks reference, discovery, sidecars, the global-install/local-enrollment pattern, custom agents, and lessons learned |
 | [Contributing Guide](CONTRIBUTING.md) | Development setup, testing, branch conventions, PR process, and security considerations |
 
 ### Architecture Deep Dive
 
-If you want to understand *how* the plugin works under the hood, start with the [Plugin Architecture Guide](docs/plugin-architecture.md). It covers:
-
-- **Split-daemon + workspace plugin pattern** — why the architecture separates scheduling from execution
-- **Dispatcher control plane** — how dispatchers keep costs at zero when idle and only spawn LLM conversations when there's real work
-- **Circuit breakers** — how the system self-heals when LLM quota is exhausted
-- **Anti-patterns** — lessons learned the hard way during development
+If you want to understand *how this plugin* works under the hood, start with the [Plugin Architecture Guide](docs/plugin-architecture.md). If you're **building your own plugin**, start with [Building Antigravity Plugins](docs/building-antigravity-plugins.md) — it distills the platform knowledge and reusable patterns into a standalone cookbook.
 
 ### Label System
 
