@@ -4,6 +4,7 @@
 ![python](https://img.shields.io/badge/python-3.10%2B-green.svg)
 ![security](https://img.shields.io/badge/security-pre--tool--enforced-purple.svg)
 ![platform](https://img.shields.io/badge/platform-Antigravity%20(AGY)-orange.svg)
+![license](https://img.shields.io/badge/license-MIT-brightgreen.svg)
 
 Bug-Fixer is an autonomous agent plugin for [Google Antigravity](https://github.com/google/antigravity) that works like a guard-railed engineer and team-lead running in the background. It triages issues, implements surgical fixes, runs your test suite, reviews the code and, when satisfied, and opens clean pull requests — all without touching your working tree or auto-merging anything. You stay in control; it handles the backlog.
 
@@ -421,4 +422,4 @@ No virtual environment or `pip install` needed — the project is pure Python wi
 
 ## License
 
-*TBD*
+This project is licensed under the [MIT License](LICENSE).
