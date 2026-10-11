@@ -3,12 +3,13 @@
 triage_dispatcher.py — Lightweight pre-check for the triage sidecar.
 
 Runs hourly. Checks if there are any untriaged issues (missing a
-classification label). Only spawns an LLM triage conversation if
-there's actual work to do.
+classification label) OR any T2 issues with pending maintainer approval
+that need transitioning to T1. Only spawns an LLM triage conversation
+if there's actual work to do.
 
 No-op conditions (exit silently):
   - No config found
-  - No open issues missing a classification label
+  - No open issues missing a classification label AND no pending T2 approvals
 """
 
 import json
@@ -29,6 +30,16 @@ CLASSIFICATION_LABELS = {
     "bug-fixer:human:project-candidate",
     "bug-fixer:human:required",
 }
+
+# Prefixes used by the triage agent's approach review comments.
+# If the last comment on a T2 issue does NOT start with one of these,
+# a human has replied and the issue may be ready for T2→T1 transition.
+BOT_COMMENT_PREFIXES = (
+    "[BUG-FIXER]",
+    "[BUG-FIXER-TRIAGE]",
+    "[ANTIGRAVITY]",
+    "[CONTEXT]",
+)
 
 
 def log(msg: str):
@@ -171,26 +182,74 @@ for issue in untriaged:
         safe_untriaged.append(issue)
 untriaged = safe_untriaged
 
-if not untriaged:
-    log("No untriaged issues. Exiting.")
+# ---------------------------------------------------------------------------
+# Check for T2 issues with pending maintainer approval (approach reviews)
+# ---------------------------------------------------------------------------
+# The triage skill's Step 4 handles T2→T1 transitions when a maintainer
+# replies "approved" on a needs-approach-review issue. But that logic only
+# runs if the triage agent is spawned. Without this check, approved T2
+# issues are a dead-end: the dispatcher sees them as "already classified"
+# and never invokes the agent.
+#
+# Heuristic: if the last comment on a needs-approach-review issue is NOT
+# from the bot, a human has replied and the issue may need transitioning.
+# False positives are cheap (one extra triage spawn); the skill evaluates
+# the actual approval semantics.
+
+pending_approvals = []
+for issue in issues:
+    label_names = {l.get("name", "") for l in issue.get("labels", [])}
+    if "bug-fixer:human:needs-approach-review" not in label_names:
+        continue
+    comments = issue.get("comments", [])
+    if not comments:
+        continue
+    last_body = (comments[-1].get("body") or "").lstrip()
+    if not any(last_body.startswith(prefix) for prefix in BOT_COMMENT_PREFIXES):
+        pending_approvals.append(issue)
+
+if pending_approvals:
+    approval_nums = ", ".join(f"#{i['number']}" for i in pending_approvals)
+    log(f"{len(pending_approvals)} T2 issue(s) with pending approval response: {approval_nums}")
+
+if not untriaged and not pending_approvals:
+    log("No untriaged issues and no pending T2 approvals. Exiting.")
     sys.exit(0)
 
-issue_nums = ", ".join(f"#{i['number']}" for i in untriaged[:10])
-log(f"{len(untriaged)} untriaged issue(s) found: {issue_nums}")
+if untriaged:
+    issue_nums = ", ".join(f"#{i['number']}" for i in untriaged[:10])
+    log(f"{len(untriaged)} untriaged issue(s) found: {issue_nums}")
 
 
 # ---------------------------------------------------------------------------
 # Spawn triage conversation
 # ---------------------------------------------------------------------------
 
-title = f"Triage: {len(untriaged)} new issue(s)"
-prompt = f"""Run the bug-fixer-triage skill for repository {TARGET_REPO}.
+# Build the prompt with both work streams
+prompt_parts = [
+    f"Run the bug-fixer-triage skill for repository {TARGET_REPO}.",
+    "",
+    f"Read the skill at: {SKILL_PATH}",
+    f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.",
+    f"Configuration is at: {CONFIG_FILE}",
+]
 
-Read the skill at: {SKILL_PATH}
-Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.
-Configuration is at: {CONFIG_FILE}
+if untriaged:
+    issue_nums = ", ".join(f"#{i['number']}" for i in untriaged[:10])
+    prompt_parts.append("")
+    prompt_parts.append(f"There are {len(untriaged)} untriaged issue(s) to classify: {issue_nums}")
 
-There are {len(untriaged)} untriaged issue(s) to classify: {issue_nums}"""
+if pending_approvals:
+    approval_nums = ", ".join(f"#{i['number']}" for i in pending_approvals)
+    prompt_parts.append("")
+    prompt_parts.append(
+        f"There are {len(pending_approvals)} T2 issue(s) with pending maintainer "
+        f"approval that may need T2→T1 transition (Step 4 of the skill): {approval_nums}"
+    )
+
+total_work = len(untriaged) + len(pending_approvals)
+title = f"Triage: {total_work} issue(s) to process"
+prompt = "\n".join(prompt_parts)
 
 model = config.get("triage_model", "flash")
 r = run(["agentapi", "new-conversation", f"--model={model}", f"--title={title}", prompt])
