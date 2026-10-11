@@ -78,13 +78,41 @@ Every GitHub interaction passes through a **safe ingestion layer** that enforces
 
 ### 1. Install the Daemon
 
-> **Note:** Run from a normal terminal, not inside an Antigravity agent session.
+> **Note:** Run installer commands from a normal terminal, not inside an Antigravity agent session.
+
+#### Option A: From GitHub Release (Recommended — no repo clone required)
+
+Install directly using the one-line installer:
 
 ```bash
+curl -sSL https://raw.githubusercontent.com/matthewmcneill/bug-fixer-loop-plugin/main/scripts/install.sh | bash -s -- --from-release
+```
+
+<details>
+<summary>Manual download alternative</summary>
+
+1. Download `bug-fixer-daemon.tar.gz` (or `.zip`) from the [latest release](https://github.com/matthewmcneill/bug-fixer-loop-plugin/releases/latest).
+2. Extract the contents into `~/.gemini/config/plugins/bug-fixer-daemon/`:
+   ```bash
+   mkdir -p ~/.gemini/config/plugins/bug-fixer-daemon
+   tar -xzf bug-fixer-daemon.tar.gz -C ~/.gemini/config/plugins/bug-fixer-daemon/
+   ```
+
+</details>
+
+#### Option B: From Source (Clone repository)
+
+```bash
+git clone https://github.com/matthewmcneill/bug-fixer-loop-plugin.git
+cd bug-fixer-loop-plugin
 ./scripts/install.sh
 ```
 
-This deploys the daemon plugin to `~/.gemini/config/plugins/bug-fixer-daemon/` and enables it via `agy plugin enable`.
+#### Enable the Plugin
+
+Once installed, make sure the daemon plugin is enabled:
+1. **Antigravity UI (Recommended):** Open **Automations** from the top-left navigation panel, find **bug-fixer-daemon**, and switch it **ON**.
+2. **CLI alternative:** Run `agy plugin enable bug-fixer-daemon`.
 
 ### 2. Enroll a Repository
 

@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for release (optional if triggered on existing tag)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and Publish Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine tag name
+        id: vars
+        run: |
+          if [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Package daemon directory
+        run: |
+          mkdir -p dist
+          # Build .tar.gz containing daemon/ contents at the root of the archive
+          tar --exclude='__pycache__' --exclude='*.pyc' --exclude='.DS_Store' -czf dist/bug-fixer-daemon.tar.gz -C daemon .
+          # Build .zip containing daemon/ contents at the root of the archive
+          (cd daemon && zip -r ../dist/bug-fixer-daemon.zip . -x "*__pycache__*" "*.pyc" "*.DS_Store")
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: ${{ steps.vars.outputs.tag }}
+          files: |
+            dist/bug-fixer-daemon.tar.gz
+            dist/bug-fixer-daemon.zip
+          generate_release_notes: true
