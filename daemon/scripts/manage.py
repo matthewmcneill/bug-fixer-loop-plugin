@@ -388,6 +388,18 @@ def cmd_enroll(args):
     else:
         print(f"Consumer plugins.json already has entry: {plugins_json}")
 
+    # 5. Install local pre-push git hook (if .git/hooks exists and pre-push does not exist)
+    hooks_dir = Path(repo_dir) / ".git" / "hooks"
+    pre_push_hook = hooks_dir / "pre-push"
+    if hooks_dir.is_dir() and not pre_push_hook.exists():
+        hook_script = (
+            "#!/usr/bin/env bash\n"
+            'exec python3 "$HOME/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/pre_tool_gate.py" --git-hook\n'
+        )
+        pre_push_hook.write_text(hook_script)
+        pre_push_hook.chmod(0o755)
+        print(f"Installed git pre-push hook: {pre_push_hook}")
+
     print(f"\n\u2705 Enrollment complete for {repo}")
     print(f"   Sidecar will start ticking within 5 minutes.")
     print(f"   Run 'status' to verify loops are running.")

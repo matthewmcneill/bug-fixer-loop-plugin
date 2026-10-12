@@ -198,6 +198,53 @@ class TestWO2bIntegrityMonitor(unittest.TestCase):
                 }
                 self.assertTrue(integrity_monitor._was_trusted_management_command(payload))
 
+    def test_protected_files_includes_repo_spec_protected_and_plugins_json(self):
+        """_get_protected_files includes spec_file_path, protected_files, and .agents/plugins.json."""
+        repo_dir = self.tmp_path / "target_repo"
+        (repo_dir / "docs").mkdir(parents=True)
+        (repo_dir / "src").mkdir(parents=True)
+        (repo_dir / ".agents").mkdir(parents=True)
+        spec_file = repo_dir / "docs" / "spec.md"
+        prot_file = repo_dir / "src" / "critical.py"
+        plugins_file = repo_dir / ".agents" / "plugins.json"
+        spec_file.write_text("# Spec")
+        prot_file.write_text("# Critical")
+        plugins_file.write_text("{}")
+
+        daemon_dir = self.tmp_path / "daemon"
+        sc_dir = daemon_dir / "sidecars" / "owner--repo"
+        sc_dir.mkdir(parents=True)
+        (daemon_dir / "plugin.json").write_text(json.dumps({"name": "bug-fixer-daemon"}))
+        cfg_file = sc_dir / "config.json"
+        cfg_file.write_text(json.dumps({
+            "target_repo": "owner/repo",
+            "repo_dir": str(repo_dir),
+            "spec_file_path": "docs/spec.md",
+            "protected_files": ["src/critical.py"],
+        }))
+
+        with unittest.mock.patch.dict(os.environ, {"BUG_FIXER_CONFIG": ""}), \
+             unittest.mock.patch("integrity_monitor._find_daemon_root", return_value=daemon_dir):
+            monitored = integrity_monitor._get_protected_files(workspace_paths=[str(repo_dir)])
+            self.assertIn(str(spec_file.resolve()), monitored)
+            self.assertIn(str(prot_file.resolve()), monitored)
+            self.assertIn(str(plugins_file.resolve()), monitored)
+            snap_file = integrity_monitor._get_snapshot_file("conv1", workspace_paths=[str(repo_dir)])
+            self.assertEqual(snap_file, sc_dir.resolve() / ".integrity_snapshot.conv1.json")
+
+    def test_verify_logs_security_event_when_snapshot_missing(self):
+        """verify() logs integrity_snapshot_missing security event if snapshot file was deleted."""
+        with unittest.mock.patch.dict(os.environ, {"BUG_FIXER_CONFIG": str(self.config_path)}):
+            snap_file = integrity_monitor._get_snapshot_file("missing-conv")
+            snap_file.unlink(missing_ok=True)
+            with unittest.mock.patch("security_audit.log_security_event") as mock_log:
+                integrity_monitor.verify(
+                    "missing-conv",
+                    stdin_data={"toolCall": {"name": "run_command", "args": {"CommandLine": "rm -f x"}}},
+                )
+                mock_log.assert_called_once()
+                self.assertEqual(mock_log.call_args[0][0], "integrity_snapshot_missing")
+
 
 class TestWO1ManageConfigAllowlist(unittest.TestCase):
     def setUp(self):

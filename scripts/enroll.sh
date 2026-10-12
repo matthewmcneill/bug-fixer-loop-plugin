@@ -208,4 +208,16 @@ with open(path, "w") as f:
 PY
 echo "Updated consumer plugins.json: $PLUGINS_JSON"
 
+# 4. Install local pre-push git hook if .git/hooks exists and pre-push does not exist
+HOOKS_DIR="$TARGET_REPO_DIR/.git/hooks"
+PRE_PUSH_HOOK="$HOOKS_DIR/pre-push"
+if [[ -d "$HOOKS_DIR" ]] && [[ ! -e "$PRE_PUSH_HOOK" ]]; then
+  cat > "$PRE_PUSH_HOOK" <<'HOOK'
+#!/usr/bin/env bash
+exec python3 "$HOME/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/pre_tool_gate.py" --git-hook
+HOOK
+  chmod +x "$PRE_PUSH_HOOK"
+  echo "Installed git pre-push hook: $PRE_PUSH_HOOK"
+fi
+
 echo "Enrollment complete."

@@ -132,7 +132,7 @@ class TestSafePost(unittest.TestCase):
         try:
             r = self._run("issue-create",
                            "--repo", "test/test",
-                           "--title", "Token: ya29.ABC123DEF456",
+                           "--title", "Token: ya29." + "ABC123DEF456",
                            "--body", "clean body",
                            env=self._env_with_config(config_path))
             self.assertEqual(r.returncode, 1)
@@ -285,19 +285,19 @@ class TestSafePost(unittest.TestCase):
 
 
 class TestGateBAllowsSafePost(unittest.TestCase):
-    """Gate B should allow agent run_command calls to safe_post.py.
+    """Gate B should allow agent run_command calls to canonical safe_post.py.
 
     safe_post.py is the sanctioned egress proxy for all agents —
     it scans content for leaks before posting. Raw `gh` writes are
-    blocked; safe_post.py is the approved alternative.
+    blocked; canonical safe_post.py is the approved alternative.
     """
 
     def test_gate_b_allows_safe_post(self):
-        """An agent running the egress proxy via run_command should be allowed."""
+        """An agent running the canonical egress proxy via run_command should be allowed."""
         from pre_tool_gate import evaluate_gate_b
         result = evaluate_gate_b(
             "run_command",
-            {"CommandLine": "python3 scripts/safe_post.py issue-comment 1 --repo test/test --body hello"},
+            {"CommandLine": f"python3 {SCRIPT} issue-comment 1 --repo test/test --body hello"},
             "docs/design_specification.md",
             [],
             {}
@@ -309,9 +309,10 @@ class TestGateBAllowsSafePost(unittest.TestCase):
     def test_gate_b_allows_safe_ingest(self):
         """safe_ingest.py should NOT be blocked by this rule."""
         from pre_tool_gate import evaluate_gate_b
+        safe_ingest_script = str(SCRIPTS_DIR / "safe_ingest.py")
         result = evaluate_gate_b(
             "run_command",
-            {"CommandLine": "python3 scripts/safe_ingest.py issue-view 1"},
+            {"CommandLine": f"python3 {safe_ingest_script} issue-view 1"},
             "docs/design_specification.md",
             [],
             {}
@@ -346,7 +347,7 @@ class TestShellMutationRelativePaths(unittest.TestCase):
 
 
 class TestProxyAllowPrecision(unittest.TestCase):
-    """safe_post.py is allowed for all agents. Reads and tests are also allowed."""
+    """Canonical safe_post.py is allowed for all agents. Globs and spoofed paths are denied."""
 
     def _gate_b(self, cmd):
         from pre_tool_gate import evaluate_gate_b
@@ -375,14 +376,14 @@ class TestProxyAllowPrecision(unittest.TestCase):
                                 "running test_safe_post should not be denied")
 
     def test_direct_safe_post_allowed(self):
-        """python3 scripts/safe_post.py should be allowed."""
-        result = self._gate_b("python3 scripts/safe_post.py issue-comment 1 --repo test/test --body hi")
+        """python3 <canonical safe_post.py> should be allowed."""
+        result = self._gate_b(f"python3 {SCRIPT} issue-comment 1 --repo test/test --body hi")
         if result:
             self.assertNotEqual(result["decision"], "deny",
-                                "safe_post.py is the sanctioned write path for all agents")
+                                "canonical safe_post.py is the sanctioned write path for all agents")
 
-    def test_glob_safe_post_allowed(self):
-        """Glob patterns targeting safe_post.py should also be allowed."""
+    def test_glob_safe_post_denied(self):
+        """Glob patterns targeting safe_post.py must be denied."""
         for cmd in (
             "python3 scripts/safe_pos?.py issue-comment 1 --repo test/test --body hi",
             "python3 scripts/safe_pos[t].py issue-comment 1 --repo test/test --body hi",
@@ -390,9 +391,9 @@ class TestProxyAllowPrecision(unittest.TestCase):
         ):
             with self.subTest(cmd=cmd):
                 result = self._gate_b(cmd)
-                if result:
-                    self.assertNotEqual(result["decision"], "deny",
-                                        f"glob targeting safe_post.py should be allowed: {cmd}")
+                self.assertIsNotNone(result)
+                self.assertEqual(result["decision"], "deny",
+                                 f"glob targeting safe_post.py must be denied: {cmd}")
 
 
 if __name__ == "__main__":

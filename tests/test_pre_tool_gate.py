@@ -536,7 +536,7 @@ class TestPreToolGate(unittest.TestCase):
         payload = {
             "toolCall": {
                 "name": "run_command",
-                "args": {"CommandLine": 'gh pr comment 5 -b "has ya29.token-here"'},
+                "args": {"CommandLine": 'gh pr comment 5 -b "has ya29.' + 'token-here"'},
             }
         }
         res = self._run_gate_stdin(payload)
@@ -548,7 +548,8 @@ class TestPreToolGate(unittest.TestCase):
             "toolCall": {
                 "name": "run_command",
                 "args": {
-                    "CommandLine": 'gh api repos/owner/repo/issues/1/comments -f body="AKIA1234567890ABCDEF"'
+                    "CommandLine": 'gh api repos/owner/repo/issues/1/comments -f body="AKIA'
+                    + '1234567890ABCDEF"'
                 },
             }
         }
@@ -1383,3 +1384,153 @@ class TestWO1PR71ManageHITLAndIntegrity(unittest.TestCase):
                 })
                 self.assertEqual(res["decision"], "deny")
                 self.assertEqual(res["reason"], REASON_SAFE_INGEST_OVERRIDE)
+
+
+class TestWO2EgressAndIntegrity(unittest.TestCase):
+    """Unit tests for WO2: Egress Leak Scan, Proxy Canonicalization & Builtin Patterns."""
+
+    def _eval(self, payload: dict[str, Any], cfg: dict[str, Any] | None = None) -> dict[str, str]:
+        from pre_tool_gate import evaluate_pretool_call
+        config = cfg if cfg is not None else dict(TEST_CONFIG, repo_dir=str(PLUGIN_ROOT))
+        return evaluate_pretool_call(payload, config=config)
+
+    def test_git_no_verify_denied(self):
+        denied_cmds = [
+            "git commit --no-verify -m 'fix'",
+            "git commit -n -m 'fix'",
+            "git commit -an -m 'fix'",
+            "git push --no-verify origin fix/issue-1",
+            "git merge --no-verify feature",
+            "git am --no-verify patch.mbox",
+            "git cherry-pick --no-verify abc1234",
+        ]
+        for cmd in denied_cmds:
+            with self.subTest(cmd=cmd):
+                res = self._eval({
+                    "toolCall": {"name": "run_command", "args": {"CommandLine": cmd}},
+                })
+                self.assertEqual(res["decision"], "deny")
+                self.assertIn("Bypassing git hooks (--no-verify) is prohibited", res["reason"])
+
+        # Note: -n on git push is --dry-run, not --no-verify
+        res_dry = self._eval({
+            "toolCall": {"name": "run_command", "args": {"CommandLine": "git push -n origin fix/issue-1"}},
+        })
+        self.assertEqual(res_dry["decision"], "allow")
+
+    def test_git_push_scans_tree_and_denies_tracked_secrets(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            subprocess.run(["git", "init", "-q", "-b", "fix/issue-1"], cwd=tmp_dir, check=True)
+            secret_file = Path(tmp_dir) / "src" / "config.py"
+            secret_file.parent.mkdir(parents=True, exist_ok=True)
+            gcp_key = "AIza" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r"
+            secret_file.write_text(f"API_KEY = '{gcp_key}'\n")
+            subprocess.run(["git", "add", "src/config.py"], cwd=tmp_dir, check=True)
+
+            cfg = dict(TEST_CONFIG, repo_dir=tmp_dir)
+            res = self._eval(
+                {
+                    "toolCall": {
+                        "name": "run_command",
+                        "args": {"CommandLine": "git push origin fix/issue-1", "Cwd": tmp_dir},
+                    }
+                },
+                cfg=cfg,
+            )
+            self.assertEqual(res["decision"], "deny")
+            self.assertIn(REASON_EGRESS_LEAK, res["reason"])
+            self.assertIn("src/config.py", res["reason"])
+
+    def test_direct_stamp_receipt_denied_in_run_command(self):
+        for flag in ("--stamp-receipt", "--stamp-pass"):
+            for prefix in (
+                f"python3 {GATE_SCRIPT}",
+                f"{GATE_SCRIPT}",
+                "python3 pre_tool_gate.py",
+            ):
+                cmd = f"{prefix} {flag}"
+                with self.subTest(cmd=cmd):
+                    res = self._eval({
+                        "toolCall": {"name": "run_command", "args": {"CommandLine": cmd}},
+                    })
+                    self.assertEqual(res["decision"], "deny")
+                    self.assertIn("Direct receipt stamping", res["reason"])
+
+    def test_targets_proxy_canonicalization(self):
+        from pre_tool_gate import _targets_proxy
+        from shell_analysis import Word
+
+        canonical = str((SCRIPTS_DIR / "safe_post.py").resolve())
+        self.assertTrue(_targets_proxy(Word(canonical), str(PLUGIN_ROOT)))
+        self.assertTrue(
+            _targets_proxy(
+                Word("daemon/workspace-plugin/bug-fixer/scripts/safe_post.py"),
+                str(PLUGIN_ROOT),
+            )
+        )
+        self.assertTrue(_targets_proxy(Word("./safe_post.py"), str(SCRIPTS_DIR)))
+
+        # Reject spoofed paths, bare basenames, and globs
+        self.assertFalse(_targets_proxy(Word("/tmp/safe_post.py"), str(PLUGIN_ROOT)))
+        self.assertFalse(_targets_proxy(Word("./safe_post.py"), str(PLUGIN_ROOT)))
+        self.assertFalse(_targets_proxy(Word("./safe_post.py"), "/tmp"))
+        self.assertFalse(_targets_proxy(Word("safe_post.py"), str(SCRIPTS_DIR)))
+        self.assertFalse(_targets_proxy(Word("safe_post"), str(SCRIPTS_DIR)))
+        self.assertFalse(_targets_proxy(Word(canonical, globbed=True), str(PLUGIN_ROOT)))
+        self.assertFalse(_targets_proxy(Word(canonical, dynamic=True), str(PLUGIN_ROOT)))
+
+        # Spoofed and env-overridden safe_post invocations must be denied by Gate B
+        denied_proxy_cmds = [
+            "python3 /tmp/safe_post.py issue-comment 1 --repo o/r --body hi",
+            "/tmp/safe_post.py issue-comment 1 --repo o/r --body hi",
+            "./safe_post.py issue-comment 1 --repo o/r --body hi",
+            f"PYTHONPATH=/tmp python3 {canonical} issue-comment 1 --repo o/r --body hi",
+            f"env PYTHONPATH=/tmp python3 {canonical} issue-comment 1 --repo o/r --body hi",
+            f"python3 -c 'import os' {canonical}",
+            f"python3 -W ignore {canonical} issue-comment 1 --repo o/r --body hi",
+        ]
+        for cmd in denied_proxy_cmds:
+            with self.subTest(cmd=cmd):
+                res = self._eval({
+                    "toolCall": {
+                        "name": "run_command",
+                        "args": {"CommandLine": cmd, "Cwd": str(PLUGIN_ROOT)},
+                    }
+                })
+                self.assertEqual(res["decision"], "deny")
+
+    def test_widened_builtin_leak_patterns(self):
+        from pre_tool_gate import compile_leak_patterns, _has_leak
+
+        patterns = compile_leak_patterns([], include_builtin=True)
+        samples = [
+            "AIza" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r",
+            "ASIA" + "IOSFODNN7EXAMPLE",
+            "-----BEGIN PGP " + "PRIVATE KEY-----",
+            "sk-ant-api03-" + "a" * 24,
+            "sk-proj-" + "b" * 36,
+            "xoxb-" + "123456789012-ABCDEF",
+            "https://hooks.slack.com/services/" + "T12345678/B12345678/abcdefghijklmnopqrstuvwx",
+        ]
+        for s in samples:
+            with self.subTest(sample=s[:12]):
+                self.assertTrue(_has_leak([s], patterns), f"Expected leak pattern match for {s[:12]}")
+
+    def test_run_git_hook_scans_tree_when_staged_empty(self):
+        from pre_tool_gate import run_git_hook
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            subprocess.run(["git", "init", "-q"], cwd=tmp_dir, check=True)
+            f = Path(tmp_dir) / "app.py"
+            tok = "sk-ant-api03-" + "a" * 24
+            f.write_text(f"TOKEN = '{tok}'\n")
+            subprocess.run(["git", "add", "app.py"], cwd=tmp_dir, check=True)
+            subprocess.run(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"],
+                cwd=tmp_dir,
+                check=True,
+            )
+            # Staged is now empty, but tracked tree has a secret -> pre-push hook must block
+            with io.StringIO() as err_buf, redirect_stderr(err_buf):
+                rc = run_git_hook(tmp_dir, config=TEST_CONFIG)
+            self.assertEqual(rc, 1)
