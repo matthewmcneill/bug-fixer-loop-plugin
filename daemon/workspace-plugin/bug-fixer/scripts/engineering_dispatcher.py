@@ -208,12 +208,13 @@ def get_default_engineering_model() -> str:
 def get_model_for_issue(issue: dict) -> str:
     """Read complexity label from triage, map to agentapi model tier.
 
-    Uses the PA-aligned complexity mapping. Falls back to the
-    engineering_model config key, then defaults to 'pro'.
+    Uses the PA-aligned complexity mapping. Supports both canonical
+    'bug-fixer:complexity:<tier>' and legacy 'complexity:<tier>' labels.
+    Falls back to the engineering_model config key, then defaults to 'pro'.
     """
     for label in issue.get("labels", []):
         name = label.get("name", "")
-        if name.startswith("bug-fixer:complexity:"):
+        if name.startswith(("bug-fixer:complexity:", "complexity:")):
             tier = name.rsplit(":", 1)[1]
             if tier in COMPLEXITY_MODEL_MAP:
                 return COMPLEXITY_MODEL_MAP[tier]
@@ -663,10 +664,13 @@ def main():
             if r_comments.returncode == 0:
                 try:
                     comments_data = json.loads(r_comments.stdout)
+                    # Iterate forward and overwrite on each match so comments_text
+                    # holds the chronologically latest [ARCHITECT] review comment.
                     for c in comments_data.get("comments", []):
                         body_val = c.get("body", "")
                         if "[ARCHITECT]" in body_val:
                             comments_text = body_val
+                    # Fallback to the most recent comment if no [ARCHITECT] tag is present.
                     if not comments_text and comments_data.get("comments"):
                         comments_text = comments_data["comments"][-1].get("body", "")
                 except Exception as e:

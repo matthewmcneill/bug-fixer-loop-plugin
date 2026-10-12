@@ -314,6 +314,28 @@ class TestWO2bBugFixerAPI(unittest.TestCase):
             self.assertEqual(ctx.pr_number, 77)
             self.assertEqual(ctx.target_repo, "test/repo")
 
+    def test_multiple_sidecars_no_cwd_match_warns(self):
+        import io
+        daemon_dir = self.tmp_path / "daemon"
+        for slug in ("repo-a", "repo-b"):
+            sc = daemon_dir / "sidecars" / slug
+            sc.mkdir(parents=True)
+            (sc / "config.json").write_text(json.dumps({
+                "target_repo": f"org/{slug}",
+                "repo_dir": f"/nonexistent/{slug}",
+            }))
+        (daemon_dir / "plugin.json").write_text(json.dumps({"name": "bug-fixer-daemon"}))
+
+        stderr_buf = io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {
+            "BUG_FIXER_CONFIG": "",
+            "BUG_FIXER_STATE_DIR": "",
+        }), unittest.mock.patch("bugfixer_api._find_daemon_dir", return_value=daemon_dir), \
+             unittest.mock.patch("sys.stderr", stderr_buf):
+            ws = bugfixer_api._find_workspace_dir()
+            self.assertIsNone(ws)
+            self.assertIn("Multiple bug-fixer sidecars enrolled", stderr_buf.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -57,6 +57,9 @@ _MUTABLE_SUBCOMMANDS = frozenset({
 
 _PYTHON_INTERP_RE = re.compile(r"^python3?(?:\.\d+)?$")
 
+# Interpreter flags that do not alter the executed script path or inject code.
+_SAFE_PYTHON_FLAGS = frozenset({"-u", "-B", "-E", "-s", "-S", "-O", "-OO"})
+
 
 def _was_trusted_management_command(stdin_data: dict) -> bool:
     """True when the just-executed command was a single trusted manage.py mutation.
@@ -104,7 +107,7 @@ def _was_trusted_management_command(stdin_data: dict) -> bool:
 
     if idx < len(argv) and _PYTHON_INTERP_RE.match(Path(argv[idx].text).name):
         idx += 1
-        while idx < len(argv) and argv[idx].text in ("-u", "-B", "-E", "-s", "-S"):
+        while idx < len(argv) and argv[idx].text in _SAFE_PYTHON_FLAGS:
             idx += 1
 
     if idx >= len(argv) or Path(argv[idx].text).name != _TRUSTED_MANAGER:

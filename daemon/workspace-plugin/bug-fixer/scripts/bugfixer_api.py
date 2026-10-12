@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -191,6 +192,11 @@ def _find_workspace_dir() -> Path | None:
                         pass
             if len(candidates) == 1:
                 return candidates[0]
+            if len(candidates) > 1:
+                sys.stderr.write(
+                    "WARNING: Multiple bug-fixer sidecars enrolled and none matched cwd; "
+                    "set BUG_FIXER_CONFIG explicitly.\n"
+                )
 
     # 4. Script location: scripts/ → plugin dir → sibling workspace
     plugin_dir = script_dir.parent
