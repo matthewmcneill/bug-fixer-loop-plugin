@@ -64,7 +64,11 @@ try:
         data = json.load(f)
     
     entries = data.get("entries", [])
-    new_entries = [e for e in entries if e.get("path") != "~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin"]
+    remove_paths = {
+        "~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin",
+        "~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer",
+    }
+    new_entries = [e for e in entries if e.get("path") not in remove_paths]
     
     data["entries"] = new_entries
     

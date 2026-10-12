@@ -385,10 +385,14 @@ def cmd_unenroll(args):
         plugins_json = Path(repo_dir) / ".agents" / "plugins.json"
         if plugins_json.exists():
             data = load_json(plugins_json)
-            entry = {"path": WORKSPACE_PLUGIN_ENTRY}
+            remove_paths = {
+                WORKSPACE_PLUGIN_ENTRY,
+                "~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin",
+            }
             entries = data.get("entries", [])
-            if entry in entries:
-                entries.remove(entry)
+            new_entries = [e for e in entries if e.get("path") not in remove_paths]
+            if len(new_entries) != len(entries):
+                data["entries"] = new_entries
                 plugins_json.write_text(json.dumps(data, indent=2) + "\n")
                 print(f"Removed from consumer plugins.json: {plugins_json}")
 

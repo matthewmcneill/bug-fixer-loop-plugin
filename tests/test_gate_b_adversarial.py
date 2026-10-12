@@ -412,7 +412,10 @@ class TestGateBAdversarial(unittest.TestCase):
             "toolCall": {"name": "run_command", "args": {"CommandLine": cmd, "Cwd": str(REPO)}},
             "workspacePaths": [str(REPO)],
         }
-        return evaluate_pretool_call(payload, self.config)
+        with unittest.mock.patch.object(
+            pre_tool_gate, "_current_branch", return_value="fix/issue-100"
+        ):
+            return evaluate_pretool_call(payload, self.config)
 
     def test_attacks_are_denied(self):
         for cmd in _attacks(self.rt):

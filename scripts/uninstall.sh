@@ -78,8 +78,15 @@ path = "$CONFIG_FILE"
 try:
     with open(path, "r") as f:
         data = json.load(f)
+    changed = False
     if "bug-fixer-daemon" in data:
         del data["bug-fixer-daemon"]
+        changed = True
+    plugins = data.get("plugins")
+    if isinstance(plugins, dict) and "bug-fixer-daemon" in plugins:
+        del plugins["bug-fixer-daemon"]
+        changed = True
+    if changed:
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
             f.write("\n")

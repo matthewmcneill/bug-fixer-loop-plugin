@@ -653,13 +653,21 @@ def main():
                 log(f"PR #{pr_num} — iteration already dispatched, skipping.")
                 continue
 
-            # Fetch the latest architect review comments
-            r_comments = gh("pr", "view", str(pr_num), "--repo", TARGET_REPO, "--comments", "--json", "comments")
+            # Fetch the latest architect review comments via safe_ingest.py
+            r_comments = run([
+                sys.executable, str(SAFE_INGEST),
+                "pr-view", str(pr_num), "--repo", TARGET_REPO,
+                "--comments", "--json", "comments",
+            ])
             comments_text = ""
             if r_comments.returncode == 0:
                 try:
                     comments_data = json.loads(r_comments.stdout)
-                    if comments_data.get("comments"):
+                    for c in comments_data.get("comments", []):
+                        body_val = c.get("body", "")
+                        if "[ARCHITECT]" in body_val:
+                            comments_text = body_val
+                    if not comments_text and comments_data.get("comments"):
                         comments_text = comments_data["comments"][-1].get("body", "")
                 except Exception as e:
                     log(f"Failed to parse comments for PR #{pr_num}: {e}")
@@ -680,7 +688,7 @@ def main():
                 count = _record_failure(pr_branch)
                 if count >= MAX_WORKTREE_FAILURES:
                     log(f"CIRCUIT BREAKER: {pr_branch} failed {count} times. Escalating.")
-                    gh("issue", "edit", str(pr_num), "--repo", TARGET_REPO,
+                    gh("pr", "edit", str(pr_num), "--repo", TARGET_REPO,
                        "--add-label", "bug-fixer:human:needs-intervention",
                        "--remove-label", "bug-fixer:engineer:needs-iteration")
                 log(f"Failed to create worktree for PR #{pr_num}, skipping.")

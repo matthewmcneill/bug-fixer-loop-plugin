@@ -30,9 +30,11 @@ import shutil
 import sys
 try:
     import security_audit
+    import shell_analysis
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import security_audit
+    import shell_analysis
 from pathlib import Path
 
 
@@ -53,11 +55,15 @@ _MUTABLE_SUBCOMMANDS = frozenset({
 })
 
 
-def _was_trusted_management_command(stdin_data: dict) -> bool:
-    """True when the just-executed command was a trusted manage.py mutation.
+_PYTHON_INTERP_RE = re.compile(r"^python3?(?:\.\d+)?$")
 
-    Inspects the PostToolUse hook payload to determine whether the command
-    that just ran was 'python3 .../manage.py <mutable-subcommand>'.
+
+def _was_trusted_management_command(stdin_data: dict) -> bool:
+    """True when the just-executed command was a single trusted manage.py mutation.
+
+    Uses structural shell parsing (shell_analysis.parse) so comments, compound
+    commands (&&, ;, |), command substitutions, or inline interpreter flags
+    (-c) cannot spoof a manage.py invocation.
     """
     tool_call = stdin_data.get("toolCall", {})
     if not isinstance(tool_call, dict):
@@ -67,11 +73,48 @@ def _was_trusted_management_command(stdin_data: dict) -> bool:
     cmd = str((tool_call.get("args") or {}).get("CommandLine") or "").strip()
     if _TRUSTED_MANAGER not in cmd:
         return False
-    # Tokenise and check: must contain manage.py and a mutable subcommand
-    parts = cmd.split()
-    has_manager = any(_TRUSTED_MANAGER in p for p in parts)
-    has_subcmd = any(p in _MUTABLE_SUBCOMMANDS for p in parts)
-    return has_manager and has_subcmd
+
+    try:
+        parsed = shell_analysis.parse(cmd)
+    except shell_analysis.ShellParseError:
+        return False
+
+    if parsed.substitutions:
+        return False
+
+    active_segments = [
+        s for s in parsed.segments if s.words or s.redirects_out or s.redirects_in
+    ]
+    if len(active_segments) != 1:
+        return False
+
+    seg = active_segments[0]
+    if seg.redirects_out or seg.piped_from is not None:
+        return False
+
+    argv = seg.argv
+    if not argv or any(not w.literal for w in argv):
+        return False
+
+    idx = 0
+    if argv[idx].text == "env":
+        idx += 1
+        while idx < len(argv) and "=" in argv[idx].text:
+            idx += 1
+
+    if idx < len(argv) and _PYTHON_INTERP_RE.match(Path(argv[idx].text).name):
+        idx += 1
+        while idx < len(argv) and argv[idx].text in ("-u", "-B", "-E", "-s", "-S"):
+            idx += 1
+
+    if idx >= len(argv) or Path(argv[idx].text).name != _TRUSTED_MANAGER:
+        return False
+    idx += 1
+
+    if idx >= len(argv) or argv[idx].text not in _MUTABLE_SUBCOMMANDS:
+        return False
+
+    return True
 
 
 def _get_snapshot_file(conversation_id: str = "") -> Path:

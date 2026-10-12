@@ -141,22 +141,36 @@ if brain_dir.exists():
         except OSError:
             continue
 
-# Also check the sidecar logs
+# Also check the sidecar and loop logs
 sidecar_log_dir = Path.home() / ".gemini/antigravity/sidecar_data"
 recent_sidecar_logs = []
-repo_short = TARGET_REPO.split('/')[-1]
+
+# 1. Split-daemon per-loop logs in STATE_DIR (written by tick_receiver.py)
+for loop_name in ("engineering", "triage", "architect", "trajectory"):
+    state_log = STATE_DIR / f"{loop_name}.log"
+    if state_log.exists() and state_log.stat().st_mtime > cutoff:
+        recent_sidecar_logs.append(str(state_log))
+
+# 2. Sidecar stdout/stderr logs in sidecar_data
+repo_short = TARGET_REPO.split("/")[-1]
+repo_slug = TARGET_REPO.replace("/", "--")
+sidecar_candidates = [
+    repo_slug,
+    f"bug-fixer-daemon--{repo_slug}",
+]
 sidecar_prefixes = [
     "bug-fixer-engineering-loop",
     "bug-fixer-triage-loop",
     "bug-fixer-pr-review-loop",
-    "bug-fixer-trajectory-loop"
+    "bug-fixer-trajectory-loop",
 ]
 for prefix in sidecar_prefixes:
-    # Check both unsuffixed and repo-scoped variants
-    for candidate_name in [prefix, f"{prefix}--{repo_short}"]:
-        log_file = sidecar_log_dir / candidate_name / "logs/sidecar.log"
-        if log_file.exists() and log_file.stat().st_mtime > cutoff:
-            recent_sidecar_logs.append(str(log_file))
+    sidecar_candidates.extend([prefix, f"{prefix}--{repo_short}"])
+
+for candidate_name in sidecar_candidates:
+    log_file = sidecar_log_dir / candidate_name / "logs/sidecar.log"
+    if log_file.exists() and log_file.stat().st_mtime > cutoff:
+        recent_sidecar_logs.append(str(log_file))
 
 total_activity = len(recent_transcripts) + len(recent_sidecar_logs)
 

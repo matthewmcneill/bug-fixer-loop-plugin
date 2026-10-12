@@ -84,9 +84,9 @@ If `target_repo` is empty or the config file is missing, abort with:
 
 Identify the target PR number:
 - Provided via dispatcher prompt or user argument: `<pr_number>`.
-- If unprovided, find the oldest open PR with label `bug-fixer`:
+- If unprovided, find the oldest open PR with label `bug-fixer:system:pr`:
   ```bash
-  gh pr list --repo <target_repo> --state open --label "bug-fixer:system:pr" --json number,title,createdAt --jq 'sort_by(.createdAt) | .[0].number'
+  python3 ${PLUGIN_DIR}/scripts/safe_ingest.py pr-list --repo <target_repo> --state open --label "bug-fixer:system:pr" --json number,title,createdAt --jq 'sort_by(.createdAt) | .[0].number'
   ```
 
 ---
@@ -95,7 +95,7 @@ Identify the target PR number:
 
 1. **Query PR Details:**
    ```bash
-   gh pr view <pr_number> --repo <target_repo> --json number,title,body,headRefName,baseRefName,labels,isDraft,author
+   python3 ${PLUGIN_DIR}/scripts/safe_ingest.py pr-view <pr_number> --repo <target_repo> --json number,title,body,headRefName,baseRefName,labels,isDraft,author
    ```
 
 2. **Retrieve PR Diff:**

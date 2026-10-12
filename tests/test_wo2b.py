@@ -148,6 +148,30 @@ class TestWO2bIntegrityMonitor(unittest.TestCase):
             # Must be reverted
             self.assertEqual(json.loads(sidecar_file.read_text()), {"env": {}})
 
+    def test_verify_reverts_when_manage_spoofed_in_comment_or_compound(self):
+        """Spoofed manage.py tokens in comments, compounds, or -c flags must NOT be trusted."""
+        sidecar_file = self.sidecar_dir / "sidecar.json"
+        spoofed_commands = [
+            "python3 /tmp/evil.py # manage.py config",
+            "echo manage.py config && python3 /tmp/evil.py",
+            "python3 -c 'open(\"sidecar.json\",\"w\")' manage.py config",
+            "python3 manage.py config $(/tmp/evil.sh)",
+        ]
+        for cmd in spoofed_commands:
+            with self.subTest(cmd=cmd):
+                sidecar_file.write_text('{"env": {}}')
+                payload = {
+                    "toolCall": {
+                        "name": "run_command",
+                        "args": {"CommandLine": cmd},
+                    }
+                }
+                with unittest.mock.patch.dict(os.environ, {"BUG_FIXER_CONFIG": str(self.config_path)}):
+                    integrity_monitor.snapshot()
+                    sidecar_file.write_text('{"env": {"TAMPERED": true}}')
+                    integrity_monitor.verify(stdin_data=payload)
+                    self.assertEqual(json.loads(sidecar_file.read_text()), {"env": {}})
+
 
 class TestWO2bSafePost(unittest.TestCase):
     def setUp(self):
@@ -265,6 +289,29 @@ class TestWO2bBugFixerAPI(unittest.TestCase):
             self.assertTrue(ctx.is_autonomous)
             self.assertEqual(ctx.session_type, "fresh_fix")
             self.assertEqual(ctx.issue_number, 100)
+            self.assertEqual(ctx.target_repo, "test/repo")
+
+    def test_session_context_via_split_daemon_sidecars_without_env(self):
+        daemon_dir = self.tmp_path / "daemon"
+        sc_dir = daemon_dir / "sidecars" / "test--repo"
+        sc_dispatches = sc_dir / "state" / "dispatches"
+        sc_dispatches.mkdir(parents=True)
+        (daemon_dir / "plugin.json").write_text(json.dumps({"name": "bug-fixer-daemon"}))
+        (sc_dir / "config.json").write_text(json.dumps({"target_repo": "test/repo"}))
+        (sc_dispatches / "conv-split-1.json").write_text(json.dumps({
+            "conversation_id": "conv-split-1",
+            "type": "architect_review",
+            "pr_number": 77,
+        }))
+
+        with unittest.mock.patch.dict(os.environ, {
+            "BUG_FIXER_CONFIG": "",
+            "BUG_FIXER_STATE_DIR": "",
+        }), unittest.mock.patch("bugfixer_api._find_daemon_dir", return_value=daemon_dir):
+            ctx = bugfixer_api.BugFixer.get_session_context("conv-split-1")
+            self.assertTrue(ctx.is_autonomous)
+            self.assertEqual(ctx.session_type, "architect_review")
+            self.assertEqual(ctx.pr_number, 77)
             self.assertEqual(ctx.target_repo, "test/repo")
 
 
