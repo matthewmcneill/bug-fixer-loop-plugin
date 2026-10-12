@@ -20,15 +20,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Determine tag name
         id: vars
+        env:
+          INPUT_TAG: ${{ inputs.tag_name }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ -n "${{ inputs.tag_name }}" ]; then
-            TAG="${{ inputs.tag_name }}"
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
           else
-            TAG="${{ github.ref_name }}"
+            TAG="$REF_NAME"
+          fi
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9._-]+)?$ ]]; then
+            echo "Error: Invalid tag format '$TAG'" >&2
+            exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
@@ -39,13 +46,15 @@ jobs:
           tar --exclude='__pycache__' --exclude='*.pyc' --exclude='.DS_Store' -czf dist/bug-fixer-daemon.tar.gz -C daemon .
           # Build .zip containing daemon/ contents at the root of the archive
           (cd daemon && zip -r ../dist/bug-fixer-daemon.zip . -x "*__pycache__*" "*.pyc" "*.DS_Store")
+          (cd dist && sha256sum bug-fixer-daemon.tar.gz bug-fixer-daemon.zip > SHA256SUMS)
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
         with:
           tag_name: ${{ steps.vars.outputs.tag }}
           name: ${{ steps.vars.outputs.tag }}
           files: |
             dist/bug-fixer-daemon.tar.gz
             dist/bug-fixer-daemon.zip
+            dist/SHA256SUMS
           generate_release_notes: true

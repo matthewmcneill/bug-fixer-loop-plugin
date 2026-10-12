@@ -1,6 +1,6 @@
 {
   "bug-fixer-file-gate": {
-    "PreToolUse": [{"matcher": "write_to_file|replace_file_content",
+    "PreToolUse": [{"matcher": "write_to_file|replace_file_content|multi_replace_file_content",
       "hooks": [{"type": "command", "command": "python3 workspace-plugin/bug-fixer/scripts/pre_tool_gate.py", "timeout": 10}]}]
   },
   "bug-fixer-command-gate": {
@@ -16,5 +16,9 @@
   "bug-fixer-url-gate": {
     "PreToolUse": [{"matcher": "read_url_content",
       "hooks": [{"type": "command", "command": "python3 workspace-plugin/bug-fixer/scripts/github_url_gate.py", "timeout": 10}]}]
+  },
+  "bug-fixer-web-gate": {
+    "PreToolUse": [{"matcher": "browser_subagent|search_web",
+      "hooks": [{"type": "command", "command": "python3 workspace-plugin/bug-fixer/scripts/pre_tool_gate.py", "timeout": 10}]}]
   }
 }
