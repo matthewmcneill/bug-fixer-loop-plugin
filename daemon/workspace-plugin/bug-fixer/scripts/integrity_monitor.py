@@ -58,15 +58,44 @@ _MUTABLE_SUBCOMMANDS = frozenset({
 _PYTHON_INTERP_RE = re.compile(r"^python3?(?:\.\d+)?$")
 
 # Interpreter flags that do not alter the executed script path or inject code.
-_SAFE_PYTHON_FLAGS = frozenset({"-u", "-B", "-E", "-s", "-S", "-O", "-OO"})
+_SAFE_PYTHON_FLAGS = frozenset({"-u", "-B", "-E", "-s", "-S", "-O", "-OO", "-I"})
+
+
+def _find_daemon_root() -> Path:
+    """Locate the daemon plugin root containing scripts/manage.py."""
+    script_dir = Path(__file__).resolve().parent
+    candidate = script_dir.parent.parent.parent
+    for d in (candidate, *script_dir.parents):
+        if (d / "scripts" / "manage.py").is_file():
+            return d
+        manifest = d / "plugin.json"
+        if manifest.is_file():
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+                if data.get("name") == "bug-fixer-daemon":
+                    return d
+            except (json.JSONDecodeError, OSError):
+                pass
+    return candidate
+
+
+def _canonical_manage_paths() -> set[Path]:
+    """Return canonical resolved paths for the daemon's manage.py."""
+    paths = {(_find_daemon_root() / "scripts" / "manage.py").resolve()}
+    global_manage = (
+        Path.home() / ".gemini" / "config" / "plugins" / "bug-fixer-daemon" / "scripts" / "manage.py"
+    )
+    paths.add(global_manage.expanduser().resolve())
+    return paths
 
 
 def _was_trusted_management_command(stdin_data: dict) -> bool:
     """True when the just-executed command was a single trusted manage.py mutation.
 
     Uses structural shell parsing (shell_analysis.parse) so comments, compound
-    commands (&&, ;, |), command substitutions, or inline interpreter flags
-    (-c) cannot spoof a manage.py invocation.
+    commands (&&, ;, |), command substitutions, environment variable overrides,
+    non-canonical script paths, or inline interpreter flags (-c) cannot spoof
+    a manage.py invocation.
     """
     tool_call = stdin_data.get("toolCall", {})
     if not isinstance(tool_call, dict):
@@ -86,36 +115,50 @@ def _was_trusted_management_command(stdin_data: dict) -> bool:
         return False
 
     active_segments = [
-        s for s in parsed.segments if s.words or s.redirects_out or s.redirects_in
+        s for s in parsed.segments
+        if s.words or s.redirects_out or s.redirects_in or s.assignments
     ]
     if len(active_segments) != 1:
         return False
 
     seg = active_segments[0]
-    if seg.redirects_out or seg.piped_from is not None:
+    if seg.assignments or seg.redirects_out or seg.piped_from is not None:
         return False
 
     argv = seg.argv
     if not argv or any(not w.literal for w in argv):
         return False
 
-    idx = 0
-    if argv[idx].text == "env":
-        idx += 1
-        while idx < len(argv) and "=" in argv[idx].text:
-            idx += 1
+    if argv[0].text == "env" or Path(argv[0].text).name == "env":
+        return False
 
+    idx = 0
     if idx < len(argv) and _PYTHON_INTERP_RE.match(Path(argv[idx].text).name):
         idx += 1
-        while idx < len(argv) and argv[idx].text in _SAFE_PYTHON_FLAGS:
+        while idx < len(argv) and argv[idx].text.startswith("-"):
+            if argv[idx].text not in _SAFE_PYTHON_FLAGS:
+                return False
             idx += 1
 
-    if idx >= len(argv) or Path(argv[idx].text).name != _TRUSTED_MANAGER:
+    if idx >= len(argv):
+        return False
+
+    try:
+        script_path = Path(argv[idx].text).expanduser().resolve()
+    except OSError:
+        return False
+    if script_path not in _canonical_manage_paths():
         return False
     idx += 1
 
     if idx >= len(argv) or argv[idx].text not in _MUTABLE_SUBCOMMANDS:
         return False
+
+    subcommand = argv[idx].text
+    rest_args = [w.text for w in argv[idx + 1 :]]
+    if subcommand == "config":
+        if not any(a == "--set" or a.startswith("--set=") for a in rest_args):
+            return False
 
     return True
 

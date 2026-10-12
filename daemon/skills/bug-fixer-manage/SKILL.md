@@ -29,17 +29,19 @@ All commands below use: `python3 <MANAGE_SCRIPT> <subcommand> [args]`
 
 ---
 
-## Mutable Commands — MANDATORY HITL PATTERN
+## Mutable Commands — Deterministic HITL via `PreToolUse` (`force_ask`)
 
-> **CRITICAL**: For ALL mutable operations, you MUST follow this exact pattern.
-> Never skip the confirmation step.
+> **IMPORTANT**: Mutable `manage.py` operations (`enroll`, `unenroll`, `config --set`, `reset`, `labels`, `refresh-sidecars`) are gated deterministically by `pre_tool_gate.py`.
+> - In **interactive sessions**, `pre_tool_gate.py` returns `{"decision": "force_ask", ...}`, which triggers the native Antigravity tool-execution confirmation prompt on the `run_command` call itself.
+> - In **autonomous sessions** (sidecar / dispatched agents), `pre_tool_gate.py` returns `{"decision": "deny", ...}` — autonomous loops cannot execute management mutations.
+> - **Do NOT call `ask_question` simply to confirm a `manage.py` command** before running `run_command` (doing so creates a redundant double-confirmation prompt). Only use `ask_question` if a required parameter is genuinely missing or ambiguous (e.g., multiple enrolled repos when the user didn't specify which one).
+> - Security-critical configuration keys (`protected_files`, `spec_file_path`, `repo_dir`, `target_repo`, `maintainer`, `trusted_users`, `scanning`, `leak_patterns`, `scan_exclude_paths`) are blocked from `config --set` and must be edited directly in `config.json` by the maintainer.
 
 ### Pattern
 
 1. **Gather** all required values (read env vars, inspect repo — read-only)
-2. **Present** the exact command and all key values to the user via `ask_question`
-3. **Wait** for the user to confirm
-4. **Execute** the command only after confirmation
+2. **Clarify** via `ask_question` *only* if the user's intent or target parameter is ambiguous
+3. **Execute** the standalone `python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py <subcommand> ...` command directly — the `PreToolUse` hook will present the native `force_ask` confirmation to the user
 
 ### Mutable command reference
 
@@ -47,7 +49,7 @@ All commands below use: `python3 <MANAGE_SCRIPT> <subcommand> [args]`
 |---------|------|-------|
 | **enroll** | `--repo SLUG --dir PATH --project-id ID` | Must run from target workspace |
 | **unenroll** | `--repo SLUG` | Checks for active claims |
-| **config --set** | `--set KEY=VALUE --repo SLUG` | Type-inferred |
+| **config --set** | `--set KEY=VALUE --repo SLUG` | Operational keys only (allowlisted) |
 | **reset** | `--cooldowns / --locks / --dispatches / --all [--repo SLUG]` | Clears stuck state |
 | **labels --sync** | `--repo SLUG` | Creates missing GitHub labels |
 
@@ -74,16 +76,9 @@ git remote get-url origin
 git rev-parse --show-toplevel
 ```
 
-### Step 2 — Confirm with user
+### Step 2 — Execute (native `force_ask` confirmation)
 
-Call `ask_question` with a single question presenting:
-- **Repository**: `owner/repo`
-- **Directory**: `/absolute/path/to/repo`
-- **Project ID**: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
-
-Options: "Confirm enrollment" / "Cancel"
-
-### Step 3 — Execute (only after confirmation)
+Run the standalone enrollment command (the `PreToolUse` gate will prompt the user to approve execution):
 
 ```bash
 python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py enroll \
@@ -92,7 +87,7 @@ python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py enroll \
   --project-id <project-id>
 ```
 
-### Step 4 — Post-enrollment guidance
+### Step 3 — Post-enrollment guidance
 
 After successful enrollment, tell the user:
 1. Edit the config file (path shown in output) to set `maintainer`, `test_command`,
@@ -107,21 +102,17 @@ After successful enrollment, tell the user:
 
 ### Config update
 1. Read current config: `python3 <MANAGE_SCRIPT> config --repo owner/repo`
-2. Present proposed change via `ask_question`: "Set `engineering_interval_min` to 15?"
-3. On confirm: `python3 <MANAGE_SCRIPT> config --set engineering_interval_min=15 --repo owner/repo`
+2. Run update (native `force_ask` prompt confirms execution): `python3 <MANAGE_SCRIPT> config --set engineering_interval_min=15 --repo owner/repo`
 
 ### Reset
 1. Run `status` to identify the problem (cooldowns, stale locks, stuck dispatches)
-2. Present via `ask_question`: "Clear cooldowns for owner/repo?"
-3. On confirm: `python3 <MANAGE_SCRIPT> reset --cooldowns --repo owner/repo`
+2. Run reset (native `force_ask` prompt confirms execution): `python3 <MANAGE_SCRIPT> reset --cooldowns --repo owner/repo`
 
 ### Unenroll
-1. Present via `ask_question`: "Unenroll owner/repo from bug-fixer? This removes all sidecar data."
-2. On confirm: `python3 <MANAGE_SCRIPT> unenroll --repo owner/repo`
+1. Run unenroll (native `force_ask` prompt confirms execution): `python3 <MANAGE_SCRIPT> unenroll --repo owner/repo`
 
 ### Labels
-1. Present via `ask_question`: "Sync required labels to owner/repo?"
-2. On confirm: `python3 <MANAGE_SCRIPT> labels --sync --repo owner/repo`
+1. Run label sync (native `force_ask` prompt confirms execution): `python3 <MANAGE_SCRIPT> labels --sync --repo owner/repo`
 
 ---
 

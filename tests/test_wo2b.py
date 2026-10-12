@@ -156,6 +156,11 @@ class TestWO2bIntegrityMonitor(unittest.TestCase):
             "echo manage.py config && python3 /tmp/evil.py",
             "python3 -c 'open(\"sidecar.json\",\"w\")' manage.py config",
             "python3 manage.py config $(/tmp/evil.sh)",
+            "python3 /tmp/manage.py enroll --repo o/r",
+            "PATH=/tmp python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py enroll",
+            "env FOO=1 python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py enroll",
+            "python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py config --show",
+            "python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py status",
         ]
         for cmd in spoofed_commands:
             with self.subTest(cmd=cmd):
@@ -171,6 +176,91 @@ class TestWO2bIntegrityMonitor(unittest.TestCase):
                     sidecar_file.write_text('{"env": {"TAMPERED": true}}')
                     integrity_monitor.verify(stdin_data=payload)
                     self.assertEqual(json.loads(sidecar_file.read_text()), {"env": {}})
+
+    def test_was_trusted_management_command_canonical_paths(self):
+        """Canonical manage.py paths with mutating subcommands are trusted."""
+        repo_manage = (
+            Path(__file__).resolve().parent.parent / "daemon" / "scripts" / "manage.py"
+        )
+        valid_commands = [
+            f"python3 {repo_manage} enroll --repo o/r --dir /tmp --project-id p1",
+            f"python3 -I -u {repo_manage} config --set engineering_interval_min=15 --repo o/r",
+            "python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py enroll --repo o/r --dir /tmp --project-id p1",
+            "python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py config --set=max_concurrent_agents=3 --repo o/r",
+        ]
+        for cmd in valid_commands:
+            with self.subTest(cmd=cmd):
+                payload = {
+                    "toolCall": {
+                        "name": "run_command",
+                        "args": {"CommandLine": cmd},
+                    }
+                }
+                self.assertTrue(integrity_monitor._was_trusted_management_command(payload))
+
+
+class TestWO1ManageConfigAllowlist(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.tmp_path = Path(os.path.realpath(self.tmp))
+        self.daemon_dir = self.tmp_path / "daemon"
+        self.sc_dir = self.daemon_dir / "sidecars" / "owner--repo"
+        self.sc_dir.mkdir(parents=True)
+        self.cfg_path = self.sc_dir / "config.json"
+        self.cfg_path.write_text(json.dumps({
+            "target_repo": "owner/repo",
+            "maintainer": "alice",
+            "protected_files": ["secret.txt"],
+            "engineering_interval_min": 30,
+        }))
+
+        manage_dir = Path(__file__).resolve().parent.parent / "daemon" / "scripts"
+        if str(manage_dir) not in sys.path:
+            sys.path.insert(0, str(manage_dir))
+        import manage as manage_mod
+        self.manage = manage_mod
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_config_set_operational_key_succeeds(self):
+        import argparse
+        args = argparse.Namespace(
+            repo="owner/repo",
+            show=False,
+            set="engineering_interval_min=20",
+        )
+        with unittest.mock.patch.object(self.manage, "DAEMON_DIR", self.daemon_dir), \
+             unittest.mock.patch.object(self.manage, "SIDECARS_DIR", self.daemon_dir / "sidecars"):
+            rc = self.manage.cmd_config(args)
+        self.assertEqual(rc, 0)
+        updated = json.loads(self.cfg_path.read_text())
+        self.assertEqual(updated["engineering_interval_min"], 20)
+
+    def test_config_set_security_critical_keys_rejected(self):
+        import argparse
+        blocked_kv = [
+            "protected_files=[]",
+            "maintainer=evil",
+            "leak_patterns=[]",
+            "spec_file_path=foo",
+            "trusted_users=[\"evil\"]",
+        ]
+        for kv in blocked_kv:
+            with self.subTest(kv=kv):
+                args = argparse.Namespace(
+                    repo="owner/repo",
+                    show=False,
+                    set=kv,
+                )
+                with unittest.mock.patch.object(self.manage, "DAEMON_DIR", self.daemon_dir), \
+                     unittest.mock.patch.object(self.manage, "SIDECARS_DIR", self.daemon_dir / "sidecars"):
+                    rc = self.manage.cmd_config(args)
+                    self.assertEqual(rc, 1)
+                # Ensure original config was not modified
+                current = json.loads(self.cfg_path.read_text())
+                self.assertEqual(current["maintainer"], "alice")
+                self.assertEqual(current["protected_files"], ["secret.txt"])
 
 
 class TestWO2bSafePost(unittest.TestCase):

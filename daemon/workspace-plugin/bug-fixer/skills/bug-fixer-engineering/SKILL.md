@@ -147,11 +147,11 @@ This ensures previously-reviewed issues enter the bug-fixer:engineer:needs-fix q
      2. Then: `bug-fixer:engineer:needs-fix` issues in other milestones with due dates, sorted by due date ascending
      3. Finally: `bug-fixer:engineer:needs-fix` issues with no milestone, sorted by priority label then issue number
    - Pick the first issue from this sorted list.
-   - **Batch detection:** Check if the selected issue has a `bug-fixer:batch:*` (or legacy `batch:*`) label.
+   - **Batch detection:** Check if the selected issue has a `bug-fixer:batch:*` label.
      If it does, query for all other `bug-fixer:engineer:needs-fix` issues with the same batch
      label that are not `bug-fixer:engineer:in-progress`:
      ```bash
-     BATCH_LABEL=$(echo "<labels>" | grep -oE '(bug-fixer:)?batch:[^ "]*')
+     BATCH_LABEL=$(echo "<labels>" | grep -o '^bug-fixer:batch:[^ "]*')
      python3 ${PLUGIN_DIR}/scripts/safe_ingest.py issue-list --repo <target_repo> \
        --label "${BATCH_LABEL}" --label bug-fixer:engineer:needs-fix --state open \
        --json number,title,labels,body,milestone

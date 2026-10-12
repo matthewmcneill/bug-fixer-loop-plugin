@@ -3,8 +3,8 @@
 manage.py — Bug-fixer management CLI.
 
 All mutable operations require explicit CLI arguments — no environment variable
-dependencies. The agent reads env vars and passes them as arguments; the human
-confirms via ask_question before execution.
+dependencies. Interactive invocations of mutable subcommands are gated by the
+PreToolUse hook (force_ask confirmation), and autonomous sessions are denied.
 
 Read-only operations (status, logs, config --show) can be run freely.
 """
@@ -63,6 +63,36 @@ DEFAULT_CONFIG = {
     "architect_model": "pro",
     "trajectory_model": "flash",
 }
+
+MUTABLE_CONFIG_KEYS = frozenset({
+    "test_command",
+    "lint_command",
+    "triage_interval_min",
+    "engineering_interval_min",
+    "architect_interval_min",
+    "trajectory_interval_min",
+    "triage_model",
+    "engineering_model",
+    "architect_model",
+    "trajectory_model",
+    "max_concurrent_prs",
+    "active_milestone",
+    "milestone_priority_boost",
+    "pr_prefix",
+    "branch_prefix",
+})
+
+SECURITY_CRITICAL_CONFIG_KEYS = frozenset({
+    "protected_files",
+    "spec_file_path",
+    "repo_dir",
+    "target_repo",
+    "maintainer",
+    "trusted_users",
+    "scanning",
+    "leak_patterns",
+    "scan_exclude_paths",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +284,15 @@ def cmd_config(args):
         key, sep, value = args.set.partition("=")
         if not key or not sep:
             print("ERROR: format is KEY=VALUE", file=sys.stderr)
+            return 1
+
+        if key not in MUTABLE_CONFIG_KEYS:
+            print(
+                f"ERROR: '{key}' cannot be modified via manage.py config --set. "
+                f"Security-critical configuration keys must be edited directly in "
+                f"{config_path} by the human maintainer.",
+                file=sys.stderr,
+            )
             return 1
 
         # Type inference
