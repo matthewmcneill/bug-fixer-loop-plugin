@@ -1,0 +1,113 @@
+"""Unit tests for engineering_dispatcher worktree removal and cleanup fallback."""
+
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+SCRIPTS_DIR = (
+    Path(__file__).resolve().parent.parent
+    / "daemon"
+    / "workspace-plugin"
+    / "bug-fixer"
+    / "scripts"
+)
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+import engineering_dispatcher
+from engineering_dispatcher import remove_worktree
+
+
+class TestRemoveWorktree(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_wt_")
+        self.wt_path = Path(self.tmp_dir) / "issue-75"
+        self.wt_path.mkdir(parents=True, exist_ok=True)
+        # Create residual file inside worktree directory (e.g., .pio-mcp-workspace)
+        (self.wt_path / ".pio-mcp-workspace").mkdir(parents=True, exist_ok=True)
+        (self.wt_path / ".pio-mcp-workspace" / "metadata.json").write_text("{}")
+
+    def tearDown(self):
+        if Path(self.tmp_dir).exists():
+            shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    @patch("engineering_dispatcher.log")
+    @patch("engineering_dispatcher.run")
+    def test_remove_worktree_normal_git_success(self, mock_run, mock_log):
+        """When git worktree remove succeeds and deletes directory, fallback should not trigger."""
+        def fake_git_remove(cmd, check=False):
+            # Simulate git successfully deleting the worktree directory
+            shutil.rmtree(self.wt_path, ignore_errors=True)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = fake_git_remove
+
+        self.assertTrue(self.wt_path.exists())
+        remove_worktree(self.wt_path)
+
+        self.assertFalse(self.wt_path.exists())
+        mock_run.assert_called_once()
+        # Verify fallback log was not called
+        for call_arg in mock_log.call_args_list:
+            self.assertNotIn("falling back to shutil.rmtree", call_arg[0][0])
+
+    @patch("engineering_dispatcher.log")
+    @patch("engineering_dispatcher.run")
+    def test_remove_worktree_fallback_when_git_fails_and_dir_remains(self, mock_run, mock_log):
+        """When git worktree remove fails or metadata is pruned, fallback to shutil.rmtree removes directory."""
+        # Git worktree remove fails (swallowed by check=False) and leaves directory on disk
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["git", "worktree", "remove"],
+            returncode=128,
+            stdout="",
+            stderr="fatal: 'issue-75' is not a working tree",
+        )
+
+        self.assertTrue(self.wt_path.exists())
+        remove_worktree(self.wt_path)
+
+        # Directory should now be removed by shutil.rmtree
+        self.assertFalse(self.wt_path.exists())
+        mock_run.assert_called_once()
+
+        # Fallback log message should have been recorded
+        fallback_logged = any(
+            f"git worktree remove failed for {self.wt_path}, falling back to shutil.rmtree" in call_arg[0][0]
+            for call_arg in mock_log.call_args_list
+        )
+        self.assertTrue(fallback_logged, f"Expected fallback log message, got: {mock_log.call_args_list}")
+
+    @patch("engineering_dispatcher.log")
+    @patch("engineering_dispatcher.run")
+    def test_remove_worktree_nonexistent_path(self, mock_run, mock_log):
+        """When worktree path does not exist, neither git command nor fallback should run."""
+        nonexistent = Path(self.tmp_dir) / "does-not-exist"
+        remove_worktree(nonexistent)
+
+        mock_run.assert_not_called()
+        mock_log.assert_not_called()
+
+    @patch("engineering_dispatcher.log")
+    @patch("engineering_dispatcher.run")
+    def test_remove_worktree_file_fallback(self, mock_run, mock_log):
+        """When path is a stray file rather than directory, it is unlinked in fallback."""
+        file_path = Path(self.tmp_dir) / "stray-file"
+        file_path.write_text("dummy")
+
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=128, stdout="", stderr=""
+        )
+
+        self.assertTrue(file_path.exists())
+        remove_worktree(file_path)
+
+        self.assertFalse(file_path.exists())
+        mock_run.assert_called_once()
+
+
+if __name__ == "__main__":
+    unittest.main()

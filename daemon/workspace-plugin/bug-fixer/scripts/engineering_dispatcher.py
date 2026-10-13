@@ -15,6 +15,7 @@ Architecture:
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -364,6 +365,12 @@ def ensure_worktree(branch_name: str, label: str = "") -> Path | None:
 def remove_worktree(wt_path: Path):
     if wt_path.exists():
         run(["git", "-C", str(REPO_DIR), "worktree", "remove", "-f", str(wt_path)], check=False)
+        if wt_path.exists():
+            log(f"git worktree remove failed for {wt_path}, falling back to shutil.rmtree")
+            if wt_path.is_dir() and not wt_path.is_symlink():
+                shutil.rmtree(wt_path, ignore_errors=True)
+            else:
+                wt_path.unlink(missing_ok=True)
 
 def main():
     if not os.environ.get("ANTIGRAVITY_PROJECT_ID"):
