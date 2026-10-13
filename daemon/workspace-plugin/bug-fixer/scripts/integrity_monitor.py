@@ -185,7 +185,7 @@ def _find_sidecar_config(workspace_paths: list[str] | None = None) -> Path | Non
             sidecars_dir = d_root / "sidecars"
             if not sidecars_dir.is_dir():
                 continue
-            for sidecar_sub in sidecars_dir.iterdir():
+            for sidecar_sub in sorted(sidecars_dir.iterdir()):
                 if not sidecar_sub.is_dir():
                     continue
                 cand_conf = sidecar_sub / "config.json"
@@ -485,7 +485,7 @@ def _resolve_config_from_workspace(workspace_paths: list[str]) -> None:
     sidecars_dir = daemon_dir / "sidecars"
     if not sidecars_dir.is_dir():
         return
-    for sidecar in sidecars_dir.iterdir():
+    for sidecar in sorted(sidecars_dir.iterdir()):
         cfg_path = sidecar / "config.json"
         if not cfg_path.is_file():
             continue

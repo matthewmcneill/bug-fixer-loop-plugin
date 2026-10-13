@@ -245,6 +245,62 @@ class TestWO2bIntegrityMonitor(unittest.TestCase):
                 mock_log.assert_called_once()
                 self.assertEqual(mock_log.call_args[0][0], "integrity_snapshot_missing")
 
+    def test_find_sidecar_config_deterministic_sorted_order(self):
+        """_find_sidecar_config iterates sidecars in deterministic sorted order."""
+        repo_dir = self.tmp_path / "shared_repo"
+        repo_dir.mkdir(parents=True)
+        daemon_dir = self.tmp_path / "daemon"
+        for slug in ("z-sidecar", "a-sidecar"):
+            sc = daemon_dir / "sidecars" / slug
+            sc.mkdir(parents=True)
+            (sc / "config.json").write_text(json.dumps({
+                "target_repo": f"org/{slug}",
+                "repo_dir": str(repo_dir),
+            }))
+        (daemon_dir / "plugin.json").write_text(json.dumps({"name": "bug-fixer-daemon"}))
+
+        with unittest.mock.patch.dict(os.environ, {"BUG_FIXER_CONFIG": ""}), \
+             unittest.mock.patch("integrity_monitor._find_daemon_root", return_value=daemon_dir):
+            found = integrity_monitor._find_sidecar_config(workspace_paths=[str(repo_dir)])
+            self.assertEqual(found, (daemon_dir / "sidecars" / "a-sidecar" / "config.json").resolve())
+
+    def test_scan_with_builtin_floor_deduplicates_violations(self):
+        """_scan_with_builtin_floor deduplicates violations across configured backend and built-in floor."""
+        import pre_tool_gate
+
+        v_shared = pre_tool_gate.ScanViolation(
+            path="leak.py",
+            line=1,
+            rule=pre_tool_gate.BUILTIN_LEAK_PATTERNS[0],
+            redacted_match="ya29…",
+        )
+        v_custom = pre_tool_gate.ScanViolation(
+            path="leak.py",
+            line=2,
+            rule="CUSTOM_RULE",
+            redacted_match="CUST…",
+        )
+
+        class FakeBackend:
+            name = "fake"
+            version = "1.0"
+
+            def scan(self, repo_dir, scope, exclude_paths=None):
+                return [v_shared, v_custom]
+
+            def config_hash(self):
+                return "deadbeef"
+
+        with unittest.mock.patch.object(
+            pre_tool_gate.RegexBackend, "scan", return_value=[v_shared]
+        ):
+            res = pre_tool_gate._scan_with_builtin_floor(
+                str(self.tmp_path),
+                pre_tool_gate.ScanScope.TREE,
+                backend=FakeBackend(),
+            )
+            self.assertEqual(res, [v_shared, v_custom])
+
 
 class TestWO1ManageConfigAllowlist(unittest.TestCase):
     def setUp(self):

@@ -319,7 +319,7 @@ def load_config(
         if daemon_dir and workspace_paths:
             sidecars_dir = daemon_dir / "sidecars"
             if sidecars_dir.is_dir():
-                for sidecar_sub in sidecars_dir.iterdir():
+                for sidecar_sub in sorted(sidecars_dir.iterdir()):
                     if not sidecar_sub.is_dir():
                         continue
                     cand_conf = sidecar_sub / "config.json"
@@ -1764,17 +1764,12 @@ def _check_git(
             exclude_paths = list(
                 dict.fromkeys([*raw_excludes, *RegexBackend.DEFAULT_REGEX_EXCLUDE_PATHS])
             )
-            violations = list(
-                resolve_backend(ctx.config).scan(
-                    scan_dir, ScanScope.TREE, exclude_paths=exclude_paths
-                )
+            violations = _scan_with_builtin_floor(
+                scan_dir,
+                ScanScope.TREE,
+                exclude_paths=exclude_paths,
+                config=ctx.config,
             )
-            builtin_violations = RegexBackend(list(BUILTIN_LEAK_PATTERNS)).scan(
-                scan_dir, ScanScope.TREE, exclude_paths=exclude_paths
-            )
-            for v in builtin_violations:
-                if v not in violations:
-                    violations.append(v)
             if violations:
                 return (
                     _deny(
@@ -3381,6 +3376,27 @@ def verify_receipt(repo_dir: str) -> int:
         return 1
 
 
+def _scan_with_builtin_floor(
+    repo_dir: str,
+    scope: ScanScope,
+    exclude_paths: list[str] | None = None,
+    backend: ScanBackend | None = None,
+    config: dict[str, Any] | None = None,
+    patterns: list[str] | None = None,
+) -> list[ScanViolation]:
+    """Run configured ScanBackend plus BUILTIN_LEAK_PATTERNS floor, deduplicating violations."""
+    if backend is None:
+        backend = resolve_backend(config, patterns=patterns)
+    violations = list(backend.scan(repo_dir, scope, exclude_paths=exclude_paths))
+    builtin_violations = RegexBackend(list(BUILTIN_LEAK_PATTERNS)).scan(
+        repo_dir, scope, exclude_paths=exclude_paths
+    )
+    for v in builtin_violations:
+        if v not in violations:
+            violations.append(v)
+    return violations
+
+
 def run_git_hook(
     repo_dir: str,
     patterns: list[str] | None = None,
@@ -3389,8 +3405,6 @@ def run_git_hook(
     config: dict[str, Any] | None = None,
 ) -> int:
     """Executes pre-commit / pre-push git hook validation."""
-    if backend is None:
-        backend = resolve_backend(config, patterns=patterns)
     staged_files: list[str] = []
     try:
         staged_files = [
@@ -3406,13 +3420,14 @@ def run_git_hook(
     except Exception:
         staged_files = []
     scope = ScanScope.STAGED if staged_files else ScanScope.TREE
-    violations = list(backend.scan(repo_dir, scope, exclude_paths=exclude_paths))
-    builtin_violations = RegexBackend(list(BUILTIN_LEAK_PATTERNS)).scan(
-        repo_dir, scope, exclude_paths=exclude_paths
+    violations = _scan_with_builtin_floor(
+        repo_dir,
+        scope,
+        exclude_paths=exclude_paths,
+        backend=backend,
+        config=config,
+        patterns=patterns,
     )
-    for v in builtin_violations:
-        if v not in violations:
-            violations.append(v)
     if violations:
         sys.stderr.write(
             f"\n[Git Hook Blocked] Leak pattern violation(s) detected ({len(violations)}):\n"

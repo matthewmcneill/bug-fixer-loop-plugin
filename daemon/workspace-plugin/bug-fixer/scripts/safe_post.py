@@ -81,7 +81,7 @@ def _candidate_configs() -> list[Path]:
         daemon_dir = daemon_dir.parent
     sidecars_dir = daemon_dir / "sidecars" if daemon_dir else plugin_dir.parent.parent / "sidecars"
     if sidecars_dir.is_dir():
-        for sidecar_sub in sidecars_dir.iterdir():
+        for sidecar_sub in sorted(sidecars_dir.iterdir()):
             if sidecar_sub.is_dir():
                 cand = sidecar_sub / "config.json"
                 if cand.is_file():
