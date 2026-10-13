@@ -42,10 +42,16 @@ DEFAULT_CONFIG = WORKSPACE_DIR / "config.json"
 # remove these. Kept identical to pre_tool_gate.BUILTIN_LEAK_PATTERNS (tested).
 BUILTIN_LEAK_PATTERNS = (
     r"ya29\.[A-Za-z0-9_-]+",
+    r"AIza[0-9A-Za-z_-]{35}",
     r"AKIA[0-9A-Z]{16}",
-    r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
+    r"ASIA[0-9A-Z]{16}",
+    r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----",
     r"gh[pousr]_[A-Za-z0-9]{36,}",
     r"github_pat_[A-Za-z0-9_]{22,}",
+    r"sk-ant-[A-Za-z0-9_-]{20,}",
+    r"sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}",
+    r"xox[abpors]-[0-9A-Za-z-]{10,}",
+    r"https://hooks\.slack\.com/services/T[A-Za-z0-9_]+/B[A-Za-z0-9_]+/[A-Za-z0-9_]+",
 )
 
 # Labels that only trusted dispatcher code (outside agent conversations) may add.
@@ -75,7 +81,7 @@ def _candidate_configs() -> list[Path]:
         daemon_dir = daemon_dir.parent
     sidecars_dir = daemon_dir / "sidecars" if daemon_dir else plugin_dir.parent.parent / "sidecars"
     if sidecars_dir.is_dir():
-        for sidecar_sub in sidecars_dir.iterdir():
+        for sidecar_sub in sorted(sidecars_dir.iterdir()):
             if sidecar_sub.is_dir():
                 cand = sidecar_sub / "config.json"
                 if cand.is_file():

@@ -157,10 +157,16 @@ REASON_SAFE_INGEST_OVERRIDE = (
 # Config can add patterns but never remove these.
 BUILTIN_LEAK_PATTERNS = (
     r"ya29\.[A-Za-z0-9_-]+",
+    r"AIza[0-9A-Za-z_-]{35}",
     r"AKIA[0-9A-Z]{16}",
-    r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
+    r"ASIA[0-9A-Z]{16}",
+    r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----",
     r"gh[pousr]_[A-Za-z0-9]{36,}",
     r"github_pat_[A-Za-z0-9_]{22,}",
+    r"sk-ant-[A-Za-z0-9_-]{20,}",
+    r"sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}",
+    r"xox[abpors]-[0-9A-Za-z-]{10,}",
+    r"https://hooks\.slack\.com/services/T[A-Za-z0-9_]+/B[A-Za-z0-9_]+/[A-Za-z0-9_]+",
 )
 
 # Labels that only trusted dispatcher code (outside agent conversations) may
@@ -313,7 +319,7 @@ def load_config(
         if daemon_dir and workspace_paths:
             sidecars_dir = daemon_dir / "sidecars"
             if sidecars_dir.is_dir():
-                for sidecar_sub in sidecars_dir.iterdir():
+                for sidecar_sub in sorted(sidecars_dir.iterdir()):
                     if not sidecar_sub.is_dir():
                         continue
                     cand_conf = sidecar_sub / "config.json"
@@ -1087,6 +1093,7 @@ class _GateContext:
     patterns: list[re.Pattern[str]]
     enrolled: bool = True
     conversation_id: str = ""
+    config: dict[str, Any] = field(default_factory=dict)
     # Files written earlier in the command being checked: path -> known content (None = unknown).
     written: dict[str, str | None] = field(default_factory=dict)
     # Set once an earlier segment could have modified arbitrary files.
@@ -1280,26 +1287,66 @@ def _is_real_host_script(word: Word, cwd: str | None, protected: _ProtectedPaths
     return bool(path) and path in protected.host_scripts
 
 
+def _canonical_safe_post_paths() -> set[Path]:
+    paths = {(_SCRIPTS_DIR / "safe_post.py").resolve()}
+    global_safe_post = (
+        Path.home()
+        / ".gemini"
+        / "config"
+        / "plugins"
+        / "bug-fixer-daemon"
+        / "workspace-plugin"
+        / "bug-fixer"
+        / "scripts"
+        / "safe_post.py"
+    )
+    paths.add(global_safe_post.expanduser().resolve())
+    return paths
+
+
 def _targets_proxy(word: Word, cwd: str | None) -> bool:
-    """True when `word` names safe_post (directly, via glob/brace, or a symlink to it)."""
-    if word.dynamic:
+    """True when `word` resolves to the canonical safe_post.py script."""
+    if not word.literal or word.dynamic or word.globbed:
         return False
-    for candidate in expand_braces(word.text):
-        base = os.path.basename(candidate)
-        if base in ("safe_post.py", "safe_post"):
-            return True
-        if word.globbed and (
-            fnmatch.fnmatchcase("safe_post.py", base) or fnmatch.fnmatchcase("safe_post", base)
-        ):
-            return True
+    if word.text in ("safe_post.py", "safe_post"):
+        return False
     resolved = _resolve_path(word.text, cwd)
-    if resolved:
-        try:
-            if os.path.basename(os.path.realpath(resolved)) == "safe_post.py":
-                return True
-        except OSError:
-            pass
-    return False
+    if not resolved:
+        return False
+    try:
+        resolved_path = Path(resolved).expanduser().resolve()
+    except OSError:
+        return False
+    return resolved_path in _canonical_safe_post_paths()
+
+
+def _check_safe_post_invocation(
+    seg: Segment, prog: Word, args: list[Word], script_word: Word
+) -> dict[str, str] | None:
+    """Validate that a canonical safe_post.py invocation has no env overrides or unsafe flags."""
+    if seg.assignments:
+        return _deny(
+            "Unsafe safe_post.py invocation: environment variable overrides are not permitted."
+        )
+    for w in seg.argv:
+        if w is prog:
+            break
+        if w.dynamic or w.globbed:
+            return _deny(REASON_DYNAMIC_EXEC)
+        if os.path.basename(w.text) == "env":
+            continue
+        return _deny(
+            "Unsafe safe_post.py invocation: wrapper flags or environment overrides are not permitted."
+        )
+    if _program_name(prog) == "python":
+        for w in args:
+            if w is script_word:
+                break
+            if not w.literal or w.dynamic or w.globbed or w.text not in _SAFE_PYTHON_FLAGS:
+                return _deny(
+                    "Unsafe safe_post.py invocation: unsafe Python interpreter flags are not permitted."
+                )
+    return None
 
 
 def _check_code(code: str, ctx: _GateContext, cwd: str | None) -> dict[str, str] | None:
@@ -1680,6 +1727,22 @@ def _check_git(
         keys = [w for w in rest if not w.text.startswith("-")]
         if keys and (keys[0].dynamic or _GIT_EXEC_CONFIG.match(keys[0].text)) and len(keys) > 1:
             return _deny(REASON_DYNAMIC_EXEC), cwd
+    if sub in ("commit", "push", "merge", "am", "cherry-pick"):
+        for w in rest:
+            if w.text == "--":
+                break
+            if w.text == "--no-verify":
+                return _deny("Bypassing git hooks (--no-verify) is prohibited."), cwd
+            if sub == "commit" and (
+                w.text == "-n"
+                or (
+                    w.text.startswith("-")
+                    and not w.text.startswith("--")
+                    and re.fullmatch(r"-[asvqne]+", w.text)
+                    and "n" in w.text
+                )
+            ):
+                return _deny("Bypassing git hooks (--no-verify) is prohibited."), cwd
     if sub in _GIT_PATH_WRITERS and any(ctx.protected.mentioned_in(w.text, cwd) for w in rest):
         return _deny(REASON_SHELL_MUTATION), cwd
     if sub in _GIT_EGRESS:
@@ -1694,6 +1757,26 @@ def _check_git(
             return _deny(REASON_EGRESS_LEAK), cwd
     if sub == "push" and _pushes_default_branch(rest, cwd):
         return _deny(REASON_PUSH_DEFAULT_BRANCH), cwd
+    if sub == "push" and ctx.enrolled:
+        scan_dir = cwd or _repo_root(ctx.config, None)
+        if scan_dir and os.path.exists(os.path.join(scan_dir, ".git")):
+            raw_excludes = list((ctx.config or {}).get("scan_exclude_paths") or [])
+            exclude_paths = list(
+                dict.fromkeys([*raw_excludes, *RegexBackend.DEFAULT_REGEX_EXCLUDE_PATHS])
+            )
+            violations = _scan_with_builtin_floor(
+                scan_dir,
+                ScanScope.TREE,
+                exclude_paths=exclude_paths,
+                config=ctx.config,
+            )
+            if violations:
+                return (
+                    _deny(
+                        f"{REASON_EGRESS_LEAK} (Detected in repository tree before git push: {violations[0]})"
+                    ),
+                    cwd,
+                )
     if sub and sub not in _GIT_KNOWN_SUBCOMMANDS:
         return _deny(REASON_DYNAMIC_EXEC), cwd  # git aliases run arbitrary commands
     return None, cwd
@@ -1857,10 +1940,15 @@ def _check_interpreter(
         script, explicit_stdin = None, True
     if script is not None:
         if script.dynamic or script.globbed:
-            if _targets_proxy(script, cwd):
-                return None  # allow safe_post.py — it scans content itself
             return _deny(REASON_DYNAMIC_EXEC)
         if _targets_proxy(script, cwd):
+            if codes or module_mode:
+                return _deny(
+                    "Unsafe safe_post.py invocation: inline code or module flags are not permitted."
+                )
+            denied = _check_safe_post_invocation(seg, prog, args, script)
+            if denied:
+                return denied
             return None  # allow safe_post.py — it scans content itself
         if _is_real_host_script(script, cwd, ctx.protected):
             return None  # trusted plugin entry point (safe_ingest.py, pre_tool_gate.py, …)
@@ -2147,6 +2235,28 @@ def _check_safe_ingest_and_trust_env(
                 ):
                     return _deny(REASON_SAFE_INGEST_OVERRIDE)
             break
+    for idx, w in enumerate(argv):
+        if w.dynamic:
+            continue
+        base = os.path.basename(w.text)
+        is_gate = base == "pre_tool_gate.py"
+        if not is_gate:
+            resolved = _resolve_path(w.text, cwd)
+            if resolved:
+                try:
+                    is_gate = os.path.basename(os.path.realpath(resolved)) == "pre_tool_gate.py"
+                except OSError:
+                    is_gate = False
+        if is_gate:
+            for arg in argv[idx + 1 :]:
+                if arg.text in ("--stamp-receipt", "--stamp-pass") or arg.text.startswith(
+                    ("--stamp-receipt=", "--stamp-pass=")
+                ):
+                    return _deny(
+                        "Direct receipt stamping (--stamp-receipt / --stamp-pass) via run_command is restricted; "
+                        "use --scan-only or let the gate scan on git push."
+                    )
+            break
     return None
 
 
@@ -2192,9 +2302,17 @@ def _check_segment(
     if prog.dynamic:
         return _deny(REASON_DYNAMIC_EXEC), cwd
     if _targets_proxy(prog, cwd):
+        denied = _check_safe_post_invocation(seg, prog, args, prog)
+        if denied:
+            return denied, cwd
         return None, cwd  # allow safe_post.py — it scans content itself
     if prog.globbed:
         return _deny(REASON_DYNAMIC_EXEC), cwd
+    if (
+        os.path.basename(prog.text) in HOST_SECURITY_SCRIPTS
+        or os.path.basename(prog.text) == "safe_post"
+    ) and not _is_real_host_script(prog, cwd, ctx.protected):
+        return _deny("Non-canonical host security script path is not permitted."), cwd
 
     name = _program_name(prog)
     has_output = bool(seg.redirects_out)
@@ -2240,6 +2358,9 @@ def _check_segment(
             if scripts[0].dynamic or scripts[0].globbed:
                 return _deny(REASON_DYNAMIC_EXEC), cwd
             if _targets_proxy(scripts[0], cwd):
+                denied = _check_safe_post_invocation(seg, prog, args, scripts[0])
+                if denied:
+                    return denied, cwd
                 return None, cwd  # allow safe_post.py — it scans content itself
             return _check_writer_words(seg, scripts[1:], ctx, cwd, include_stdin=False), cwd
         if (
@@ -2563,6 +2684,7 @@ def _build_context(
         patterns=patterns,
         enrolled=enrolled,
         conversation_id=conversation_id,
+        config=config or {},
     )
 
 
@@ -2786,7 +2908,11 @@ class RegexBackend:
         content = "\n".join(sorted(valid_patterns))
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-    DEFAULT_REGEX_EXCLUDE_PATHS = ["tests/", ".agents/skills/principal-architect-workspace/"]
+    DEFAULT_REGEX_EXCLUDE_PATHS = [
+        "tests/",
+        ".agents/",
+        ".agents/skills/principal-architect-workspace/",
+    ]
 
     def scan(
         self,
@@ -3250,6 +3376,27 @@ def verify_receipt(repo_dir: str) -> int:
         return 1
 
 
+def _scan_with_builtin_floor(
+    repo_dir: str,
+    scope: ScanScope,
+    exclude_paths: list[str] | None = None,
+    backend: ScanBackend | None = None,
+    config: dict[str, Any] | None = None,
+    patterns: list[str] | None = None,
+) -> list[ScanViolation]:
+    """Run configured ScanBackend plus BUILTIN_LEAK_PATTERNS floor, deduplicating violations."""
+    if backend is None:
+        backend = resolve_backend(config, patterns=patterns)
+    violations = list(backend.scan(repo_dir, scope, exclude_paths=exclude_paths))
+    builtin_violations = RegexBackend(list(BUILTIN_LEAK_PATTERNS)).scan(
+        repo_dir, scope, exclude_paths=exclude_paths
+    )
+    for v in builtin_violations:
+        if v not in violations:
+            violations.append(v)
+    return violations
+
+
 def run_git_hook(
     repo_dir: str,
     patterns: list[str] | None = None,
@@ -3258,9 +3405,29 @@ def run_git_hook(
     config: dict[str, Any] | None = None,
 ) -> int:
     """Executes pre-commit / pre-push git hook validation."""
-    if backend is None:
-        backend = resolve_backend(config, patterns=patterns)
-    violations = backend.scan(repo_dir, ScanScope.STAGED, exclude_paths=exclude_paths)
+    staged_files: list[str] = []
+    try:
+        staged_files = [
+            line
+            for line in subprocess.check_output(
+                ["git", "diff", "--cached", "--name-only"],
+                cwd=repo_dir,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).splitlines()
+            if line.strip()
+        ]
+    except Exception:
+        staged_files = []
+    scope = ScanScope.STAGED if staged_files else ScanScope.TREE
+    violations = _scan_with_builtin_floor(
+        repo_dir,
+        scope,
+        exclude_paths=exclude_paths,
+        backend=backend,
+        config=config,
+        patterns=patterns,
+    )
     if violations:
         sys.stderr.write(
             f"\n[Git Hook Blocked] Leak pattern violation(s) detected ({len(violations)}):\n"
@@ -3268,6 +3435,8 @@ def run_git_hook(
             + "\n"
         )
         return 1
+    if not staged_files:
+        return 0
     return verify_receipt(repo_dir)
 
 

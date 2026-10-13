@@ -163,39 +163,86 @@ def _was_trusted_management_command(stdin_data: dict) -> bool:
     return True
 
 
-def _get_snapshot_file(conversation_id: str = "") -> Path:
-    """Snapshot file lives alongside the config in the sidecar dir, scoped by conversation."""
-    suffix = f".{conversation_id}" if conversation_id else ""
+def _find_sidecar_config(workspace_paths: list[str] | None = None) -> Path | None:
+    """Locate the active sidecar config.json via BUG_FIXER_CONFIG or workspace_paths."""
     config_env = os.environ.get("BUG_FIXER_CONFIG", "")
     if config_env and Path(config_env).is_file():
-        return Path(config_env).resolve().parent / f".integrity_snapshot{suffix}.json"
+        return Path(config_env).resolve()
+
+    search_wps = list(workspace_paths) if workspace_paths else []
+    if not search_wps:
+        try:
+            search_wps = [str(Path.cwd().resolve())]
+        except OSError:
+            search_wps = []
+
+    if search_wps:
+        daemon_roots = [_find_daemon_root()]
+        global_daemon = Path.home() / ".gemini" / "config" / "plugins" / "bug-fixer-daemon"
+        if global_daemon not in daemon_roots:
+            daemon_roots.append(global_daemon)
+        for d_root in daemon_roots:
+            sidecars_dir = d_root / "sidecars"
+            if not sidecars_dir.is_dir():
+                continue
+            for sidecar_sub in sorted(sidecars_dir.iterdir()):
+                if not sidecar_sub.is_dir():
+                    continue
+                cand_conf = sidecar_sub / "config.json"
+                if not cand_conf.is_file():
+                    continue
+                try:
+                    c_data = json.loads(cand_conf.read_text(encoding="utf-8"))
+                    r_dir = c_data.get("repo_dir")
+                    if r_dir:
+                        r_path = Path(r_dir).resolve()
+                        for wp in search_wps:
+                            if Path(wp).resolve().is_relative_to(r_path):
+                                return cand_conf.resolve()
+                except (json.JSONDecodeError, OSError):
+                    continue
+    return None
+
+
+def _get_snapshot_file(
+    conversation_id: str = "", workspace_paths: list[str] | None = None
+) -> Path:
+    """Snapshot file lives alongside the config in the sidecar dir, scoped by conversation."""
+    suffix = f".{conversation_id}" if conversation_id else ""
+    cfg_path = _find_sidecar_config(workspace_paths)
+    if cfg_path is not None:
+        return cfg_path.parent / f".integrity_snapshot{suffix}.json"
     # Legacy fallback
     return Path(__file__).resolve().parent.parent / f".integrity_snapshot{suffix}.json"
 
 
-def _get_snapshot_dir(conversation_id: str = "") -> Path:
+def _get_snapshot_dir(
+    conversation_id: str = "", workspace_paths: list[str] | None = None
+) -> Path:
     """Directory where copies of protected files are saved for reversion."""
     suffix = f".{conversation_id}" if conversation_id else ""
-    return _get_snapshot_file(conversation_id).parent / f".integrity_snapshot{suffix}"
+    return _get_snapshot_file(conversation_id, workspace_paths).parent / f".integrity_snapshot{suffix}"
 
 
 # Module-level alias for backward compatibility (no conversation scoping)
 SNAPSHOT_FILE = _get_snapshot_file("")
 
 
-def _get_protected_files() -> list[str]:
+def _get_protected_files(workspace_paths: list[str] | None = None) -> list[str]:
     """Return absolute paths of files to monitor for integrity."""
     script_dir = Path(__file__).resolve().parent
     plugin_dir = script_dir.parent
 
-    files = []
+    files: list[str] = []
+    discovered_configs: list[Path] = []
     # Sidecar / workspace config and cache
-    config_env = os.environ.get("BUG_FIXER_CONFIG", "")
-    if config_env and Path(config_env).is_file():
-        sidecar_dir = Path(config_env).resolve().parent
-        for name in ["config.json", "injection_cache.json", "security_refusals.jsonl"]:
+    cfg_path = _find_sidecar_config(workspace_paths)
+    if cfg_path is not None and cfg_path.is_file():
+        discovered_configs.append(cfg_path)
+        sidecar_dir = cfg_path.parent
+        for name in ["config.json", "injection_cache.json", "security_refusals.jsonl", "sidecar.json"]:
             p = sidecar_dir / name
-            if p.exists():
+            if p.exists() and str(p) not in files:
                 files.append(str(p))
     else:
         # Legacy fallback workspaces
@@ -209,6 +256,46 @@ def _get_protected_files() -> list[str]:
                 p = workspace / name
                 if p.exists() and str(p) not in files:
                     files.append(str(p))
+                    if name == "config.json" and p not in discovered_configs:
+                        discovered_configs.append(p)
+
+    # Read config.json and monitor target repository's spec_file_path, protected_files, and .agents/plugins.json
+    for conf_file in discovered_configs:
+        try:
+            cfg_data = json.loads(conf_file.read_text(encoding="utf-8"))
+            if not isinstance(cfg_data, dict):
+                continue
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        repo_dir_str = str(cfg_data.get("repo_dir") or "").strip()
+        if not repo_dir_str and workspace_paths:
+            repo_dir_str = str(workspace_paths[0]).strip()
+        repo_base = Path(repo_dir_str).expanduser().resolve() if repo_dir_str else Path.cwd().resolve()
+
+        spec_file = str(cfg_data.get("spec_file_path") or "").strip()
+        if spec_file:
+            sp = Path(spec_file).expanduser()
+            sp_res = sp.resolve() if sp.is_absolute() else (repo_base / sp).resolve()
+            if sp_res.exists() and str(sp_res) not in files:
+                files.append(str(sp_res))
+
+        for pf in cfg_data.get("protected_files") or []:
+            if not pf or not isinstance(pf, str):
+                continue
+            pf_p = Path(pf).expanduser()
+            pf_res = pf_p.resolve() if pf_p.is_absolute() else (repo_base / pf_p).resolve()
+            if pf_res.exists() and str(pf_res) not in files:
+                files.append(str(pf_res))
+
+        plugins_json = repo_base / ".agents" / "plugins.json"
+        if plugins_json.exists() and str(plugins_json) not in files:
+            files.append(str(plugins_json))
+
+        for name in [".betterleaks.toml", ".betterleaksignore"]:
+            bl_p = repo_base / name
+            if bl_p.exists() and str(bl_p) not in files:
+                files.append(str(bl_p))
 
     # Plugin manifest and hooks files (daemon root is two levels above scripts/)
     daemon_root = plugin_dir.parent.parent
@@ -217,12 +304,6 @@ def _get_protected_files() -> list[str]:
             p = d / name
             if p.exists() and str(p) not in files:
                 files.append(str(p))
-
-    # Consumer plugins.json and sidecar.json
-    if config_env and Path(config_env).is_file():
-        sidecar_json = Path(config_env).resolve().parent / "sidecar.json"
-        if sidecar_json.exists() and str(sidecar_json) not in files:
-            files.append(str(sidecar_json))
 
     # Scanner config files at repo root or plugin dir
     for d in [plugin_dir, plugin_dir.parent, Path.cwd()]:
@@ -251,15 +332,25 @@ def _sha256(path: str) -> str:
         return ""
 
 
-def snapshot(conversation_id: str = "") -> None:
+def snapshot(
+    conversation_id: str = "", workspace_paths: list[str] | None = None
+) -> None:
     """Take a snapshot of all protected file checksums (called by --pre)."""
-    snapshot_file = _get_snapshot_file(conversation_id)
-    snapshot_dir = _get_snapshot_dir(conversation_id)
+    snapshot_file = _get_snapshot_file(conversation_id, workspace_paths)
+    snapshot_dir = _get_snapshot_dir(conversation_id, workspace_paths)
     snapshot_file.parent.mkdir(parents=True, exist_ok=True)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
 
+    if workspace_paths is not None:
+        try:
+            protected_files = _get_protected_files(workspace_paths)
+        except TypeError:
+            protected_files = _get_protected_files()
+    else:
+        protected_files = _get_protected_files()
+
     checksums = {}
-    for path in _get_protected_files():
+    for path in protected_files:
         h = _sha256(path)
         if h:
             checksums[path] = h
@@ -275,9 +366,33 @@ def snapshot(conversation_id: str = "") -> None:
 
 def verify(conversation_id: str = "", stdin_data: dict | None = None) -> None:
     """Verify protected files against snapshot, revert if tampered (called by --post)."""
-    snapshot_file = _get_snapshot_file(conversation_id)
-    snapshot_dir = _get_snapshot_dir(conversation_id)
+    workspace_paths = (
+        stdin_data.get("workspacePaths")
+        if isinstance(stdin_data, dict) and isinstance(stdin_data.get("workspacePaths"), list)
+        else None
+    )
+    snapshot_file = _get_snapshot_file(conversation_id, workspace_paths)
+    snapshot_dir = _get_snapshot_dir(conversation_id, workspace_paths)
     if not snapshot_file.exists():
+        cmd_text = ""
+        if isinstance(stdin_data, dict):
+            tool_call = stdin_data.get("toolCall", {})
+            if isinstance(tool_call, dict):
+                cmd_text = str((tool_call.get("args") or {}).get("CommandLine") or "")
+        cfg_path = _find_sidecar_config(workspace_paths)
+        sys.stderr.write(
+            f"INTEGRITY WARNING: snapshot file missing at {snapshot_file} during post-hook verification.\n"
+        )
+        try:
+            security_audit.log_security_event(
+                "integrity_snapshot_missing",
+                f"Integrity snapshot missing at {snapshot_file}",
+                1.0,
+                cmd_text or str(snapshot_file),
+                str(cfg_path) if cfg_path else "",
+            )
+        except Exception as exc:
+            sys.stderr.write(f"INTEGRITY: failed to log missing snapshot event: {exc}\n")
         return
 
     try:
@@ -370,7 +485,7 @@ def _resolve_config_from_workspace(workspace_paths: list[str]) -> None:
     sidecars_dir = daemon_dir / "sidecars"
     if not sidecars_dir.is_dir():
         return
-    for sidecar in sidecars_dir.iterdir():
+    for sidecar in sorted(sidecars_dir.iterdir()):
         cfg_path = sidecar / "config.json"
         if not cfg_path.is_file():
             continue

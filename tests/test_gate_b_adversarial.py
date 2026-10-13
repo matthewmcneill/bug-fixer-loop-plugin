@@ -29,7 +29,7 @@ import safe_post  # noqa: E402
 import shell_analysis  # noqa: E402
 
 WS = ".agents/plugins/bug-fixer-loop-workspace"
-SECRET = "ya29.AbCdEfGh123"
+SECRET = "ya29." + "AbCdEfGh123"
 GH_TOKEN = "ghp_" + "A" * 36
 
 _CONFIG_DIR = None
@@ -311,13 +311,13 @@ def _legitimate(rt: str) -> list[str]:
         "python3 -m unittest discover -s tests -v",
         "python3 -m unittest tests/test_safe_post.py",
         "python3 daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py issue-list --repo o/r --json number",
-        # safe_post.py is the sanctioned egress proxy for all agents
-        "python3 scripts/safe_post.py issue-comment 5 --repo o/r --body hi",
-        "scripts/safe_post.py issue-comment 5 --repo o/r --body hi",
-        "./scripts/safe_post.py issue-comment 5",
-        "python3 -u scripts/safe_post.py issue-comment 5",
-        "python3.12 scripts/safe_post.py x",
-        "env python3 scripts/safe_post.py x",
+        # safe_post.py is the sanctioned egress proxy for all agents (canonical path only)
+        "python3 daemon/workspace-plugin/bug-fixer/scripts/safe_post.py issue-comment 5 --repo o/r --body hi",
+        "daemon/workspace-plugin/bug-fixer/scripts/safe_post.py issue-comment 5 --repo o/r --body hi",
+        "./daemon/workspace-plugin/bug-fixer/scripts/safe_post.py issue-comment 5",
+        "python3 -u daemon/workspace-plugin/bug-fixer/scripts/safe_post.py issue-comment 5",
+        "python3.12 daemon/workspace-plugin/bug-fixer/scripts/safe_post.py x",
+        "env python3 daemon/workspace-plugin/bug-fixer/scripts/safe_post.py x",
         "python3 daemon/workspace-plugin/bug-fixer/scripts/pre_tool_gate.py --scan-only .",
         f"python3 daemon/workspace-plugin/bug-fixer/scripts/pre_tool_gate.py --config {WS}/config.json --scan-only .",
         "python3 --version",
