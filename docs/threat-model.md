@@ -42,7 +42,9 @@ agent is told:
    `[ARCHITECT] Approved` from a session that wasn't dispatched as architect, and
    adding trust-escalating labels.
 2. **No secret egress.** Secrets don't leave the machine through GitHub writes,
-   pushed commits or fetched URLs carrying them.
+   pushed commits or fetched URLs carrying them. Enforced locally via BetterLeaks
+   (with regex fallback) on commits and comments, and backed by GitHub server-side
+   push protection.
 3. **No self-modification.** Agents can't change the daemon's scripts, hooks,
    manifests, sidecar config or `.agents/plugins.json`, by any route.
 4. **No unreviewed injection.** Untrusted GitHub content reaches agents only
@@ -131,6 +133,34 @@ primary control surface is **ingress**:
      process (`_token_cache`). Credentials and cloud tokens are never persisted to disk or
      exposed to the agent workspace.
 
+## Technology decisions: Model Armor & BetterLeaks
+
+Bug Fixer selected two specialized engines to harden its boundaries: **Google Cloud Model Armor** for inbound prompt-injection defence, and **BetterLeaks** (Gitleaks-compatible) for outbound secret-egress defence. Both choices reflect deliberate architectural trade-offs:
+
+### 1. Google Cloud Model Armor (Inbound Prompt-Injection Defence)
+
+- **Why Model Armor over alternatives:**
+  - *vs. Regex-only:* Static patterns catch syntax overrides (`ignore previous instructions`) but fail completely against semantic rephrasing, roleplaying framing, indirect context smuggling, and multilingual injection.
+  - *vs. Full LLM-as-a-judge:* Invoking a general-purpose LLM (e.g. secondary Gemini or Claude turn) adds 1.5–3.0s of latency per scan, increases token costs, and introduces a recursive prompt-injection surface (the judge model itself can be jailbroken). Model Armor is purpose-built, running in ~150–250ms with dedicated safety models.
+  - *vs. Local open-source heuristics:* Model Armor is backed by Google Cloud's continuously updated adversarial threat intelligence, outperforming static local tokenizers.
+- **Architectural invariants & integration rules:**
+  - **Heuristic floor first:** Blatant overrides match `BUILTIN_INJECTION_PATTERNS` in sub-millisecond local regex execution, rejecting attacks with zero GCP API cost.
+  - **Content-hash caching (`CachedInjectionScanner`):** Content is SHA-256 indexed so repeated scans across triage runs and unchanged threads hit cache instead of exhausting quotas.
+  - **Strict fail-closed on rate limits:** While general upstream 5xx errors can fail-open with an audit trail if configured (`fail_open: true`), HTTP `429 Too Many Requests` *strictly fails closed*. This closes the "DDoS bypass" where an attacker intentionally floods the scanner with benign text to slip malicious payloads through uninspected.
+  - **In-process credential isolation:** Service account authentication uses short-lived tokens minted via impersonation (`roles/modelarmor.user`) and cached in host memory (`_token_cache`). Credentials never touch disk or enter the agent workspace.
+
+### 2. BetterLeaks (Outbound Secret & Credential Egress Defence)
+
+- **Why BetterLeaks over alternatives:**
+  - *vs. Built-in regex (`BUILTIN_LEAK_PATTERNS`):* The built-in scanner covers ~10 obvious credential patterns (GitHub PATs, Slack webhooks, AWS keys) but misses hundreds of cloud provider tokens, database connection URIs, private keys (PEM/RSA), and high-entropy API secrets. BetterLeaks brings ~700 battle-tested, community-maintained detection rules.
+  - *vs. Cloud/SaaS secret scanners:* BetterLeaks is a fast, compiled Go binary that runs completely offline and locally. Proprietary source code, diffs, and suspect credentials never leave the host machine.
+- **Architectural invariants & integration rules:**
+  - **Graceful degraded-mode fallback:** The core bug-fixer remains Python stdlib-only. If BetterLeaks is not installed on `PATH`, the system automatically falls back to `BUILTIN_LEAK_PATTERNS` with a clear degraded-mode warning rather than crashing or failing open.
+  - **Supply-chain integrity & pinning:** Config supports pinning the expected binary `version` and cryptographic `sha256` checksum to defeat PATH-hijacking or malicious binary substitution attacks.
+  - **Subprocess environment stripping:** All `BETTERLEAKS_*` environment variables are purged from the subprocess environment before execution to prevent an agent from injecting `BETTERLEAKS_CONFIG_TOML` or disabling detection rules.
+  - **Config file protection (Gate A):** PreToolUse blocks all agent writes, modifications, and deletions targeting `.betterleaks.toml` or `.betterleaksignore`, preventing an agent from allowlisting its own secret leaks.
+  - **Zero-leak reporting:** Scanners never become an exfiltration channel. Violation logs and errors redact matched secret strings (`[REDACTED]`), preventing raw secret values from appearing in GitHub comments, error traces, or agent transcripts.
+
 ## Trust zones
 
 | Zone | What applies |
@@ -168,11 +198,12 @@ Use the strongest, simplest layer that can enforce an invariant, in this order:
    gate can't solve this, and shouldn't try.
 3. **The PreToolUse gate (`pre_tool_gate.py`):** only for what the platform can't
    see. That means protecting local files, scanning outbound content before it
-   leaves, and keeping raw untrusted reads behind `safe_ingest.py`. While inbound
-   semantic filtering (`safe_ingest.py` + Model Armor) defends the model's reasoning
-   and token budget, the PreToolUse gate (Gate B structural lexer) provides the
-   deterministic backstop defending the host environment even if a zero-day injection
-   payload bypasses the ML classifier. Keep it thin.
+   leaves (using BetterLeaks with regex fallback for secrets), and keeping raw
+   untrusted reads behind `safe_ingest.py`. While inbound semantic filtering
+   (`safe_ingest.py` + Model Armor) defends the model's reasoning and token budget,
+   the PreToolUse gate (Gate B structural lexer) provides the deterministic
+   backstop defending the host environment even if a zero-day injection payload
+   bypasses the ML classifier. Keep it thin.
 4. **`integrity_monitor.py`:** a backstop that catches indirect writes to the
    bug-fixer's own files that the gate didn't recognise.
 
