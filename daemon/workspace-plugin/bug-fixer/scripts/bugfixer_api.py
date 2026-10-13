@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -119,14 +120,33 @@ def _find_dispatches_dir(workspace_dir: Path | None = None) -> Path | None:
     return None
 
 
+def _find_daemon_dir(script_dir: Path | None = None) -> Path | None:
+    """Walk up from script_dir to find the bug-fixer-daemon plugin root."""
+    base = (script_dir or Path(__file__).resolve().parent).resolve()
+    for parent in [base] + list(base.parents):
+        pj = parent / "plugin.json"
+        if pj.is_file():
+            try:
+                data = json.loads(pj.read_text(encoding="utf-8"))
+                if data.get("name") == "bug-fixer-daemon":
+                    return parent
+            except (json.JSONDecodeError, OSError):
+                pass
+    default_daemon = Path.home() / ".gemini" / "config" / "plugins" / "bug-fixer-daemon"
+    if (default_daemon / "plugin.json").is_file():
+        return default_daemon
+    return None
+
+
 def _find_workspace_dir() -> Path | None:
-    """Discover the bug-fixer workspace directory.
+    """Discover the bug-fixer workspace or sidecar directory.
 
     Search order:
     1. BUG_FIXER_CONFIG env var → parent directory
-    2. Derive from this script's own __file__ location (standard plugin layout:
-       plugin dir and workspace dir are siblings under .agents/plugins/)
-    3. Relative from cwd (hook cwd is .agents/)
+    2. BUG_FIXER_STATE_DIR env var → parent sidecar directory (or state dir)
+    3. Split-daemon layout: daemon/sidecars/<slug>/ matched by cwd against repo_dir
+    4. Derive from this script's own __file__ location (legacy sibling layout)
+    5. Relative from cwd (hook cwd is .agents/)
     """
     # 1. Env var (set by sidecar stubs and install.sh)
     config_env = os.environ.get("BUG_FIXER_CONFIG", "")
@@ -137,14 +157,54 @@ def _find_workspace_dir() -> Path | None:
         if p.is_dir():
             return p
 
-    # 2. Script location: scripts/ → plugin dir → sibling workspace
+    # 2. State dir env var
+    state_env = os.environ.get("BUG_FIXER_STATE_DIR", "")
+    if state_env:
+        sp = Path(state_env).resolve()
+        if sp.is_dir():
+            if (sp.parent / "config.json").is_file():
+                return sp.parent
+            return sp
+
+    # 3. Split-daemon sidecars discovery
     script_dir = Path(__file__).resolve().parent
+    daemon_dir = _find_daemon_dir(script_dir)
+    if daemon_dir is not None:
+        sidecars_dir = daemon_dir / "sidecars"
+        if sidecars_dir.is_dir():
+            try:
+                cwd_resolved = str(Path.cwd().resolve())
+            except OSError:
+                cwd_resolved = ""
+            candidates: list[Path] = []
+            for sc in sorted(sidecars_dir.iterdir()):
+                if not sc.is_dir() or not (sc / "config.json").is_file():
+                    continue
+                candidates.append(sc)
+                cfg = _load_config(sc)
+                repo_dir = str(cfg.get("repo_dir") or "").strip()
+                if repo_dir and cwd_resolved:
+                    try:
+                        rd_resolved = str(Path(repo_dir).resolve())
+                        if cwd_resolved == rd_resolved or cwd_resolved.startswith(rd_resolved + os.sep):
+                            return sc
+                    except OSError:
+                        pass
+            if len(candidates) == 1:
+                return candidates[0]
+            if len(candidates) > 1:
+                sys.stderr.write(
+                    "WARNING: Multiple bug-fixer sidecars enrolled and none matched cwd; "
+                    "set BUG_FIXER_CONFIG explicitly.\n"
+                )
+
+    # 4. Script location: scripts/ → plugin dir → sibling workspace
     plugin_dir = script_dir.parent
     workspace = plugin_dir.parent / _WORKSPACE_NAME
     if workspace.is_dir():
         return workspace
 
-    # 3. Hook cwd fallback (.agents/)
+    # 5. Hook cwd fallback (.agents/)
     cwd_candidate = Path.cwd() / "plugins" / _WORKSPACE_NAME
     if cwd_candidate.is_dir():
         return cwd_candidate
@@ -255,6 +315,18 @@ class BugFixer:
             dispatch = _find_dispatch(dispatches_dir, conversation_id)
         elif workspace is not None:
             dispatch = _find_dispatch(workspace, conversation_id)
+
+        if dispatch is None:
+            daemon_dir = _find_daemon_dir()
+            if daemon_dir is not None and (daemon_dir / "sidecars").is_dir():
+                for sc in sorted((daemon_dir / "sidecars").iterdir()):
+                    if not sc.is_dir():
+                        continue
+                    found = _find_dispatch(sc, conversation_id)
+                    if found is not None:
+                        dispatch = found
+                        workspace = sc
+                        break
 
         config = _load_config(workspace) if workspace else {}
 

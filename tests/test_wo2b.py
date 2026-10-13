@@ -148,6 +148,120 @@ class TestWO2bIntegrityMonitor(unittest.TestCase):
             # Must be reverted
             self.assertEqual(json.loads(sidecar_file.read_text()), {"env": {}})
 
+    def test_verify_reverts_when_manage_spoofed_in_comment_or_compound(self):
+        """Spoofed manage.py tokens in comments, compounds, or -c flags must NOT be trusted."""
+        sidecar_file = self.sidecar_dir / "sidecar.json"
+        spoofed_commands = [
+            "python3 /tmp/evil.py # manage.py config",
+            "echo manage.py config && python3 /tmp/evil.py",
+            "python3 -c 'open(\"sidecar.json\",\"w\")' manage.py config",
+            "python3 manage.py config $(/tmp/evil.sh)",
+            "python3 /tmp/manage.py enroll --repo o/r",
+            "PATH=/tmp python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py enroll",
+            "env FOO=1 python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py enroll",
+            "python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py config --show",
+            "python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py status",
+        ]
+        for cmd in spoofed_commands:
+            with self.subTest(cmd=cmd):
+                sidecar_file.write_text('{"env": {}}')
+                payload = {
+                    "toolCall": {
+                        "name": "run_command",
+                        "args": {"CommandLine": cmd},
+                    }
+                }
+                with unittest.mock.patch.dict(os.environ, {"BUG_FIXER_CONFIG": str(self.config_path)}):
+                    integrity_monitor.snapshot()
+                    sidecar_file.write_text('{"env": {"TAMPERED": true}}')
+                    integrity_monitor.verify(stdin_data=payload)
+                    self.assertEqual(json.loads(sidecar_file.read_text()), {"env": {}})
+
+    def test_was_trusted_management_command_canonical_paths(self):
+        """Canonical manage.py paths with mutating subcommands are trusted."""
+        repo_manage = (
+            Path(__file__).resolve().parent.parent / "daemon" / "scripts" / "manage.py"
+        )
+        valid_commands = [
+            f"python3 {repo_manage} enroll --repo o/r --dir /tmp --project-id p1",
+            f"python3 -I -u {repo_manage} config --set engineering_interval_min=15 --repo o/r",
+            "python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py enroll --repo o/r --dir /tmp --project-id p1",
+            "python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py config --set=max_concurrent_agents=3 --repo o/r",
+        ]
+        for cmd in valid_commands:
+            with self.subTest(cmd=cmd):
+                payload = {
+                    "toolCall": {
+                        "name": "run_command",
+                        "args": {"CommandLine": cmd},
+                    }
+                }
+                self.assertTrue(integrity_monitor._was_trusted_management_command(payload))
+
+
+class TestWO1ManageConfigAllowlist(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.tmp_path = Path(os.path.realpath(self.tmp))
+        self.daemon_dir = self.tmp_path / "daemon"
+        self.sc_dir = self.daemon_dir / "sidecars" / "owner--repo"
+        self.sc_dir.mkdir(parents=True)
+        self.cfg_path = self.sc_dir / "config.json"
+        self.cfg_path.write_text(json.dumps({
+            "target_repo": "owner/repo",
+            "maintainer": "alice",
+            "protected_files": ["secret.txt"],
+            "engineering_interval_min": 30,
+        }))
+
+        manage_dir = Path(__file__).resolve().parent.parent / "daemon" / "scripts"
+        if str(manage_dir) not in sys.path:
+            sys.path.insert(0, str(manage_dir))
+        import manage as manage_mod
+        self.manage = manage_mod
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_config_set_operational_key_succeeds(self):
+        import argparse
+        args = argparse.Namespace(
+            repo="owner/repo",
+            show=False,
+            set="engineering_interval_min=20",
+        )
+        with unittest.mock.patch.object(self.manage, "DAEMON_DIR", self.daemon_dir), \
+             unittest.mock.patch.object(self.manage, "SIDECARS_DIR", self.daemon_dir / "sidecars"):
+            rc = self.manage.cmd_config(args)
+        self.assertEqual(rc, 0)
+        updated = json.loads(self.cfg_path.read_text())
+        self.assertEqual(updated["engineering_interval_min"], 20)
+
+    def test_config_set_security_critical_keys_rejected(self):
+        import argparse
+        blocked_kv = [
+            "protected_files=[]",
+            "maintainer=evil",
+            "leak_patterns=[]",
+            "spec_file_path=foo",
+            "trusted_users=[\"evil\"]",
+        ]
+        for kv in blocked_kv:
+            with self.subTest(kv=kv):
+                args = argparse.Namespace(
+                    repo="owner/repo",
+                    show=False,
+                    set=kv,
+                )
+                with unittest.mock.patch.object(self.manage, "DAEMON_DIR", self.daemon_dir), \
+                     unittest.mock.patch.object(self.manage, "SIDECARS_DIR", self.daemon_dir / "sidecars"):
+                    rc = self.manage.cmd_config(args)
+                    self.assertEqual(rc, 1)
+                # Ensure original config was not modified
+                current = json.loads(self.cfg_path.read_text())
+                self.assertEqual(current["maintainer"], "alice")
+                self.assertEqual(current["protected_files"], ["secret.txt"])
+
 
 class TestWO2bSafePost(unittest.TestCase):
     def setUp(self):
@@ -266,6 +380,51 @@ class TestWO2bBugFixerAPI(unittest.TestCase):
             self.assertEqual(ctx.session_type, "fresh_fix")
             self.assertEqual(ctx.issue_number, 100)
             self.assertEqual(ctx.target_repo, "test/repo")
+
+    def test_session_context_via_split_daemon_sidecars_without_env(self):
+        daemon_dir = self.tmp_path / "daemon"
+        sc_dir = daemon_dir / "sidecars" / "test--repo"
+        sc_dispatches = sc_dir / "state" / "dispatches"
+        sc_dispatches.mkdir(parents=True)
+        (daemon_dir / "plugin.json").write_text(json.dumps({"name": "bug-fixer-daemon"}))
+        (sc_dir / "config.json").write_text(json.dumps({"target_repo": "test/repo"}))
+        (sc_dispatches / "conv-split-1.json").write_text(json.dumps({
+            "conversation_id": "conv-split-1",
+            "type": "architect_review",
+            "pr_number": 77,
+        }))
+
+        with unittest.mock.patch.dict(os.environ, {
+            "BUG_FIXER_CONFIG": "",
+            "BUG_FIXER_STATE_DIR": "",
+        }), unittest.mock.patch("bugfixer_api._find_daemon_dir", return_value=daemon_dir):
+            ctx = bugfixer_api.BugFixer.get_session_context("conv-split-1")
+            self.assertTrue(ctx.is_autonomous)
+            self.assertEqual(ctx.session_type, "architect_review")
+            self.assertEqual(ctx.pr_number, 77)
+            self.assertEqual(ctx.target_repo, "test/repo")
+
+    def test_multiple_sidecars_no_cwd_match_warns(self):
+        import io
+        daemon_dir = self.tmp_path / "daemon"
+        for slug in ("repo-a", "repo-b"):
+            sc = daemon_dir / "sidecars" / slug
+            sc.mkdir(parents=True)
+            (sc / "config.json").write_text(json.dumps({
+                "target_repo": f"org/{slug}",
+                "repo_dir": f"/nonexistent/{slug}",
+            }))
+        (daemon_dir / "plugin.json").write_text(json.dumps({"name": "bug-fixer-daemon"}))
+
+        stderr_buf = io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {
+            "BUG_FIXER_CONFIG": "",
+            "BUG_FIXER_STATE_DIR": "",
+        }), unittest.mock.patch("bugfixer_api._find_daemon_dir", return_value=daemon_dir), \
+             unittest.mock.patch("sys.stderr", stderr_buf):
+            ws = bugfixer_api._find_workspace_dir()
+            self.assertIsNone(ws)
+            self.assertIn("Multiple bug-fixer sidecars enrolled", stderr_buf.getvalue())
 
 
 if __name__ == "__main__":

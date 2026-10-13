@@ -165,7 +165,55 @@ def check_merge_conflicts(target_repo: str | None = None) -> None:
             log(f"PR #{number} ({title}): unexpected mergeable status '{mergeable}'.")
 
 
-def apply_pending_approvals(target_repo: str | None = None) -> None:
+def _extract_trusted_authors(
+    config: dict | None = None, include_gh_user: bool = False
+) -> set[str]:
+    """Build lowercase set of trusted GitHub usernames from config and optional gh auth."""
+    trusted: set[str] = set()
+    if config is None:
+        config_env = os.environ.get("BUG_FIXER_CONFIG", "")
+        config_rel = PLUGIN_DIR / "../bug-fixer-loop-workspace/config.json"
+        cfg_path = (
+            Path(config_env)
+            if config_env and Path(config_env).is_file()
+            else (config_rel if config_rel.is_file() else None)
+        )
+        if cfg_path is not None:
+            try:
+                config = json.loads(cfg_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                config = {}
+    if isinstance(config, dict):
+        maintainer = str(config.get("maintainer") or "").strip().lower()
+        if maintainer:
+            trusted.add(maintainer)
+        for u in config.get("trusted_users") or []:
+            u_clean = str(u or "").strip().lower()
+            if u_clean:
+                trusted.add(u_clean)
+    if include_gh_user:
+        r_user = gh("api", "user", "--jq", ".login")
+        if r_user.returncode == 0 and r_user.stdout.strip():
+            trusted.add(r_user.stdout.strip().lower())
+    return trusted
+
+
+def _is_trusted_comment_author(comment: dict, trusted_authors: set[str]) -> bool:
+    """Return True if the comment author is in trusted_authors."""
+    if not isinstance(comment, dict) or not trusted_authors:
+        return False
+    author = comment.get("author")
+    if not isinstance(author, dict):
+        return False
+    login = str(author.get("login") or "").strip().lower()
+    return bool(login) and login in trusted_authors
+
+
+def apply_pending_approvals(
+    target_repo: str | None = None,
+    trusted_authors: set[str] | None = None,
+    config: dict | None = None,
+) -> None:
     """Step 0.7: Detect architect approval comments and apply the label.
 
     The architect agent signals approval by posting an ``[ARCHITECT] Approved``
@@ -176,15 +224,21 @@ def apply_pending_approvals(target_repo: str | None = None) -> None:
 
     Queries open PRs with ``bug-fixer:system:pr`` +
     ``bug-fixer:architect:awaiting-review``.  For each, the last
-    ``[ARCHITECT]`` comment is inspected:
+    ``[ARCHITECT]`` comment from a trusted author is inspected:
       - Starts with ``[ARCHITECT] Approved``: applies
         ``bug-fixer:architect:approved``, removes ``awaiting-review``.
-      - Anything else (or no architect comment): no-op.
+      - Anything else (or no trusted architect comment): no-op.
     """
     repo = target_repo or TARGET_REPO
     if not repo:
         log("No target repo configured for pending approvals check.")
         return
+
+    resolved_trusted = (
+        {u.strip().lower() for u in trusted_authors if u and u.strip()}
+        if trusted_authors is not None
+        else _extract_trusted_authors(config=config, include_gh_user=False)
+    )
 
     log(f"Checking for pending architect approvals in {repo}")
     r = gh("pr", "list", "--repo", repo,
@@ -223,9 +277,11 @@ def apply_pending_approvals(target_repo: str | None = None) -> None:
         except json.JSONDecodeError:
             continue
 
-        # Find the LAST [ARCHITECT] comment
+        # Find the LAST [ARCHITECT] comment from a trusted author
         last_architect_body = None
         for c in comments:
+            if not _is_trusted_comment_author(c, resolved_trusted):
+                continue
             body = c.get("body", "")
             if "[ARCHITECT]" in body:
                 last_architect_body = body
@@ -324,7 +380,8 @@ def main():
     # the polling loop (which skips PRs with architect:approved).
     # ---------------------------------------------------------------------------
 
-    apply_pending_approvals(TARGET_REPO)
+    trusted_authors = _extract_trusted_authors(config=config, include_gh_user=True)
+    apply_pending_approvals(TARGET_REPO, trusted_authors=trusted_authors)
 
     # ---------------------------------------------------------------------------
     # Step 1: PR Polling Logic
@@ -388,6 +445,8 @@ def main():
             try:
                 comments_data = json.loads(r_comments.stdout)
                 for c in comments_data.get("comments", []):
+                    if not _is_trusted_comment_author(c, trusted_authors):
+                        continue
                     if "[ARCHITECT]" in c.get("body", ""):
                         review_count += 1
             except (json.JSONDecodeError, KeyError):

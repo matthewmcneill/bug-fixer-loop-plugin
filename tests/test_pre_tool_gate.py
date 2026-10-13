@@ -1251,3 +1251,135 @@ class TestPR47Fixes(unittest.TestCase):
         # Should not raise
         backend = BetterleaksBackend()
         self.assertEqual(backend.name, "betterleaks")
+
+
+class TestWO1PR71ManageHITLAndIntegrity(unittest.TestCase):
+    """Tests for WO1 PR #71 security hardening in pre_tool_gate."""
+
+    def setUp(self):
+        self.repo_manage = PLUGIN_ROOT / "daemon" / "scripts" / "manage.py"
+        self.safe_ingest = (
+            PLUGIN_ROOT / "daemon" / "workspace-plugin" / "bug-fixer" / "scripts" / "safe_ingest.py"
+        )
+
+    def _eval(self, payload: dict[str, Any]) -> dict[str, str]:
+        from pre_tool_gate import evaluate_pretool_call
+        cfg = dict(TEST_CONFIG, repo_dir=str(PLUGIN_ROOT))
+        return evaluate_pretool_call(payload, config=cfg)
+
+    def test_canonical_manage_readonly_commands_allowed(self):
+        readonly_cmds = [
+            f"python3 {self.repo_manage} status",
+            f"python3 {self.repo_manage} logs --repo o/r",
+            f"python3 {self.repo_manage} config --show --repo o/r",
+            "python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py status",
+        ]
+        for cmd in readonly_cmds:
+            with self.subTest(cmd=cmd):
+                res = self._eval({
+                    "toolCall": {"name": "run_command", "args": {"CommandLine": cmd}},
+                    "conversation_id": "interactive-conv",
+                })
+                self.assertEqual(res["decision"], "allow")
+
+    def test_canonical_manage_mutations_return_force_ask_in_interactive_session(self):
+        mutate_cmds = [
+            f"python3 {self.repo_manage} config --set engineering_interval_min=15 --repo o/r",
+            f"python3 {self.repo_manage} enroll --repo o/r --dir /tmp --project-id p1",
+            "python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py unenroll --repo o/r",
+            "python3 ~/.gemini/config/plugins/bug-fixer-daemon/scripts/manage.py reset --locks --repo o/r",
+        ]
+        with unittest.mock.patch("pre_tool_gate._is_autonomous_session", return_value=False):
+            for cmd in mutate_cmds:
+                with self.subTest(cmd=cmd):
+                    res = self._eval({
+                        "toolCall": {"name": "run_command", "args": {"CommandLine": cmd}},
+                        "conversation_id": "interactive-conv",
+                    })
+                    self.assertEqual(res["decision"], "force_ask")
+                    self.assertIn("Confirm Bug Fixer management change:", res["reason"])
+
+    def test_canonical_manage_mutations_denied_in_autonomous_session(self):
+        cmd = f"python3 {self.repo_manage} enroll --repo o/r --dir /tmp --project-id p1"
+        with unittest.mock.patch("pre_tool_gate._is_autonomous_session", return_value=True):
+            res = self._eval({
+                "toolCall": {"name": "run_command", "args": {"CommandLine": cmd}},
+                "conversation_id": "auto-conv-1",
+            })
+            self.assertEqual(res["decision"], "deny")
+
+        with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_SOURCE_METADATA": "sidecar"}):
+            res_env = self._eval({
+                "toolCall": {"name": "run_command", "args": {"CommandLine": cmd}},
+                "conversation_id": "any-conv",
+            })
+            self.assertEqual(res_env["decision"], "deny")
+
+    def test_manage_spoofed_or_chained_or_forbidden_keys_denied(self):
+        denied_cmds = [
+            "python3 /tmp/manage.py enroll --repo o/r --dir /tmp --project-id p1",
+            f"python3 {self.repo_manage} enroll --repo o/r --dir /tmp --project-id p1 && echo pwned",
+            f"python3 {self.repo_manage} config --set protected_files=[] --repo o/r",
+            f"python3 {self.repo_manage} config --set maintainer=evil --repo o/r",
+            f"FOO=1 python3 {self.repo_manage} pause --repo o/r",
+            f"env FOO=1 python3 {self.repo_manage} pause --repo o/r",
+        ]
+        with unittest.mock.patch("pre_tool_gate._is_autonomous_session", return_value=False):
+            for cmd in denied_cmds:
+                with self.subTest(cmd=cmd):
+                    res = self._eval({
+                        "toolCall": {"name": "run_command", "args": {"CommandLine": cmd}},
+                        "conversation_id": "interactive-conv",
+                    })
+                    self.assertEqual(res["decision"], "deny")
+
+    def test_integrity_snapshot_files_protected_in_gate_a_and_gate_b(self):
+        snapshot_targets = [
+            ".integrity_snapshot.json",
+            ".integrity_snapshot.1234-abcd.json",
+            "/tmp/sidecar/.integrity_snapshot.conv1.json",
+            "/tmp/sidecar/.integrity_snapshot_backup.conv1/0_config.json",
+            ".agents/plugins/bug-fixer-loop-workspace/.integrity_snapshot.abc.json",
+        ]
+        for target in snapshot_targets:
+            with self.subTest(gate="A", target=target):
+                res_a = self._eval({
+                    "toolCall": {"name": "write_to_file", "args": {"TargetFile": target}},
+                })
+                self.assertEqual(res_a["decision"], "deny")
+                self.assertEqual(res_a["reason"], REASON_PROTECTED_FILE)
+
+        shell_mutations = [
+            "rm .integrity_snapshot.1234.json",
+            "echo '{}' > /tmp/sidecar/.integrity_snapshot.conv1.json",
+            "sed -i 's/a/b/' .integrity_snapshot.json",
+            "python3 -c 'open(\".integrity_snapshot.abc.json\", \"w\").write(\"{}\")'",
+            "rm -rf /tmp/sidecar/.integrity_snapshot_backup.conv1",
+        ]
+        for cmd in shell_mutations:
+            with self.subTest(gate="B", cmd=cmd):
+                res_b = self._eval({
+                    "toolCall": {"name": "run_command", "args": {"CommandLine": cmd}},
+                })
+                self.assertEqual(res_b["decision"], "deny")
+                self.assertEqual(res_b["reason"], REASON_SHELL_MUTATION)
+
+    def test_safe_ingest_and_trust_env_overrides_denied(self):
+        from pre_tool_gate import REASON_SAFE_INGEST_OVERRIDE
+        blocked_cmds = [
+            f"python3 {self.safe_ingest} issue-list --trusted-user attacker",
+            f"python3 {self.safe_ingest} issue-list --trusted-user=attacker",
+            f"python3 {self.safe_ingest} issue-list --config /tmp/evil.json",
+            f"python3 {self.safe_ingest} issue-list --config=/tmp/evil.json",
+            f"BUG_FIXER_TRUSTED_USERS=attacker python3 {self.safe_ingest} issue-list",
+            f"BUG_FIXER_CONFIG=/tmp/evil.json python3 {self.safe_ingest} issue-list",
+            f"env BUG_FIXER_TRUSTED_USERS=attacker python3 {self.safe_ingest} issue-list",
+            "export BUG_FIXER_TRUSTED_USERS=attacker",
+        ]
+        for cmd in blocked_cmds:
+            with self.subTest(cmd=cmd):
+                res = self._eval({
+                    "toolCall": {"name": "run_command", "args": {"CommandLine": cmd}},
+                })
+                self.assertEqual(res["decision"], "deny")
+                self.assertEqual(res["reason"], REASON_SAFE_INGEST_OVERRIDE)

@@ -43,7 +43,7 @@ Read `${BUG_FIXER_CONFIG}`. If `target_repo` is empty or the file is missing, ou
 
 List all issues tagged `bug-fixer:engineer:in-progress`:
 ```bash
-gh issue list --repo <target_repo> --label "bug-fixer:engineer:in-progress" --state open --json number,title
+python3 ${PLUGIN_DIR}/scripts/safe_ingest.py issue-list --repo <target_repo> --label "bug-fixer:engineer:in-progress" --state open --json number,title
 ```
 
 For each, read the lock file at `${STATE_DIR}/claims/<number>.lock`:
@@ -101,7 +101,7 @@ e. Post comment: `[BUG-FIXER] Reattached to orphaned work from session <old_conv
 
 After reconciliation, count issues tagged `bug-fixer:engineer:in-progress` that are **owned by other active sessions** (PID alive, not this session):
 ```bash
-gh issue list --repo <target_repo> --label "bug-fixer:engineer:in-progress" --state open --json number,title
+python3 ${PLUGIN_DIR}/scripts/safe_ingest.py issue-list --repo <target_repo> --label "bug-fixer:engineer:in-progress" --state open --json number,title
 ```
 Exclude any issues this session just reattached to.
 
@@ -151,7 +151,7 @@ This ensures previously-reviewed issues enter the bug-fixer:engineer:needs-fix q
      If it does, query for all other `bug-fixer:engineer:needs-fix` issues with the same batch
      label that are not `bug-fixer:engineer:in-progress`:
      ```bash
-     BATCH_LABEL=$(echo "<labels>" | grep -o 'batch:[^ "]*')
+     BATCH_LABEL=$(echo "<labels>" | grep -o '^bug-fixer:batch:[^ "]*')
      python3 ${PLUGIN_DIR}/scripts/safe_ingest.py issue-list --repo <target_repo> \
        --label "${BATCH_LABEL}" --label bug-fixer:engineer:needs-fix --state open \
        --json number,title,labels,body,milestone
@@ -355,10 +355,10 @@ Instead, include a structured discovery section in your **PR body** (Step 11), a
       ```
       The PR body must include:
       - **Closing keywords:** `Closes #<number>` for **every** issue in the batch set — this auto-closes all issues when the PR merges. For a batch: list each on its own line.
-      - **Batch context (if batch):** `**Batch:** \`batch:<slug>\` — <count> issues` with a brief table listing each issue number, title, and what was changed for it.
-      - Issue tier: `**Classification:** T1 (engineer:needs-fix)` or `T2 (approach approved by @maintainer)`
+      - **Batch context (if batch):** `**Batch:** \`bug-fixer:batch:<slug>\` — <count> issues` with a brief table listing each issue number, title, and what was changed for it.
+      - Issue tier: `**Classification:** T1 (bug-fixer:engineer:needs-fix)` or `T2 (approach approved by @maintainer)`
       - Milestone: `**Milestone:** <name>` if applicable
-      - The `bug-fixer:system:pr` label must be listed (e.g., `**Labels:** bug-fixer`)
+      - The `bug-fixer:system:pr` label must be listed (e.g., `**Labels:** bug-fixer:system:pr`)
       - What was changed and why it was changed (for batches, organise by issue)
       - **Design review note** from Step 7.5.6
       - **Platform-gap warning** (if applicable): If the fix moves work between execution contexts (e.g. main loop ↔ event callback, timer, ISR, or background task), include: `⚠️ This fix changes execution context. Native tests cannot validate stack limits or async dispatch timing. Hardware testing recommended.`

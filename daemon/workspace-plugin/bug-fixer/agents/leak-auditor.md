@@ -1,7 +1,8 @@
 ---
 name: leak-auditor
-type: subagent
 description: Pre-commit leak scanner with deterministic and semantic review.
+subagent: true
+mainAgent: false
 ---
 
 # Leak Auditor Agent

@@ -208,12 +208,13 @@ def get_default_engineering_model() -> str:
 def get_model_for_issue(issue: dict) -> str:
     """Read complexity label from triage, map to agentapi model tier.
 
-    Uses the PA-aligned complexity mapping. Falls back to the
-    engineering_model config key, then defaults to 'pro'.
+    Uses the PA-aligned complexity mapping. Supports both canonical
+    'bug-fixer:complexity:<tier>' and legacy 'complexity:<tier>' labels.
+    Falls back to the engineering_model config key, then defaults to 'pro'.
     """
     for label in issue.get("labels", []):
         name = label.get("name", "")
-        if name.startswith("bug-fixer:complexity:"):
+        if name.startswith(("bug-fixer:complexity:", "complexity:")):
             tier = name.rsplit(":", 1)[1]
             if tier in COMPLEXITY_MODEL_MAP:
                 return COMPLEXITY_MODEL_MAP[tier]
@@ -653,13 +654,24 @@ def main():
                 log(f"PR #{pr_num} — iteration already dispatched, skipping.")
                 continue
 
-            # Fetch the latest architect review comments
-            r_comments = gh("pr", "view", str(pr_num), "--repo", TARGET_REPO, "--comments", "--json", "comments")
+            # Fetch the latest architect review comments via safe_ingest.py
+            r_comments = run([
+                sys.executable, str(SAFE_INGEST),
+                "pr-view", str(pr_num), "--repo", TARGET_REPO,
+                "--comments", "--json", "comments",
+            ])
             comments_text = ""
             if r_comments.returncode == 0:
                 try:
                     comments_data = json.loads(r_comments.stdout)
-                    if comments_data.get("comments"):
+                    # Iterate forward and overwrite on each match so comments_text
+                    # holds the chronologically latest [ARCHITECT] review comment.
+                    for c in comments_data.get("comments", []):
+                        body_val = c.get("body", "")
+                        if "[ARCHITECT]" in body_val:
+                            comments_text = body_val
+                    # Fallback to the most recent comment if no [ARCHITECT] tag is present.
+                    if not comments_text and comments_data.get("comments"):
                         comments_text = comments_data["comments"][-1].get("body", "")
                 except Exception as e:
                     log(f"Failed to parse comments for PR #{pr_num}: {e}")
@@ -680,7 +692,7 @@ def main():
                 count = _record_failure(pr_branch)
                 if count >= MAX_WORKTREE_FAILURES:
                     log(f"CIRCUIT BREAKER: {pr_branch} failed {count} times. Escalating.")
-                    gh("issue", "edit", str(pr_num), "--repo", TARGET_REPO,
+                    gh("pr", "edit", str(pr_num), "--repo", TARGET_REPO,
                        "--add-label", "bug-fixer:human:needs-intervention",
                        "--remove-label", "bug-fixer:engineer:needs-iteration")
                 log(f"Failed to create worktree for PR #{pr_num}, skipping.")

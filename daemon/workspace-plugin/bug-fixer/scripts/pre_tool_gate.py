@@ -46,6 +46,7 @@ import sys
 from typing import Any, Protocol, runtime_checkable
 import unicodedata
 
+from bugfixer_api import BugFixer
 from shell_analysis import DYN, Segment, ShellParseError, Word, expand_braces
 from shell_analysis import parse as parse_shell
 
@@ -145,6 +146,10 @@ REASON_LABEL_ESCALATION = (
     "bug-fixer:architect:approved) is restricted to dispatcher sidecars. "
     "Signal approval via a structured [ARCHITECT] comment; the dispatcher "
     "applies the label on its next tick."
+)
+REASON_SAFE_INGEST_OVERRIDE = (
+    "Overriding safe_ingest.py trust root (--trusted-user or --config) "
+    "or trust environment variables is prohibited."
 )
 
 
@@ -423,6 +428,12 @@ def evaluate_gate_a(
     if not os.path.isabs(target_file) and workspace_paths and workspace_paths[0]:
         target_file = os.path.join(workspace_paths[0], target_file)
 
+    target_norm = os.path.normpath(target_file.strip())
+    if os.path.basename(target_norm).startswith(".integrity_snapshot") or any(
+        part.startswith(".integrity_snapshot") for part in target_norm.split("/")
+    ):
+        return {"decision": "deny", "reason": REASON_PROTECTED_FILE}
+
     if is_host_script_target(target_file):
         return {"decision": "deny", "reason": REASON_HOST_SCRIPT}
     if spec_file_path and is_path_match(target_file, spec_file_path, repo_dir):
@@ -437,7 +448,11 @@ def evaluate_gate_a(
                 parts = rel.split("/")
                 if len(parts) >= 3 and parts[0] == "sidecars" and parts[2] == "state":
                     basename = os.path.basename(target_res)
-                    if basename in ("injection_cache.json", ".integrity_snapshot.json"):
+                    if (
+                        basename == "injection_cache.json"
+                        or basename.startswith(".integrity_snapshot")
+                        or any(p.startswith(".integrity_snapshot") for p in parts)
+                    ):
                         return {"decision": "deny", "reason": REASON_PROTECTED_FILE}
                     continue
                 return {"decision": "deny", "reason": REASON_PROTECTED_FILE}
@@ -979,7 +994,11 @@ class _ProtectedPaths:
                 # Allow writes under sidecars/<repo>/state/ (but not trust-sensitive files)
                 if len(parts) >= 3 and parts[0] == "sidecars" and parts[2] == "state":
                     basename = os.path.basename(norm)
-                    if basename in ("injection_cache.json", ".integrity_snapshot.json"):
+                    if (
+                        basename == "injection_cache.json"
+                        or basename.startswith(".integrity_snapshot")
+                        or any(p.startswith(".integrity_snapshot") for p in parts)
+                    ):
                         return True   # still protected
                     return False      # allow
                 # Allow execution of trusted daemon scripts (manage.py, tick.py)
@@ -990,7 +1009,8 @@ class _ProtectedPaths:
 
     def _basename_protected(self, base: str) -> bool:
         return (
-            base in self.names
+            base.startswith(".integrity_snapshot")
+            or base in self.names
             or base in _GENERIC_PROTECTED_BASENAMES
             or any(os.path.basename(p) == base for p in self.abs_paths)
         )
@@ -1026,6 +1046,8 @@ class _ProtectedPaths:
         for token in tokens:
             if not token:
                 continue
+            if any(part.startswith(".integrity_snapshot") for part in token.split("/")):
+                return True
             if DYN in token:
                 head, _, base = token.rpartition("/")
                 if base and DYN not in base:
@@ -1064,6 +1086,7 @@ class _GateContext:
     protected: _ProtectedPaths
     patterns: list[re.Pattern[str]]
     enrolled: bool = True
+    conversation_id: str = ""
     # Files written earlier in the command being checked: path -> known content (None = unknown).
     written: dict[str, str | None] = field(default_factory=dict)
     # Set once an earlier segment could have modified arbitrary files.
@@ -1927,9 +1950,234 @@ def _check_embedded(
     return None
 
 
+_PYTHON_INTERP_RE = re.compile(r"^python3?(?:\.\d+)?$")
+_SAFE_PYTHON_FLAGS = frozenset({"-u", "-B", "-E", "-s", "-S", "-O", "-OO", "-I"})
+_PROTECTED_TRUST_ENV_VARS = frozenset({"BUG_FIXER_TRUSTED_USERS", "BUG_FIXER_CONFIG"})
+_MANAGE_READONLY_SUBCOMMANDS = frozenset({"status", "logs"})
+_MANAGE_MUTABLE_SUBCOMMANDS = frozenset(
+    {"enroll", "unenroll", "reset", "labels", "refresh-sidecars"}
+)
+_MANAGE_MUTABLE_CONFIG_KEYS = frozenset({
+    "test_command",
+    "lint_command",
+    "triage_interval_min",
+    "engineering_interval_min",
+    "architect_interval_min",
+    "trajectory_interval_min",
+    "triage_model",
+    "engineering_model",
+    "architect_model",
+    "trajectory_model",
+    "max_concurrent_prs",
+    "active_milestone",
+    "milestone_priority_boost",
+    "pr_prefix",
+    "branch_prefix",
+})
+
+
+def _is_autonomous_session(conversation_id: str) -> bool:
+    """Return True when executing inside an autonomous sidecar or dispatched session."""
+    if "sidecar" in os.environ.get("ANTIGRAVITY_SOURCE_METADATA", "").lower():
+        return True
+    return BugFixer.get_session_context(conversation_id).is_autonomous
+
+
+def _canonical_manage_paths() -> set[Path]:
+    daemon_dir = _find_daemon_dir(_SCRIPTS_DIR) or _SCRIPTS_DIR.parent.parent.parent
+    paths = {(daemon_dir / "scripts" / "manage.py").resolve()}
+    global_manage = (
+        Path.home()
+        / ".gemini"
+        / "config"
+        / "plugins"
+        / "bug-fixer-daemon"
+        / "scripts"
+        / "manage.py"
+    )
+    paths.add(global_manage.expanduser().resolve())
+    return paths
+
+
+def _resolve_manage_candidate(token_str: str, cwd: str | None) -> Path | None:
+    if not token_str or DYN in token_str:
+        return None
+    p = Path(token_str).expanduser()
+    if not p.is_absolute():
+        if not cwd:
+            return None
+        p = Path(cwd) / p
+    try:
+        return p.resolve()
+    except OSError:
+        return None
+
+
+def _classify_manage_invocation(
+    seg: Segment, cwd: str | None
+) -> tuple[str, str] | None:
+    """Classify a manage.py invocation into ('allow', ''), ('mutate', summary), or ('deny', reason).
+
+    Returns None when the segment does not execute manage.py.
+    """
+    prog, args, split_string = _unwrap(seg.argv)
+    if prog is None or prog.dynamic or split_string is not None:
+        return None
+
+    canonical_paths = _canonical_manage_paths()
+    prog_resolved = _resolve_manage_candidate(prog.text, cwd)
+    is_direct_manage = (
+        Path(prog.text).name == "manage.py"
+        or (prog_resolved is not None and prog_resolved in canonical_paths)
+    )
+    is_python_manage = False
+    if not is_direct_manage and _program_name(prog) == "python":
+        for w in args:
+            if w.dynamic:
+                continue
+            if w.text.startswith("-"):
+                continue
+            w_res = _resolve_manage_candidate(w.text, cwd)
+            if Path(w.text).name == "manage.py" or (
+                w_res is not None and w_res in canonical_paths
+            ):
+                is_python_manage = True
+            break
+
+    if not is_direct_manage and not is_python_manage:
+        return None
+
+    if seg.assignments or seg.redirects_out or seg.piped_from is not None:
+        return (
+            "deny",
+            "Unsafe manage.py invocation: environment overrides, unsafe interpreter flags, or output redirects are not permitted.",
+        )
+
+    argv = seg.argv
+    if not argv or any(not w.literal or w.globbed for w in argv) or argv[0].text != prog.text:
+        return (
+            "deny",
+            "Unsafe manage.py invocation: environment overrides, unsafe interpreter flags, or output redirects are not permitted.",
+        )
+
+    idx = 0
+    if _PYTHON_INTERP_RE.match(Path(argv[idx].text).name):
+        idx += 1
+        while idx < len(argv) and argv[idx].text.startswith("-"):
+            if argv[idx].text not in _SAFE_PYTHON_FLAGS:
+                return (
+                    "deny",
+                    "Unsafe manage.py invocation: environment overrides, unsafe interpreter flags, or output redirects are not permitted.",
+                )
+            idx += 1
+
+    if idx >= len(argv):
+        return ("deny", "Unsafe manage.py invocation: missing script path.")
+
+    resolved_script = _resolve_manage_candidate(argv[idx].text, cwd)
+    if resolved_script is None or resolved_script not in canonical_paths:
+        return ("deny", "Non-canonical manage.py path is not permitted.")
+    idx += 1
+
+    rest = [w.text for w in argv[idx:]]
+    if not rest or rest[0] in ("-h", "--help"):
+        return ("allow", "")
+
+    sub = rest[0]
+    sub_args = rest[1:]
+    if sub in _MANAGE_READONLY_SUBCOMMANDS:
+        return ("allow", "")
+    if sub == "config":
+        set_values: list[str] = []
+        for j, a in enumerate(sub_args):
+            if a == "--set":
+                set_values.append(sub_args[j + 1] if j + 1 < len(sub_args) else "")
+            elif a.startswith("--set="):
+                set_values.append(a.partition("=")[2])
+        if not set_values:
+            return ("allow", "")
+        for sv in set_values:
+            key, sep, _ = sv.partition("=")
+            if not key or not sep or key not in _MANAGE_MUTABLE_CONFIG_KEYS:
+                return (
+                    "deny",
+                    f"Config key '{key}' cannot be modified via manage.py config --set.",
+                )
+        return ("mutate", f"config {' '.join(sub_args)}".strip())
+    if sub in _MANAGE_MUTABLE_SUBCOMMANDS:
+        return ("mutate", f"{sub} {' '.join(sub_args)}".strip())
+    return ("deny", "Unknown manage.py subcommand.")
+
+
+def _check_safe_ingest_and_trust_env(
+    seg: Segment, cwd: str | None
+) -> dict[str, str] | None:
+    """Block overrides of safe_ingest.py trust roots or trust environment variables."""
+    for assign in seg.assignments:
+        var_name = assign.text.split("=", 1)[0].rstrip("+")
+        if var_name in _PROTECTED_TRUST_ENV_VARS:
+            return _deny(REASON_SAFE_INGEST_OVERRIDE)
+
+    argv = seg.argv
+    if argv:
+        first_base = os.path.basename(argv[0].text)
+        if first_base in ("env", "export", "declare", "typeset"):
+            for w in argv[1:]:
+                if "=" in w.text:
+                    var_name = w.text.lstrip("-").split("=", 1)[0]
+                    if var_name in _PROTECTED_TRUST_ENV_VARS:
+                        return _deny(REASON_SAFE_INGEST_OVERRIDE)
+
+    for idx, w in enumerate(argv):
+        if w.dynamic:
+            continue
+        base = os.path.basename(w.text)
+        is_safe_ingest = base == "safe_ingest.py"
+        if not is_safe_ingest:
+            resolved = _resolve_path(w.text, cwd)
+            if resolved:
+                try:
+                    is_safe_ingest = os.path.basename(os.path.realpath(resolved)) == "safe_ingest.py"
+                except OSError:
+                    is_safe_ingest = False
+        if is_safe_ingest:
+            for arg in argv[idx + 1 :]:
+                if arg.text in ("--trusted-user", "--config") or arg.text.startswith(
+                    ("--trusted-user=", "--config=")
+                ):
+                    return _deny(REASON_SAFE_INGEST_OVERRIDE)
+            break
+    return None
+
+
 def _check_segment(
     seg: Segment, ctx: _GateContext, cwd: str | None, depth: int
 ) -> tuple[dict[str, str] | None, str | None]:
+    trust_denied = _check_safe_ingest_and_trust_env(seg, cwd)
+    if trust_denied:
+        return trust_denied, cwd
+
+    manage_class = _classify_manage_invocation(seg, cwd)
+    if manage_class is not None:
+        kind, detail = manage_class
+        if kind == "deny":
+            return _deny(detail), cwd
+        if kind == "allow":
+            return None, cwd
+        if kind == "mutate":
+            if _is_autonomous_session(ctx.conversation_id):
+                return (
+                    _deny("Autonomous bug-fixer sessions cannot execute management mutations."),
+                    cwd,
+                )
+            return (
+                {
+                    "decision": "force_ask",
+                    "reason": f"Confirm Bug Fixer management change: {detail}",
+                },
+                cwd,
+            )
+
     denied = _check_redirects(seg, ctx, cwd)
     if denied:
         return denied, cwd
@@ -2243,26 +2491,48 @@ def _check_command_text(
         REASON_RAW_GH, REASON_AUTO_MERGE, REASON_SELF_APPROVAL,
         REASON_ISSUE_REOPEN, REASON_APPROVAL_INJECTION,
     }
+    active_segments = [
+        s for s in parsed.segments
+        if s.words or s.redirects_out or s.redirects_in or s.assignments
+    ]
     current = cwd
+    pending_decision: dict[str, str] | None = None
     for seg in parsed.segments:
         before = current
+        manage_class = _classify_manage_invocation(seg, current)
+        if manage_class is not None and manage_class[0] == "mutate":
+            if len(active_segments) > 1 or parsed.substitutions or depth > 0:
+                return _deny(
+                    "Management mutations must be run as a standalone command "
+                    "without shell chaining or substitutions."
+                )
         denied, current = _check_segment(seg, ctx, current, depth)
         if denied:
             # In unenrolled workspaces, skip workflow-specific denials but
             # continue checking remaining segments for security violations.
-            if not ctx.enrolled and denied.get("reason") in _workflow_reasons:
+            if (
+                not ctx.enrolled
+                and denied.get("decision") == "deny"
+                and denied.get("reason") in _workflow_reasons
+            ):
                 pass  # skip this denial, check next segment
+            elif denied.get("decision") == "force_ask":
+                pending_decision = denied
             else:
                 return denied
         _record_effects(seg, ctx, before)
     for sub in parsed.substitutions:
         denied = _check_command_text(sub, ctx, cwd, depth + 1)
         if denied:
-            if not ctx.enrolled and denied.get("reason") in _workflow_reasons:
+            if (
+                not ctx.enrolled
+                and denied.get("decision") == "deny"
+                and denied.get("reason") in _workflow_reasons
+            ):
                 pass
             else:
                 return denied
-    return None
+    return pending_decision
 
 
 def _repo_root(config: dict[str, Any] | None, cwd: str | None) -> str:
@@ -2278,7 +2548,11 @@ def _repo_root(config: dict[str, Any] | None, cwd: str | None) -> str:
 
 
 def _build_context(
-    config: dict[str, Any] | None, spec_file_path: str, protected_files: list[str], cwd: str | None
+    config: dict[str, Any] | None,
+    spec_file_path: str,
+    protected_files: list[str],
+    cwd: str | None,
+    conversation_id: str = "",
 ) -> _GateContext:
     patterns = compile_leak_patterns((config or {}).get("leak_patterns"))
     enrolled = (config or {}).get("_enrolled", True) is not False
@@ -2288,6 +2562,7 @@ def _build_context(
         ),
         patterns=patterns,
         enrolled=enrolled,
+        conversation_id=conversation_id,
     )
 
 
@@ -2361,6 +2636,7 @@ def evaluate_gate_b(
     protected_files: list[str],
     config: dict[str, Any] | None = None,
     cwd: str | None = None,
+    conversation_id: str = "",
 ) -> dict[str, str] | None:
     """Gate B: Command Execution Protection."""
     if tool_name and tool_name != "run_command":
@@ -2371,7 +2647,13 @@ def evaluate_gate_b(
         return {"decision": "allow"}
 
     command_cwd = str(args.get("Cwd") or args.get("cwd") or cwd or os.getcwd())
-    ctx = _build_context(config, spec_file_path, protected_files, command_cwd)
+    ctx = _build_context(
+        config,
+        spec_file_path,
+        protected_files,
+        command_cwd,
+        conversation_id=conversation_id,
+    )
     return _check_command_text(cmd, ctx, command_cwd) or {"decision": "allow"}
 
 
@@ -2401,6 +2683,7 @@ def evaluate_pretool_call(payload: dict[str, Any], config: dict[str, Any]) -> di
     spec_file_path = str(config.get("spec_file_path", "")).strip()
     protected_files = list(config.get("protected_files", []))
     repo_dir = str(config.get("repo_dir", "")).strip() or None
+    conversation_id = str(payload.get("conversationId") or "").strip()
 
     workspace_paths = (
         payload.get("workspacePaths") if isinstance(payload.get("workspacePaths"), list) else []
@@ -2422,7 +2705,13 @@ def evaluate_pretool_call(payload: dict[str, Any], config: dict[str, Any]) -> di
     # "gh issue view 1; echo > config.json" still block on the
     # dangerous segment.
     decision_b = evaluate_gate_b(
-        tool_name, args, spec_file_path, protected_files, config, cwd=command_cwd
+        tool_name,
+        args,
+        spec_file_path,
+        protected_files,
+        config,
+        cwd=command_cwd,
+        conversation_id=conversation_id,
     )
     if decision_b is not None:
         return decision_b

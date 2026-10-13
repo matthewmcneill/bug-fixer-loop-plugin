@@ -81,6 +81,15 @@ class TestDispatcherModels(unittest.TestCase):
             get_model_for_issue({"labels": [{"name": "bug-fixer:complexity:architect"}]}),
             "pro",
         )
+        # Backwards-compatible legacy complexity:<tier> labels
+        self.assertEqual(
+            get_model_for_issue({"labels": [{"name": "complexity:mechanical"}]}),
+            "flash_lite",
+        )
+        self.assertEqual(
+            get_model_for_issue({"labels": [{"name": "complexity:standard"}]}),
+            "flash",
+        )
 
         # Default fallback (no complexity label, empty config -> 'pro')
         with patch.dict("engineering_dispatcher.config", {}, clear=True):

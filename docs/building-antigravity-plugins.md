@@ -484,6 +484,31 @@ The most commonly used hook. Receives tool call details and returns a decision:
 
 Non-zero exit code also aborts the tool call. Most restrictive decision wins when multiple hooks match.
 
+#### PreToolUse Decisions & Precedence
+
+When multiple `PreToolUse` hooks match a tool call, the Antigravity permission manager combines their decisions using strict precedence (**`deny > force_ask > allow_once > allow`**):
+
+| Decision | Effect on Tool Call | Overrides `TURBO` / Auto-Run? |
+|---|---|---|
+| `"deny"` | Immediately blocks the tool call and surfaces `reason` to the agent | Yes — always blocks |
+| `"force_ask"` | Forces the native Antigravity approval UI on the exact tool call | Yes — overrides `CommandExecutionPolicy: TURBO` and command allowlists |
+| `"allow_once"` | Permits this single invocation without adding to persistent allowlists | N/A |
+| `"allow"` | Permits the tool call (optionally rewriting arguments via `overwrite`) | Defers to host policy unless `permissionOverrides` is set |
+
+### Pattern: Deterministic HITL Gating (`force_ask` vs `ask_question`)
+
+When designing Human-in-the-Loop (HITL) controls for sensitive plugin operations (such as enrolling repositories, modifying daemon configuration, or clearing locks), distinguish between **conversational elicitation** and **security enforcement**:
+
+1. **Why prompt-level `ask_question` is NOT a security boundary**:
+   - Telling an agent in `SKILL.md` *"call `ask_question` before running `manage.py`"* is purely advisory. A prompt-injected or hallucinating agent can skip `ask_question` and invoke `run_command` directly, or ask a benign question via `ask_question` and then execute a different command.
+   - If the user's session uses `CommandExecutionPolicy: TURBO` (auto-run), a `PreToolUse` hook that returns `{"decision": "allow"}` will execute the command without any confirmation prompt.
+   - Conversely, if both `SKILL.md` (`ask_question`) and `PreToolUse` (`force_ask`) prompt the user, interactive users get hit with an annoying **double-confirmation UX** (first answering the modal question, then clicking Approve on the command card).
+
+2. **The Dual-Mode `PreToolUse` Pattern (`force_ask` in interactive, `deny` in autonomous)**:
+   - **Autonomous sessions** (`ANTIGRAVITY_SOURCE_METADATA=sidecar` or conversations tracked in `dispatches/`): Headless background conversations run with `allows_user_interactions = false`. Returning `force_ask` in an autonomous session would stall waiting for a UI click that never comes. Always return `{"decision": "deny", "reason": "..."}` for management mutations in autonomous sessions.
+   - **Interactive sessions**: Return `{"decision": "force_ask", "reason": "Confirm change: ..."}` for mutating subcommands (`enroll`, `unenroll`, `config --set`, `reset`, `labels`), and `{"decision": "allow"}` for read-only subcommands (`status`, `logs`, `config --show`).
+   - Reserve `ask_question` in `SKILL.md` strictly for resolving genuine parameter ambiguity (e.g., asking which repository to target when multiple are enrolled), never as a redundant confirmation step before a `force_ask`-gated command.
+
 ### PostToolUse — Observation
 
 Observational only — no decision output. Useful for monitoring, logging, or integrity checks.
@@ -849,6 +874,12 @@ state/
 **Problem:** Placed `hooks.json` on the workspace plugin (loaded via `plugins.json`). Hooks were never discovered.
 
 **Fix:** Place `hooks.json` on the daemon plugin (global install). Use the workspace plugin only for skills, rules, and agents.
+
+### 8. Prompt-Level `ask_question` as a Security Gate
+
+**Problem:** Relied on `SKILL.md` instructions telling the agent to call `ask_question` before running a mutating management CLI (`manage.py`), while `PreToolUse` returned `{"decision": "allow"}`. Under `CommandExecutionPolicy: TURBO`, an agent (or prompt injection) that skipped `ask_question` could execute management mutations with zero human confirmation — and adding `force_ask` without removing the `SKILL.md` `ask_question` step caused a double-prompt UX.
+
+**Fix:** Enforce HITL deterministically in `PreToolUse`: return `{"decision": "deny"}` in autonomous sessions (`ANTIGRAVITY_SOURCE_METADATA=sidecar` or dispatched background sessions) and `{"decision": "force_ask", "reason": "..."}` in interactive sessions. Use `ask_question` in skills only to clarify missing or ambiguous parameters.
 
 ---
 

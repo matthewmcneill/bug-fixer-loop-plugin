@@ -21,6 +21,9 @@ from injection_scanner import (
 
 class TestInjectionScanner(unittest.TestCase):
     def setUp(self):
+        self._audit_patcher = patch("injection_scanner.log_security_event")
+        self.mock_audit_log = self._audit_patcher.start()
+        self.addCleanup(self._audit_patcher.stop)
         self.config_enabled = {
             "enabled": True,
             "fail_open": True,
@@ -175,10 +178,6 @@ class TestInjectionScanner(unittest.TestCase):
         with self.assertRaises(ValueError):
             scanner = InjectionScanner(config)
 
-if __name__ == '__main__':
-    unittest.main()
-
-
     def test_cached_scanner_does_not_cache_disabled(self):
         """Disabled results should not be cached — they'd poison the cache."""
         config = {"enabled": False}
@@ -201,4 +200,8 @@ if __name__ == '__main__':
         scanner.scan("test text")
         # Cache should be empty — errors aren't cached
         self.assertEqual(scanner._cache, {})
+
+
+if __name__ == '__main__':
+    unittest.main()
 

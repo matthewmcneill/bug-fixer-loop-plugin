@@ -156,9 +156,9 @@ Read `${BUG_FIXER_CONFIG}`. If `target_repo` is empty or the file is missing, ou
       **Model routing:** `flash_lite`
       ```
 
-      For **T4 (human:bug-fixer:human:project-candidate)** issues, post:
+      For **T4 (bug-fixer:human:project-candidate)** issues, post:
       ```
-      [BUG-FIXER-TRIAGE] Classification: T4 (human:bug-fixer:human:project-candidate)
+      [BUG-FIXER-TRIAGE] Classification: T4 (bug-fixer:human:project-candidate)
 
       **Why T4:**
       - Estimated scope: <modules/files affected, line count estimate>
@@ -168,9 +168,9 @@ Read `${BUG_FIXER_CONFIG}`. If `target_repo` is empty or the file is missing, ou
       **Recommendation:** Use /principal-architect to decompose into work orders.
       ```
 
-      For **T5 (human:required)** issues, post:
+      For **T5 (bug-fixer:human:required)** issues, post:
       ```
-      [BUG-FIXER-TRIAGE] Classification: T5 (human:required)
+      [BUG-FIXER-TRIAGE] Classification: T5 (bug-fixer:human:required)
 
       **Reason:** <exclusion label "<label>" matched / requires physical hardware
       access: <specific hardware need identified>>
@@ -178,7 +178,7 @@ Read `${BUG_FIXER_CONFIG}`. If `target_repo` is empty or the file is missing, ou
 
 
    h.1. **Complexity labelling (model routing):** For every issue classified as
-      T1 or T2, apply a `complexity:` label that the engineering dispatcher uses
+      T1 or T2, apply a `bug-fixer:complexity:` label that the engineering dispatcher uses
       to select the right model tier for the fix conversation. This uses the
       same complexity vocabulary as the Principal Architect's work orders:
 
@@ -186,7 +186,7 @@ Read `${BUG_FIXER_CONFIG}`. If `target_repo` is empty or the file is missing, ou
       |---|---|---|---|
       | T1 via small-scope override (step 4d) | `bug-fixer:complexity:mechanical` | `flash_lite` | Rote, zero judgment |
       | T1 standard (step 4g) | `bug-fixer:complexity:standard` | `flash` | Clear scope, concrete checklist |
-      | T2 (human:bug-fixer:human:needs-approach-review) | *(applied after approval — see Step 4)* | | |
+      | T2 (bug-fixer:human:needs-approach-review) | *(applied after approval — see Step 4)* | | |
 
       Create the labels if they don't exist (idempotent):
       ```bash
@@ -200,12 +200,12 @@ Read `${BUG_FIXER_CONFIG}`. If `target_repo` is empty or the file is missing, ou
 
       Apply the label alongside the classification label:
       ```bash
-      gh issue edit <number> --repo <target_repo> --add-label "complexity:<tier>"
+      gh issue edit <number> --repo <target_repo> --add-label "bug-fixer:complexity:<tier>"
       ```
 
    i. **Discovery HITL gate:** For issues labelled `bug-fixer:triage:discovered-in-review`, classify as **minimum T2** (`bug-fixer:human:needs-approach-review`) regardless of apparent simplicity. Post comment:
       ```
-      [BUG-FIXER-TRIAGE] Classification: T2 (human:bug-fixer:human:needs-approach-review)
+      [BUG-FIXER-TRIAGE] Classification: T2 (bug-fixer:human:needs-approach-review)
 
       **Reason:** Auto-discovered issue requiring human approval before
       automated fixing proceeds.
@@ -284,18 +284,18 @@ a. Generate a batch slug from the shared theme — e.g.,
 
 b. Create the label if it doesn't exist:
    ```bash
-   gh label create "batch:<slug>" --repo <target_repo> --color "C2E0C6" \
+   gh label create "bug-fixer:batch:<slug>" --repo <target_repo> --color "C2E0C6" \
      --description "PR bundle: <theme>" 2>/dev/null || true
    ```
 
 c. Apply the label to every issue in the group:
    ```bash
-   gh issue edit <number> --repo <target_repo> --add-label "batch:<slug>"
+   gh issue edit <number> --repo <target_repo> --add-label "bug-fixer:batch:<slug>"
    ```
 
 d. Post a grouping comment on each issue in the batch:
    ```
-   [BUG-FIXER-TRIAGE] Batch assignment: `batch:<slug>`
+   [BUG-FIXER-TRIAGE] Batch assignment: `bug-fixer:batch:<slug>`
 
    Grouped with: #<sibling1>, #<sibling2>, ...
    **Reason:** <1-line affinity rationale — e.g., "Same spec section
