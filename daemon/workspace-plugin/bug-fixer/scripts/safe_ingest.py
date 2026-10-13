@@ -35,6 +35,7 @@ from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from injection_scanner import CachedInjectionScanner, InjectionResult, InjectionScanner
 from pre_tool_gate import _find_daemon_dir
 
 APPROVAL_COMMENT_REGEX = re.compile(r"^\s*/?approved?\s*[.!]*\s*$", re.IGNORECASE)
@@ -110,6 +111,7 @@ SAFE_STRUCTURAL_FIELDS = frozenset(
         "approval_status",
         "is_approved",
         "has_hidden_content",
+        "has_injection_attempt",
         "title",
         "body",
         "comments",
@@ -841,6 +843,52 @@ def filter_comments_list(
     return sanitized
 
 
+def _apply_injection_scan(
+    sanitized: dict[str, Any],
+    scanner: Any,
+) -> tuple[bool, dict[str, Any]]:
+    """Scans title, body, comments, and reviews for prompt injection.
+
+    Returns (rejected, sanitized):
+    - If title or body triggers injection, returns (True, sanitized).
+    - If any comment or review triggers injection, drops that comment/review
+      and sets sanitized["has_injection_attempt"] = True.
+    """
+    title = sanitized.get("title")
+    if isinstance(title, str) and title and scanner.scan(title).is_injection:
+        return True, sanitized
+
+    body = sanitized.get("body")
+    if isinstance(body, str) and body and scanner.scan(body).is_injection:
+        return True, sanitized
+
+    has_injection = False
+    if "comments" in sanitized and isinstance(sanitized["comments"], list):
+        safe_comments = []
+        for c in sanitized["comments"]:
+            if isinstance(c, dict) and isinstance(c.get("body"), str) and c["body"]:
+                if scanner.scan(c["body"]).is_injection:
+                    has_injection = True
+                    continue
+            safe_comments.append(c)
+        sanitized["comments"] = safe_comments
+
+    if "reviews" in sanitized and isinstance(sanitized["reviews"], list):
+        safe_reviews = []
+        for r in sanitized["reviews"]:
+            if isinstance(r, dict) and isinstance(r.get("body"), str) and r["body"]:
+                if scanner.scan(r["body"]).is_injection:
+                    has_injection = True
+                    continue
+            safe_reviews.append(r)
+        sanitized["reviews"] = safe_reviews
+
+    if has_injection:
+        sanitized["has_injection_attempt"] = True
+
+    return False, sanitized
+
+
 def sanitize_unapproved_item(
     item: dict[str, Any],
     reason: str,
@@ -848,7 +896,11 @@ def sanitize_unapproved_item(
 ) -> dict[str, Any]:
     """Redacts `title`/`body` and strips untrusted `--json` fields (`commits`, `headRefName`, `files`, etc.)."""
     trusted = trusted_users or set()
-    quarantined = reason == "QUARANTINED_LABEL" or has_quarantine_label(item) or bool(item.get("is_quarantined"))
+    quarantined = (
+        reason in ("QUARANTINED_LABEL", "PROMPT_INJECTION_DETECTED")
+        or has_quarantine_label(item)
+        or bool(item.get("is_quarantined"))
+    )
     sanitized: dict[str, Any] = {}
     for key in item:
         if key in UNTRUSTED_FREETEXT_FIELDS or key not in SAFE_STRUCTURAL_FIELDS:
@@ -877,6 +929,7 @@ def evaluate_and_sanitize_item(
     redact_unapproved: bool = False,
     bot_prefixes: Sequence[str] | None = None,
     leak_patterns: Sequence[re.Pattern[str]] | None = None,
+    injection_scanner: Any | None = None,
 ) -> tuple[bool, str, dict[str, Any] | None]:
     """Evaluates an Issue or PR dict and returns `(allowed, reason, sanitized_item)`."""
     if not isinstance(item, dict):
@@ -893,6 +946,12 @@ def evaluate_and_sanitize_item(
 
     if item.get("is_approved") is False:
         return _reject(str(item.get("approval_status") or "UNAPPROVED_EXTERNAL_AUTHOR"))
+
+    scanner = (
+        injection_scanner
+        if injection_scanner is not None
+        else InjectionScanner({"enabled": False, "heuristic_floor": True})
+    )
 
     author = extract_author_login(item)
     comments = item.get("comments") if isinstance(item.get("comments"), list) else []
@@ -946,6 +1005,9 @@ def evaluate_and_sanitize_item(
         sanitized = _apply_content_normalisation(sanitized)
         if leak_patterns:
             sanitized = redact_leaks_from_item(sanitized, leak_patterns)
+        rejected, sanitized = _apply_injection_scan(sanitized, scanner)
+        if rejected:
+            return _reject("PROMPT_INJECTION_DETECTED")
         if sanitized.get("has_hidden_content"):
             sanitized["approval_status"] = "HIDDEN_CONTENT"
         return True, "TRUSTED_AUTHOR", sanitized
@@ -1021,6 +1083,9 @@ def evaluate_and_sanitize_item(
     sanitized = _apply_content_normalisation(sanitized)
     if leak_patterns:
         sanitized = redact_leaks_from_item(sanitized, leak_patterns)
+    rejected, sanitized = _apply_injection_scan(sanitized, scanner)
+    if rejected:
+        return _reject("PROMPT_INJECTION_DETECTED")
     if sanitized.get("has_hidden_content"):
         sanitized["approval_status"] = "HIDDEN_CONTENT"
     return True, "APPROVED_BY_MAINTAINER", sanitized
@@ -1035,6 +1100,7 @@ def sanitize_inline_pr_comments(
     reviews: Sequence[dict[str, Any]] | None = None,
     bot_prefixes: Sequence[str] | None = None,
     leak_patterns: Sequence[re.Pattern[str]] | None = None,
+    injection_scanner: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Filters `repos/<owner>/<repo>/pulls/<pr>/comments` inline diff review comments.
 
@@ -1042,6 +1108,11 @@ def sanitize_inline_pr_comments(
     inline diff comments; an inline diff comment `"approved"` never unlocks unrelated
     external inline comments across the PR.
     """
+    scanner = (
+        injection_scanner
+        if injection_scanner is not None
+        else InjectionScanner({"enabled": False, "heuristic_floor": True})
+    )
     parent_approved = True
     if isinstance(parent_pr, dict):
         if has_quarantine_label(parent_pr) or parent_pr.get("is_quarantined") is True:
@@ -1054,7 +1125,11 @@ def sanitize_inline_pr_comments(
             and parent_pr.get("is_approved") is not True
         ):
             pr_ok, _, _ = evaluate_and_sanitize_item(
-                parent_pr, trusted_users, bot_prefixes=bot_prefixes, leak_patterns=leak_patterns
+                parent_pr,
+                trusted_users,
+                bot_prefixes=bot_prefixes,
+                leak_patterns=leak_patterns,
+                injection_scanner=scanner,
             )
             if not pr_ok:
                 parent_approved = False
@@ -1077,21 +1152,19 @@ def sanitize_inline_pr_comments(
             inline_comments, trusted_users, latest_approval_ts, leak_patterns=leak_patterns
         )
 
-    if leak_patterns:
-        cleaned = []
-        for c in res:
-            if isinstance(c, dict) and "body" in c and isinstance(c["body"], str):
-                c_copy = dict(c)
-                c_copy["body"] = redact_leaks_from_text(c_copy["body"], leak_patterns)
-                c_copy["body"] = normalise_visible_content(c_copy["body"])
-                cleaned.append(c_copy)
-            else:
-                cleaned.append(c)
-        return cleaned
+    cleaned: list[dict[str, Any]] = []
     for c in res:
         if isinstance(c, dict) and "body" in c and isinstance(c["body"], str):
-            c["body"] = normalise_visible_content(c["body"])
-    return res
+            c_copy = dict(c)
+            if leak_patterns:
+                c_copy["body"] = redact_leaks_from_text(c_copy["body"], leak_patterns) or ""
+            c_copy["body"] = normalise_visible_content(c_copy["body"])
+            if c_copy["body"] and scanner.scan(c_copy["body"]).is_injection:
+                continue
+            cleaned.append(c_copy)
+        else:
+            cleaned.append(c)
+    return cleaned
 
 
 def resolve_trusted_users(
@@ -1446,6 +1519,8 @@ def _project_requested_fields(
     res = {k: item[k] for k in requested_fields if k in item}
     if item.get("has_hidden_content"):
         res["has_hidden_content"] = True
+    if item.get("has_injection_attempt"):
+        res["has_injection_attempt"] = True
     return res
 
 
@@ -1475,7 +1550,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "subcommand",
-        choices=["issue-list", "issue-view", "pr-list", "pr-view", "pr-comments", "set-priority"],
+        choices=["issue-list", "issue-view", "pr-list", "pr-view", "pr-comments", "pr-diff", "set-priority"],
         help="GitHub read/priority operation to execute safely.",
     )
     parser.add_argument(
@@ -1504,6 +1579,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     bot_prefixes = tuple(config.get("bot_prefixes") or DEFAULT_BOT_PREFIXES)
     leak_patterns = compile_leak_patterns(config.get("scanning", {}).get("secrets", {}).get("patterns", []))
+    injection_cfg = (
+        config.get("scanning", {}).get("injection", {})
+        if isinstance(config.get("scanning"), dict)
+        else {}
+    )
+    scanner = CachedInjectionScanner(
+        InjectionScanner(injection_cfg if isinstance(injection_cfg, dict) else {})
+    )
 
     repo, _ = _extract_flag_value(passthrough, "--repo")
     if not repo:
@@ -1538,6 +1621,83 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         result = set_graphql_issue_priority(repo, int(issue_num_str), priority_val)
         print(json.dumps(result, indent=2))
+        return 0
+
+    if parsed.subcommand == "pr-diff":
+        if not clean_args:
+            sys.stderr.write("Usage: safe_ingest.py pr-diff <pr_number> --repo <owner/repo>\n")
+            return 1
+        pr_number = str(clean_args[0]).strip()
+        if not pr_number.isdigit() or int(pr_number) <= 0:
+            sys.stderr.write(f"ERROR: Invalid pull request number '{pr_number}'; must be a positive integer.\n")
+            return 1
+        if not is_valid_repo_slug(repo):
+            sys.stderr.write("ERROR: Valid --repo <owner/repo> is required for pr-diff.\n")
+            return 1
+
+        def edit_fetcher(num: int) -> dict[str, Any] | None:
+            return fetch_graphql_edit_metadata(repo, num)
+
+        pr_raw = subprocess.check_output(  # noqa: S603
+            [  # noqa: S607
+                "gh",
+                "pr",
+                "view",
+                pr_number,
+                "--repo",
+                repo,
+                "--json",
+                ",".join(sorted(MANDATORY_PR_INTERNAL_FIELDS)),
+            ],
+            text=True,
+        )
+        pr_parsed = _extract_json_payload(pr_raw)
+        pr_meta = pr_parsed if isinstance(pr_parsed, dict) else {}
+        pr_ok, pr_reason, clean_pr = evaluate_and_sanitize_item(
+            pr_meta,
+            trusted_users,
+            edit_fetcher,
+            bot_prefixes=bot_prefixes,
+            leak_patterns=leak_patterns,
+            injection_scanner=scanner,
+        )
+        if not pr_ok or clean_pr is None:
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "error": "BLOCKED_UNAPPROVED_EXTERNAL_CONTENT",
+                        "reason": pr_reason,
+                        "number": int(pr_number),
+                        "hint": "External PRs require a maintainer comment 'approved' posted after the latest edit and commit.",
+                    }
+                )
+                + "\n"
+            )
+            return 2
+
+        raw_diff = subprocess.check_output(  # noqa: S603
+            ["gh", "pr", "diff", pr_number, "--repo", repo],  # noqa: S607
+            text=True,
+        )
+        norm_diff = normalise_visible_content(raw_diff)
+        if leak_patterns:
+            norm_diff = redact_leaks_from_text(norm_diff, leak_patterns) or ""
+        if norm_diff and scanner.scan(norm_diff).is_injection:
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "error": "BLOCKED_UNAPPROVED_EXTERNAL_CONTENT",
+                        "reason": "PROMPT_INJECTION_DETECTED",
+                        "number": int(pr_number),
+                    }
+                )
+                + "\n"
+            )
+            return 2
+
+        sys.stdout.write(norm_diff)
+        if norm_diff and not norm_diff.endswith("\n"):
+            sys.stdout.write("\n")
         return 0
 
     if parsed.subcommand == "pr-comments":
@@ -1618,9 +1778,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 edit_fetcher,
                 bot_prefixes=bot_prefixes,
                 leak_patterns=leak_patterns,
+                injection_scanner=scanner,
             )
             if not pr_ok or clean_pr is None:
-                if pr_reason == "QUARANTINED_LABEL":
+                if pr_reason in ("QUARANTINED_LABEL", "PROMPT_INJECTION_DETECTED"):
                     sys.stderr.write(
                         json.dumps(
                             {
@@ -1651,6 +1812,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             reviews=reviews_list,
             bot_prefixes=bot_prefixes,
             leak_patterns=leak_patterns,
+            injection_scanner=scanner,
         )
         output_json = json.dumps(sanitized, indent=2)
         if jq_expr:
@@ -1691,6 +1853,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 edit_fetcher,
                 bot_prefixes=bot_prefixes,
                 leak_patterns=leak_patterns,
+                injection_scanner=scanner,
             )
             if ok and clean_item is not None:
                 sanitized_full.append(clean_item)
@@ -1744,6 +1907,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             edit_fetcher,
             bot_prefixes=bot_prefixes,
             leak_patterns=leak_patterns,
+            injection_scanner=scanner,
         )
         if not ok or clean_item is None:
             sys.stderr.write(

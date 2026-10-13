@@ -37,6 +37,7 @@ if AGENTAPI_DIR.is_dir():
 
 from injection_scanner import CachedInjectionScanner, InjectionScanner
 from liveness import record_dispatch, sweep_dispatches, agentapi_is_reachable
+from safe_ingest import normalise_visible_content
 
 
 def log(msg: str):
@@ -494,7 +495,14 @@ def main():
         if diff_r.returncode != 0:
             log(f"Error fetching diff for PR #{number}: {diff_r.stderr}")
             continue
-        diff = diff_r.stdout
+        diff = normalise_visible_content(diff_r.stdout)
+        diff_scan = scanner.scan(diff)
+        if diff_scan.is_injection:
+            log(f"INJECTION DETECTED in PR diff on PR #{number}: {diff_scan.provider} confidence={diff_scan.confidence}")
+            r_edit = gh("pr", "edit", str(number), "--repo", TARGET_REPO, "--add-label", "security:prompt-injection")
+            if r_edit.returncode != 0:
+                log(f"Failed to apply security label to PR #{number}: {r_edit.stderr}")
+            continue
 
         prompt = f"""Run the architect-review skill on this PR.
 

@@ -100,7 +100,7 @@ Identify the target PR number:
 
 2. **Retrieve PR Diff:**
    ```bash
-   gh pr diff <pr_number> --repo <target_repo>
+   python3 ${PLUGIN_DIR}/scripts/safe_ingest.py pr-diff <pr_number> --repo <target_repo>
    ```
 
 3. **Inspect Associated Issue:**

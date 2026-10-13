@@ -43,26 +43,58 @@ agent is told:
 3. **No self-modification.** Agents can't change the daemon's scripts, hooks,
    manifests, sidecar config or `.agents/plugins.json`, by any route.
 4. **No unreviewed injection.** Untrusted GitHub content reaches agents only
-   through `safe_ingest.py`, after trust filtering.
+   through `safe_ingest.py`, after trust filtering, visible-content normalisation,
+   and prompt-injection scanning.
 
 Everything else an agent does in its worktree (editing code, running tests,
 opening PRs) is normal work and shouldn't be gated.
+
+## Ingress defence-in-depth (stopping prompt injection at the source)
+
+Because every downstream risk (secret exfiltration, review-chain bypass, or
+guardrail tampering) begins when untrusted GitHub text steers an agent, the
+primary control surface is **ingress**:
+
+1. **Channel enforcement (`pre_tool_gate.py` + `github_url_gate.py`):** Raw
+   `gh issue/pr list|view|status|diff`, `gh run view|watch`, `gh search`,
+   `gh api` reads of issues/PRs/comments/reviews, and `read_url_content`
+   requests targeting `github.com`, `www.github.com`, or `api.github.com`
+   issue/PR endpoints are blocked in enrolled repos. Agents must read GitHub
+   data through `safe_ingest.py`.
+2. **Trust & temporal approval gating (`safe_ingest.py`):** Untrusted issue and
+   PR bodies are redacted unless a trusted maintainer explicitly approved the
+   item *after* its latest edit (`POST_APPROVAL_EDIT` detection), and untrusted
+   comments and reviews are stripped before output.
+3. **Visible content normalisation (`normalise_visible_content`):** HTML
+   comments, collapsed `<details>` blocks, invisible image `alt`/`title`
+   attributes, markdown reference-link titles, and zero-width, bidirectional, or
+   Unicode tag characters are stripped before text reaches either the maintainer
+   during triage or the agent during execution.
+4. **Centralised prompt-injection scanning (`injection_scanner.py`):** Every
+   item, comment, review, inline review comment, and PR diff flowing through
+   `safe_ingest.py` (`issue-view`, `issue-list`, `pr-view`, `pr-list`,
+   `pr-comments`, `pr-diff`) as well as the sidecar dispatchers
+   (`triage_dispatcher.py`, `engineering_dispatcher.py`,
+   `architect_dispatcher.py`) is scanned against an always-on heuristic floor
+   (`BUILTIN_INJECTION_PATTERNS`) plus optional Prompt Shield / LLM-as-judge
+   backends, quarantining injected content before any agent sees it.
 
 ## Trust zones
 
 | Zone | What applies |
 |---|---|
-| **Autonomous session, enrolled repo** | Full gate: all four invariants, workflow rules, egress scanning |
-| **Interactive session, enrolled repo** | Self-modification protection and secret-egress scanning only. A human is in the loop, so workflow rules (raw `gh` reads, merge/approve blocks) don't apply. |
-| **Unenrolled repo** | Self-modification protection only. The bug-fixer has no business in these repos. |
+| **Autonomous session, enrolled repo** | Full gate: all four invariants, ingress channel enforcement, workflow rules, `[ARCHITECT]` prefix restriction to `architect_review` sessions, and egress scanning. |
+| **Interactive session, enrolled repo** | Self-modification protection, secret-egress scanning, and mandatory `safe_ingest.py` / `github_url_gate.py` ingress protection (so interactive issue/PR inspection in an enrolled repo still gets HTML/Unicode normalisation and prompt-injection scanning). |
+| **Unenrolled repo** | Self-modification protection of bug-fixer files and credential-disclosure blocking (`gh auth token`) only. Workflow rules (`gh pr merge`, `gh pr review --approve`, raw `gh` reads, approval-comment blocks) do not apply, and malformed sidecar configs for other workspaces do not lock unenrolled workspaces. |
 
 How sessions are classified:
 
-- **Autonomous** = `ANTIGRAVITY_SOURCE_METADATA` marks a sidecar, or the
-  conversation ID matches a dispatch record.
+- **Autonomous** = `ANTIGRAVITY_SOURCE_METADATA` marks a sidecar,
+  `BUG_FIXER_SESSION_TYPE` is set, or the conversation ID matches a dispatch
+  record.
 - **Enrolled** = a sidecar `config.json` whose `repo_dir` contains the workspace.
 
-A malformed sidecar config should fail closed **for the bug-fixer**, not lock
+A malformed sidecar config fails closed **for that enrolled workspace**, not
 every workspace on the machine.
 
 ## Where each control should live
@@ -113,17 +145,19 @@ Before adding a rule to `pre_tool_gate.py`:
 5. **Is there a test for the bypass you're closing,** and one showing that
    ordinary work in the worktree isn't blocked?
 
-## Applying this to the current hardening stack (PRs #71–#73)
+## Applying this to the current hardening stack (PRs #71–#74)
 
-As of 2026-10-13 (#73 head `0aca142`), measured against this note:
+As of 2026-10-13 (#74 stacked on #73), measured against this note:
 
 | Item | PR | Decision |
 |---|---|---|
-| `[ARCHITECT] Approved` can be posted from any autonomous session, and the dispatcher trusts it because agents post as the maintainer | #71 | **Fix (invariant 1).** Long-term: bot identity. Short-term: only architect-dispatched sessions may post the `[ARCHITECT]` prefix. |
-| `git commit -nm` skips hooks; the bundled-flag check misses it | #72 | **Fix.** One line; autonomous sessions only. |
+| `[ARCHITECT] Approved` can be posted from any autonomous session, and the dispatcher trusts it because agents post as the maintainer | #71 / #74 | **Implemented in #74 (invariant 1).** Long-term: bot identity. Short-term: `pre_tool_gate.py` and `safe_post.py` restrict the `[ARCHITECT]` prefix to `architect_review` sessions. |
+| `safe_ingest.py`, `architect_dispatcher.py` PR diffs, and `triage_dispatcher.py` pending-approval summaries lacked centralised prompt-injection scanning | #71 / #74 | **Implemented in #74 (invariant 4).** `injection_scanner.py` enforces an always-on heuristic floor (`BUILTIN_INJECTION_PATTERNS`) wired into `safe_ingest.py` (`issue-view`, `issue-list`, `pr-view`, `pr-list`, `pr-comments`, `pr-diff`), `architect_dispatcher.py`, and `triage_dispatcher.py`; raw `gh pr diff` and `gh run view\|watch` are blocked in `pre_tool_gate.py`. |
+| `github_url_gate.py` missed `api.github.com` / `www.github.com` and failed open on malformed stdin | #71 / #74 | **Implemented in #74 (invariant 4).** Expanded URL regex to cover `www.github.com` and `api.github.com/repos/.../(issues\|pulls)` and made non-TTY stdin fail closed. |
+| `git commit -nm` skips hooks; the bundled-flag check misses it | #72 / #74 | **Implemented in #74.** Updated bundled short-flag check in `_check_git` to catch `-n` combined with `-m` (`-nm`, `-anm`). |
 | Push scan checks the working tree, not the pushed commits | #72 | **Fix, or replace with GitHub push protection** (invariant 2). |
-| `.agents/` excluded from leak scanning | #72 | **Narrow** to the specific example files. |
+| `.agents/` excluded from leak scanning | #72 / #74 | **Implemented in #74.** Narrowed `DEFAULT_REGEX_EXCLUDE_PATHS` from `.agents/` to `.agents/skills/principal-architect-workspace/`. |
 | Receipt forgery by writing `.git/leak_audit_receipt.json` | #72 | **Drop the receipt mechanism.** The push scan already does this job. |
-| Merge, approve and approval-injection blocks applied to unenrolled repos | #73 | **Revert** to unenrolled = self-protection only. |
-| One malformed sidecar config denies every tool call machine-wide | #73 | **Scope** the failure to the bug-fixer. |
+| Merge, approve and approval-injection blocks applied to unenrolled repos | #73 / #74 | **Implemented in #74.** Added `REASON_AUTO_MERGE`, `REASON_SELF_APPROVAL`, and `REASON_APPROVAL_INJECTION` to `_workflow_reasons` so unenrolled repos only enforce self-protection and credential-disclosure blocking. |
+| One malformed sidecar config denies every tool call machine-wide | #73 / #74 | **Implemented in #74.** Scoped sidecar config parse errors in `load_config` to fail closed only when `workspace_paths` matches that sidecar's `repo_dir`. |
 | `read_url_content` still reaches arbitrary hosts in autonomous sessions | #73 | **Accept and document**; host isolation's job. |

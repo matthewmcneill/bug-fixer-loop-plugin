@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from pathlib import Path
 import json
@@ -10,6 +11,34 @@ import random
 import time
 from security_audit import log_security_event
 
+BUILTIN_INJECTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\b(?:ignore|disregard|forget)\s+(?:all\s+)?(?:previous|prior|above|system|developer)\s+(?:instructions?|prompts?|rules?|directives?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\byou\s+are\s+now\s+(?:in\s+)?(?:developer\s+mode|unrestricted|dan\b|jailbroken|a\s+helpful\s+assistant\s+with\s+no\s+restrictions)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:<\|im_start\|>\s*system|<\|system\|>|\[SYSTEM(?:\s+OVERRIDE)?\]\s*:?|###\s*SYSTEM\s+INSTRUCTION|</user_input>)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bnew\s+(?:system\s+)?(?:prompt|instructions?)\s*:",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:print|reveal|output|dump)\s+(?:your\s+)?(?:system|initial|developer)\s+(?:prompt|instructions?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:echo\s+['\"]?/?approve(?:d|-body)?['\"]?\s*\|\s*gh\s+(?:issue|pr)\s+comment|\bgh\s+pr\s+(?:review\b[^\n]*--approve|merge\b))",
+        re.IGNORECASE,
+    ),
+)
+
+
 class InjectionResult:
     """Result of an injection scan."""
     def __init__(self, is_injection: bool, confidence: float,
@@ -18,6 +47,22 @@ class InjectionResult:
         self.confidence = confidence
         self.provider = provider
         self.details = details
+
+
+def scan_heuristic_injection(text: str) -> InjectionResult | None:
+    """Checks built-in heuristic patterns for unambiguous prompt injection / override payloads."""
+    if not text or not isinstance(text, str):
+        return None
+    for pat in BUILTIN_INJECTION_PATTERNS:
+        if pat.search(text):
+            log_security_event("heuristic_floor", "injection_detected", 0.95, text)
+            return InjectionResult(
+                is_injection=True,
+                confidence=0.95,
+                provider="heuristic_floor",
+                details=f"matched={pat.pattern}",
+            )
+    return None
 
 class RateLimitError(Exception):
     """Raised when Model Armor returns 429 after retry exhaustion."""
@@ -146,6 +191,7 @@ class InjectionScanner:
     def __init__(self, config: dict):
         """Config is the normalised scanning.injection section."""
         self.enabled = config.get("enabled", False)
+        self.heuristic_floor = config.get("heuristic_floor", True)
         self.fail_open = config.get("fail_open", True)
         self.provider = config.get("provider", "model_armor")
         
@@ -167,6 +213,10 @@ class InjectionScanner:
         Rate-limit errors (429) always fail closed to prevent abuse.
         Other errors respect the fail_open setting.
         """
+        if text and self.heuristic_floor:
+            heuristic_res = scan_heuristic_injection(text)
+            if heuristic_res is not None and heuristic_res.is_injection:
+                return heuristic_res
 
         if not self.enabled:
             return InjectionResult(False, 0.0, "disabled")

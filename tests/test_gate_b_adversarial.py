@@ -120,6 +120,8 @@ def _attacks(rt: str) -> list[str]:
         # Raw reads that bypass safe_ingest
         "gh issue view 5",
         "gh pr list",
+        "gh pr diff 5 --repo o/r",
+        "gh run view 12345 --log-failed",
         "gh issue status",
         "gh search issues foo",
         "gh api repos/o/r/issues/5/comments",
@@ -331,7 +333,7 @@ def _legitimate(rt: str) -> list[str]:
         "gh pr create --draft --repo o/r --base main --title 'Fix #5: thing' --body 'Resolves #5'",
         "gh pr create --draft -t 'Fix #1' -b 'Resolves #1'",
         "gh pr ready 5 --repo o/r",
-        "gh pr diff 5 --repo o/r",
+        "python3 daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py pr-diff 5 --repo o/r",
         "gh pr checkout 5",
         'gh pr comment 5 --repo o/r -b "[ARCHITECT] Approved:\n- verified\n- marked ready"',
         "gh api repos/o/r/milestones --jq '.[] | {number, title}'",

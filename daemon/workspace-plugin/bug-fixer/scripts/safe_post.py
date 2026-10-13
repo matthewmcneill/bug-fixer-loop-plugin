@@ -33,6 +33,9 @@ from pathlib import Path
 
 # Derive config path from this script's location (deterministic)
 SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from bugfixer_api import BugFixer
 PLUGIN_DIR = SCRIPT_DIR.parent
 WORKSPACE_DIR = PLUGIN_DIR.parent / "bug-fixer-loop-workspace"
 DEFAULT_CONFIG = WORKSPACE_DIR / "config.json"
@@ -68,6 +71,7 @@ PROTECTED_ADD_LABELS = frozenset({
 APPROVAL_TEXT_REGEX = re.compile(
     r"^\s*/?(?:approved?|approve-body|lgtm)\s*[.!]*\s*$", re.IGNORECASE
 )
+_ARCHITECT_TAG_RE = re.compile(r"(?m)^\s*\[ARCHITECT\]", re.IGNORECASE)
 
 
 def _candidate_configs() -> list[Path]:
@@ -279,6 +283,23 @@ def main():
         if APPROVAL_TEXT_REGEX.match(body.strip()):
             log("DENIED: posting fake maintainer approval comment is prohibited")
             sys.exit(1)
+        if _ARCHITECT_TAG_RE.search(body):
+            session_type = os.environ.get("BUG_FIXER_SESSION_TYPE", "").strip()
+            is_non_architect_autonomous = False
+            if session_type:
+                is_non_architect_autonomous = session_type != "architect_review"
+            else:
+                conv_id = os.environ.get("BUG_FIXER_CONVERSATION_ID", "").strip()
+                if conv_id:
+                    try:
+                        sctx = BugFixer.get_session_context(conv_id)
+                        if sctx.is_autonomous and sctx.session_type != "architect_review":
+                            is_non_architect_autonomous = True
+                    except Exception:
+                        pass
+            if is_non_architect_autonomous:
+                log("DENIED: [ARCHITECT] prefix is restricted to architect_review sessions")
+                sys.exit(1)
 
     # Block removing security labels via label-only
     if args.command == "label-only":

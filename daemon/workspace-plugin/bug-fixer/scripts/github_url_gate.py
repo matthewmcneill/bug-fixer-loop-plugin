@@ -20,7 +20,7 @@ from urllib.parse import unquote_plus
 from pre_tool_gate import compile_leak_patterns, load_config
 
 GITHUB_ISSUE_PR_URL = re.compile(
-    r"https?://github\.com/[^/]+/[^/]+/(?:issues|pull)/\d+"
+    r"https?://(?:(?:www|api)\.)?github\.com/(?:repos/)?[^/]+/[^/]+/(?:issues|pulls?)(?:/\d+|\b)"
 )
 
 REASON = (
@@ -82,18 +82,39 @@ def main() -> int:
         return 0
 
     raw = sys.stdin.read().strip()
-    stdin_data = {}
-    if raw:
-        try:
-            raw_json = json.loads(raw)
-            if isinstance(raw_json, dict):
-                stdin_data = raw_json
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-    if not stdin_data:
-        print(json.dumps({"decision": "allow"}))
+    if not raw:
+        print(
+            json.dumps(
+                {
+                    "decision": "deny",
+                    "reason": "Invalid or empty PreToolUse payload (failing closed).",
+                }
+            )
+        )
         return 0
+    try:
+        raw_json = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        print(
+            json.dumps(
+                {
+                    "decision": "deny",
+                    "reason": "Invalid or empty PreToolUse payload (failing closed).",
+                }
+            )
+        )
+        return 0
+    if not isinstance(raw_json, dict) or not raw_json:
+        print(
+            json.dumps(
+                {
+                    "decision": "deny",
+                    "reason": "Invalid or empty PreToolUse payload (failing closed).",
+                }
+            )
+        )
+        return 0
+    stdin_data = raw_json
 
     payload = stdin_data
     workspace_paths = stdin_data.get("workspacePaths", [])
