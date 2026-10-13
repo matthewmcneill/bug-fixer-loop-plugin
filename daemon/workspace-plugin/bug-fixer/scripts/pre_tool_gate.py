@@ -85,8 +85,12 @@ REASON_APPROVAL_INJECTION = (
 )
 REASON_RAW_GH = (
     "Use safe_ingest.py instead of raw gh commands: Direct `gh issue/pr list` "
-    "and `gh issue/pr view` commands are prohibited. Use "
-    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py` instead, run from the repository root."
+    "and `gh issue/pr view` commands are prohibited (as well as `gh pr diff` and `gh run view`). Use "
+    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py` "
+    "(including `pr-diff`) instead, run from the repository root."
+)
+REASON_ARCHITECT_SPOOF = (
+    "Architect review spoofing blocked: Posting [ARCHITECT] comments is restricted to architect_review sessions."
 )
 REASON_SHELL_MUTATION = (
     "Protected file shell mutation blocked: Shell mutation targeting spec or "
@@ -296,6 +300,47 @@ def normalise_config(config: dict[str, Any] | None) -> dict[str, Any]:
     return res
 
 
+def _sidecar_matches_workspaces(sidecar_sub: Path, workspace_paths: list[str] | None) -> bool:
+    """Return True if a sidecar directory with a malformed config.json belongs to any path in workspace_paths."""
+    if not workspace_paths:
+        return False
+    cand_conf = sidecar_sub / "config.json"
+    if cand_conf.is_file():
+        try:
+            raw_text = cand_conf.read_text(encoding="utf-8", errors="ignore")
+            m = re.search(r'"repo_dir"\s*:\s*"([^"]+)"', raw_text)
+            if m:
+                r_path = Path(m.group(1)).resolve()
+                return any(Path(wp).resolve().is_relative_to(r_path) for wp in workspace_paths)
+        except OSError:
+            pass
+    sc_manifest = sidecar_sub / "sidecar.json"
+    if sc_manifest.is_file():
+        try:
+            sc_data = json.loads(sc_manifest.read_text(encoding="utf-8"))
+            uris = sc_data.get("agent_permissions", {}).get("workspace_uris", [])
+            if isinstance(uris, list) and uris:
+                for uri in uris:
+                    if isinstance(uri, str) and uri:
+                        uri_path = Path(uri.removeprefix("file://")).resolve()
+                        for wp in workspace_paths:
+                            if Path(wp).resolve().is_relative_to(uri_path):
+                                return True
+                return False
+        except (json.JSONDecodeError, OSError):
+            pass
+    repo_slug = re.split(r"--|__", sidecar_sub.name, maxsplit=1)[-1].lower()
+    if repo_slug:
+        for wp in workspace_paths:
+            wp_resolved = Path(wp).resolve()
+            if wp_resolved.name.lower() == repo_slug or any(
+                p.name.lower() == repo_slug for p in wp_resolved.parents
+            ):
+                return True
+        return False
+    return True
+
+
 def load_config(
     config_path: str | Path | None = None,
     workspace_paths: list[str] | None = None,
@@ -335,10 +380,14 @@ def load_config(
                                         break
                         except json.JSONDecodeError as parse_err:
                             # Malformed config for a matching workspace → fail closed
-                            raise ValueError(
-                                f"Malformed JSON in sidecar config {cand_conf}: "
-                                f"{parse_err}. Fix or delete this file to restore "
-                                "normal gate behaviour."
+                            if _sidecar_matches_workspaces(sidecar_sub, workspace_paths):
+                                raise ValueError(
+                                    f"Malformed JSON in sidecar config {cand_conf}: "
+                                    f"{parse_err}. Fix or delete this file to restore "
+                                    "normal gate behaviour."
+                                )
+                            sys.stderr.write(
+                                f"WARNING: Ignoring malformed sidecar config for non-matching workspace {cand_conf}: {parse_err}\n"
                             )
                         except OSError:
                             pass
@@ -1326,7 +1375,12 @@ def _targets_proxy(word: Word, cwd: str | None) -> bool:
 
 
 def _check_safe_post_invocation(
-    seg: Segment, prog: Word, args: list[Word], script_word: Word
+    seg: Segment,
+    prog: Word,
+    args: list[Word],
+    script_word: Word,
+    ctx: _GateContext | None = None,
+    cwd: str | None = None,
 ) -> dict[str, str] | None:
     """Validate that a canonical safe_post.py invocation has no env overrides or unsafe flags."""
     if seg.assignments:
@@ -1351,6 +1405,39 @@ def _check_safe_post_invocation(
                 return _deny(
                     "Unsafe safe_post.py invocation: unsafe Python interpreter flags are not permitted."
                 )
+    if ctx is not None:
+        bodies: list[str] = []
+        i = 0
+        while i < len(args):
+            w = args[i]
+            t = w.text
+            if t == "--body" and i + 1 < len(args):
+                if not args[i + 1].dynamic:
+                    bodies.append(args[i + 1].text)
+                i += 2
+                continue
+            if t.startswith("--body="):
+                if not w.dynamic:
+                    bodies.append(t.partition("=")[2])
+                i += 1
+                continue
+            if t == "--body-file" and i + 1 < len(args):
+                status, content = _file_content(args[i + 1], ctx, cwd)
+                if status == "ok" and content:
+                    bodies.append(content)
+                i += 2
+                continue
+            if t.startswith("--body-file="):
+                file_word = Word(t.partition("=")[2], w.dynamic, w.globbed)
+                status, content = _file_content(file_word, ctx, cwd)
+                if status == "ok" and content:
+                    bodies.append(content)
+                i += 1
+                continue
+            i += 1
+        if any(_ARCHITECT_TAG_RE.search(b) for b in bodies):
+            if _is_non_architect_autonomous(ctx.conversation_id):
+                return _deny(REASON_ARCHITECT_SPOOF)
     return None
 
 
@@ -1567,7 +1654,9 @@ def _check_gh(
         return _deny(REASON_ACCOUNT_CHANGE)
     if (group, sub) == ("repo", "create") and any(w.text == "--public" for w in args):
         return _deny(REASON_ACCOUNT_CHANGE)
-    if group in ("issue", "pr") and sub in ("list", "view", "status"):
+    if group in ("issue", "pr") and sub in ("list", "view", "status", "diff"):
+        return _deny(REASON_RAW_GH)
+    if group == "run" and sub in ("view", "watch"):
         return _deny(REASON_RAW_GH)
     if group == "search":
         return _deny(REASON_RAW_GH)
@@ -1670,6 +1759,9 @@ def _check_gh(
     )
     if commenting and any(_looks_like_approval(b) for b in bodies):
         return _deny(REASON_APPROVAL_INJECTION)
+    if commenting and any(_ARCHITECT_TAG_RE.search(b) for b in bodies):
+        if _is_non_architect_autonomous(ctx.conversation_id):
+            return _deny(REASON_ARCHITECT_SPOOF)
 
     if group == "api":
         return _check_gh_api(flags, positionals, field_values, file_texts)
@@ -1743,8 +1835,8 @@ def _check_git(
                 or (
                     w.text.startswith("-")
                     and not w.text.startswith("--")
-                    and re.fullmatch(r"-[asvqne]+", w.text)
-                    and "n" in w.text
+                    and re.fullmatch(r"-[asvqnem]+", w.text)
+                    and "n" in w.text.split("m", 1)[0]
                 )
             ):
                 return _deny("Bypassing git hooks (--no-verify) is prohibited."), cwd
@@ -1951,7 +2043,7 @@ def _check_interpreter(
                 return _deny(
                     "Unsafe safe_post.py invocation: inline code or module flags are not permitted."
                 )
-            denied = _check_safe_post_invocation(seg, prog, args, script)
+            denied = _check_safe_post_invocation(seg, prog, args, script, ctx, cwd)
             if denied:
                 return denied
             return None  # allow safe_post.py — it scans content itself
@@ -2003,6 +2095,11 @@ def _check_embedded(
         if w.dynamic:
             continue
         if _targets_proxy(w, cwd):
+            denied = _check_safe_post_invocation(
+                Segment(words=args[k:]), w, args[k + 1 :], w, ctx, cwd
+            )
+            if denied:
+                return denied
             return None  # allow safe_post.py — it scans content itself
         name = _program_name(w)
         if name == "gh":
@@ -2074,6 +2171,22 @@ def _is_autonomous_session(conversation_id: str) -> bool:
     if "sidecar" in os.environ.get("ANTIGRAVITY_SOURCE_METADATA", "").lower():
         return True
     return BugFixer.get_session_context(conversation_id).is_autonomous
+
+
+_ARCHITECT_TAG_RE = re.compile(r"(?m)^\s*\[ARCHITECT\]", re.IGNORECASE)
+
+
+def _is_non_architect_autonomous(conversation_id: str) -> bool:
+    """Return True when executing inside an autonomous session other than architect_review."""
+    env_type = os.environ.get("BUG_FIXER_SESSION_TYPE", "").strip()
+    if env_type:
+        return env_type != "architect_review"
+    sctx = BugFixer.get_session_context(conversation_id)
+    if sctx.is_autonomous:
+        return sctx.session_type != "architect_review"
+    if "sidecar" in os.environ.get("ANTIGRAVITY_SOURCE_METADATA", "").lower():
+        return True
+    return False
 
 
 def _canonical_manage_paths() -> set[Path]:
@@ -2307,7 +2420,7 @@ def _check_segment(
     if prog.dynamic:
         return _deny(REASON_DYNAMIC_EXEC), cwd
     if _targets_proxy(prog, cwd):
-        denied = _check_safe_post_invocation(seg, prog, args, prog)
+        denied = _check_safe_post_invocation(seg, prog, args, prog, ctx, cwd)
         if denied:
             return denied, cwd
         return None, cwd  # allow safe_post.py — it scans content itself
@@ -2363,7 +2476,7 @@ def _check_segment(
             if scripts[0].dynamic or scripts[0].globbed:
                 return _deny(REASON_DYNAMIC_EXEC), cwd
             if _targets_proxy(scripts[0], cwd):
-                denied = _check_safe_post_invocation(seg, prog, args, scripts[0])
+                denied = _check_safe_post_invocation(seg, prog, args, scripts[0], ctx, cwd)
                 if denied:
                     return denied, cwd
                 return None, cwd  # allow safe_post.py — it scans content itself
@@ -2615,7 +2728,10 @@ def _check_command_text(
         return _deny(REASON_PARSE)
     _workflow_reasons = {
         REASON_RAW_GH,
+        REASON_AUTO_MERGE,
+        REASON_SELF_APPROVAL,
         REASON_ISSUE_REOPEN,
+        REASON_APPROVAL_INJECTION,
     }
     active_segments = [
         s for s in parsed.segments
@@ -2931,7 +3047,6 @@ class RegexBackend:
 
     DEFAULT_REGEX_EXCLUDE_PATHS = [
         "tests/",
-        ".agents/",
         ".agents/skills/principal-architect-workspace/",
     ]
 

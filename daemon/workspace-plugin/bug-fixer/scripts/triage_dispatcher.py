@@ -206,6 +206,27 @@ for issue in issues:
         continue
     last_body = (comments[-1].get("body") or "").lstrip()
     if not any(last_body.startswith(prefix) for prefix in BOT_COMMENT_PREFIXES):
+        text_parts = [issue.get("title", ""), issue.get("body", "")]
+        text_parts.extend((c.get("body") or "") for c in comments if isinstance(c, dict))
+        scan_res = scanner.scan("\n".join(p for p in text_parts if p))
+        if scan_res.is_injection:
+            log(
+                f"INJECTION DETECTED on pending-approval #{issue['number']}: "
+                f"{scan_res.provider} confidence={scan_res.confidence}"
+            )
+            r_edit = run(
+                [
+                    "gh",
+                    "issue",
+                    "edit",
+                    str(issue["number"]),
+                    "--add-label",
+                    "security:prompt-injection",
+                ]
+            )
+            if r_edit.returncode != 0:
+                log(f"Failed to apply security label to #{issue['number']}: {r_edit.stderr}")
+            continue
         pending_approvals.append(issue)
 
 if pending_approvals:
