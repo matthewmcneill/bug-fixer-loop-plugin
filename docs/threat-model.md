@@ -16,9 +16,12 @@ Autonomous agents started by the sidecars:
 - act with the **maintainer's GitHub credentials** and the **maintainer's machine**;
 - run **unattended**, with no human reviewing each tool call.
 
-The main threat is **prompt injection**: text an outsider controls steering an
-agent into acting against the maintainer. A secondary threat is an agent that
-makes a mistake and then "helpfully" works around a guardrail.
+This combination embodies Simon Willison's **"Lethal Trifecta"**:
+1. *Access to private data* (local source code, git credentials, host environment);
+2. *Exposure to untrusted input* (public GitHub issues, PRs, comments, commits);
+3. *Autonomous tool execution & egress* (running terminal commands, editing files, pushing commits, opening PRs).
+
+The primary attack vector is **indirect prompt injection** (OWASP LLM01): text an outsider controls steering an agent into executing unintended commands, tampering with guardrails, or leaking credentials. A secondary threat is an agent that makes an honest mistake and "helpfully" works around a security guardrail.
 
 ## Assets
 
@@ -49,6 +52,36 @@ agent is told:
 Everything else an agent does in its worktree (editing code, running tests,
 opening PRs) is normal work and shouldn't be gated.
 
+## Why not an off-the-shelf "GitHub Sanitizer"? (Industry SoTA context)
+
+It is tempting to look for a drop-in sanitizer plugin for GitHub issues—something
+equivalent to an HTML sanitizer or SQL prepared-statement library. None exists as
+a trusted general solution because:
+
+1. **The Semantic vs. Syntactic Boundary:** Unlike SQL injection (where prepared
+   statements separate syntax from data) or XSS (where HTML entity encoding
+   neutralises execution), LLMs operate over natural language where instructions
+   and data occupy the exact same prompt token space ("context collapse"). There is
+   no grammar-level escape character for natural language directives.
+2. **The Developer Dilemma (False-Positive Paradox):** Legitimate software bug
+   reports inherently contain imperative shell snippets (e.g. `rm -rf /tmp/cache && make`),
+   reproduction scripts, stack traces, and exploit PoCs. A linguistic sanitizer
+   strict enough to strip imperative commands breaks valid bug triage; a filter
+   permissive enough to admit technical bug reproductions admits adversarial prompt
+   injections.
+3. **Probabilistic vs. Deterministic Guarantees:** Machine-learning safety
+   classifiers (such as Google Cloud Model Armor, Meta Llama Guard, or Lakera)
+   provide valuable semantic filtering across known attack patterns, but they are
+   probabilistic. They can be bypassed by novel adversarial rephrasings,
+   linguistic obfuscation, or multi-turn logical framing.
+4. **The Industry Shift:** Leading autonomous agent frameworks (SWE-agent,
+   OpenHands, Claude Code, and Invariant Labs/Snyk's Toxic Flow Analysis) have
+   abandoned "input sanitization as the primary line of defence". Instead, the state
+   of the art has shifted to **Architecture-First Defence-in-Depth**:
+   - Inbound semantic & visible-content filtering (`safe_ingest.py` + Model Armor);
+   - Outbound structural blast-radius control (`pre_tool_gate.py` Gate B AST lexer);
+   - Ephemeral workspace sandboxing and network egress isolation.
+
 ## Ingress defence-in-depth (stopping prompt injection at the source)
 
 Because every downstream risk (secret exfiltration, review-chain bypass, or
@@ -70,14 +103,33 @@ primary control surface is **ingress**:
    attributes, markdown reference-link titles, and zero-width, bidirectional, or
    Unicode tag characters are stripped before text reaches either the maintainer
    during triage or the agent during execution.
-4. **Centralised prompt-injection scanning (`injection_scanner.py`):** Every
-   item, comment, review, inline review comment, and PR diff flowing through
-   `safe_ingest.py` (`issue-view`, `issue-list`, `pr-view`, `pr-list`,
-   `pr-comments`, `pr-diff`) as well as the sidecar dispatchers
-   (`triage_dispatcher.py`, `engineering_dispatcher.py`,
-   `architect_dispatcher.py`) is scanned against an always-on heuristic floor
-   (`BUILTIN_INJECTION_PATTERNS`) plus optional Prompt Shield / LLM-as-judge
-   backends, quarantining injected content before any agent sees it.
+4. **Centralised prompt-injection scanning (`injection_scanner.py` & `safe_ingest.py`):**
+   Prompt-injection scanning is centralized directly inside `safe_ingest.py` (covering
+   `issue-view`, `issue-list`, `pr-view`, `pr-list`, `pr-comments`, and `pr-diff`)
+   as well as the sidecar dispatchers (`triage_dispatcher.py`, `engineering_dispatcher.py`,
+   `architect_dispatcher.py`). Pushing ML classification directly into `safe_ingest.py`
+   eliminates the "agent runtime bypass" where autonomous mid-loop tool calls would
+   otherwise ingest unscanned external text:
+   - **Tiered detection:** An always-on, zero-latency heuristic floor
+     (`BUILTIN_INJECTION_PATTERNS`) catches blatant system overrides (`ignore previous instructions`,
+     `[SYSTEM OVERRIDE]`) in sub-millisecond time. Content that passes the floor is evaluated
+     by ML-based classifiers (such as Google Cloud Model Armor's `sanitizeUserPrompt` API)
+     for subtle semantic and multilingual jailbreaks.
+   - **Content-hash caching (`CachedInjectionScanner`):** Content is indexed by SHA-256
+     hash to prevent latency spikes (~150–250ms per scan) and eliminate 429 quota exhaustion
+     when batch-ingesting issues or comment threads. Trusted maintainer comments bypass the
+     scan.
+   - **Fail-closed rate-limit invariant:** General API errors can fail-open with an audit
+     record if configured (`fail_open: true`), but 429 quota exhaustion *strictly fails closed*
+     (treated as an injection/quarantine) to defeat deliberate quota-exhaustion DDoS bypass attacks.
+   - **Differentiated remediation:** An injected issue body quarantines the entire issue
+     (`security:prompt-injection` label). Injected external comments on an otherwise valid PR
+     are redacted in-place (`[REDACTED: PROMPT INJECTION DETECTED]`), ensuring legitimate maintainer
+     context and code diffs remain actionable.
+   - **Credential isolation:** When Model Armor is active, short-lived tokens minted via
+     service account impersonation (`roles/modelarmor.user`) are held in memory by the host
+     process (`_token_cache`). Credentials and cloud tokens are never persisted to disk or
+     exposed to the agent workspace.
 
 ## Trust zones
 
@@ -116,7 +168,11 @@ Use the strongest, simplest layer that can enforce an invariant, in this order:
    gate can't solve this, and shouldn't try.
 3. **The PreToolUse gate (`pre_tool_gate.py`):** only for what the platform can't
    see. That means protecting local files, scanning outbound content before it
-   leaves, and keeping raw untrusted reads behind `safe_ingest.py`. Keep it thin.
+   leaves, and keeping raw untrusted reads behind `safe_ingest.py`. While inbound
+   semantic filtering (`safe_ingest.py` + Model Armor) defends the model's reasoning
+   and token budget, the PreToolUse gate (Gate B structural lexer) provides the
+   deterministic backstop defending the host environment even if a zero-day injection
+   payload bypasses the ML classifier. Keep it thin.
 4. **`integrity_monitor.py`:** a backstop that catches indirect writes to the
    bug-fixer's own files that the gate didn't recognise.
 
