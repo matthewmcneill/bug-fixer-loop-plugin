@@ -217,6 +217,16 @@ class TestSafePost(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("approval", r.stderr.lower())
 
+    def test_approval_injection_slash_approve_body_denied(self):
+        """Posting '/approve-body' as a body should be denied in both pr-comment and issue-comment."""
+        for subcmd in ("pr-comment", "issue-comment"):
+            with self.subTest(subcmd=subcmd):
+                r = self._run(subcmd, "1",
+                               "--repo", "test/test",
+                               "--body", "/approve-body")
+                self.assertEqual(r.returncode, 1)
+                self.assertIn("approval", r.stderr.lower())
+
     def test_remove_security_label_denied(self):
         """Removing security:* labels should be denied."""
         r = self._run("label-only", "issue", "1",

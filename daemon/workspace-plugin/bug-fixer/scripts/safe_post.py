@@ -62,7 +62,12 @@ PROTECTED_ADD_LABELS = frozenset({
 })
 
 
-APPROVAL_TEXT_REGEX = re.compile(r"^\s*/?(?:approved?|lgtm)\s*[.!]*\s*$", re.IGNORECASE)
+# Note: PreToolUse and safe_post.py only intercept agent tool calls
+# (run_command / safe_post.py), never human comments posted through the GitHub
+# web UI or a maintainer's normal terminal outside an enrolled agent session.
+APPROVAL_TEXT_REGEX = re.compile(
+    r"^\s*/?(?:approved?|approve-body|lgtm)\s*[.!]*\s*$", re.IGNORECASE
+)
 
 
 def _candidate_configs() -> list[Path]:

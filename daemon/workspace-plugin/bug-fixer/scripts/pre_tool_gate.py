@@ -488,6 +488,9 @@ _STDIN_PATHS = re.compile(r"^/(dev/(stdin|fd/\d+|tty)|proc/[^/]+/fd/\d+)$")
 # or unknown directory (writing src/app/config.json is legitimate).
 _GENERIC_PROTECTED_BASENAMES = frozenset({"config.json"})
 
+# Note: PreToolUse and safe_post.py only intercept agent tool calls
+# (run_command / safe_post.py), never human comments posted through the GitHub
+# web UI or a maintainer's normal terminal outside an enrolled agent session.
 APPROVAL_TEXT_REGEX = re.compile(
     r"^\s*/?(?:approved?|approve-body|lgtm)\s*[.!]*\s*$", re.IGNORECASE
 )
