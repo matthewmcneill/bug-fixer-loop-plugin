@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 SCRIPTS_DIR = (
     Path(__file__).resolve().parent.parent
@@ -18,20 +18,29 @@ SCRIPTS_DIR = (
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-import engineering_dispatcher
 from engineering_dispatcher import remove_worktree
 
 
 class TestRemoveWorktree(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp(prefix="test_wt_")
-        self.wt_path = Path(self.tmp_dir) / "issue-75"
+        self.repo_dir = Path(self.tmp_dir) / "repo"
+        self.worktrees_dir = self.repo_dir / "worktrees"
+        self.worktrees_dir.mkdir(parents=True, exist_ok=True)
+        self.wt_path = self.worktrees_dir / "issue-75"
         self.wt_path.mkdir(parents=True, exist_ok=True)
         # Create residual file inside worktree directory (e.g., .pio-mcp-workspace)
         (self.wt_path / ".pio-mcp-workspace").mkdir(parents=True, exist_ok=True)
         (self.wt_path / ".pio-mcp-workspace" / "metadata.json").write_text("{}")
 
+        self.repo_patcher = patch("engineering_dispatcher.REPO_DIR", self.repo_dir)
+        self.wt_dir_patcher = patch("engineering_dispatcher.WORKTREES_DIR", self.worktrees_dir)
+        self.repo_patcher.start()
+        self.wt_dir_patcher.start()
+
     def tearDown(self):
+        self.repo_patcher.stop()
+        self.wt_dir_patcher.stop()
         if Path(self.tmp_dir).exists():
             shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
@@ -53,7 +62,7 @@ class TestRemoveWorktree(unittest.TestCase):
         mock_run.assert_called_once()
         # Verify fallback log was not called
         for call_arg in mock_log.call_args_list:
-            self.assertNotIn("falling back to shutil.rmtree", call_arg[0][0])
+            self.assertNotIn("falling back", call_arg[0][0])
 
     @patch("engineering_dispatcher.log")
     @patch("engineering_dispatcher.run")
@@ -74,7 +83,7 @@ class TestRemoveWorktree(unittest.TestCase):
         self.assertFalse(self.wt_path.exists())
         mock_run.assert_called_once()
 
-        # Fallback log message should have been recorded
+        # Fallback log message should have been recorded specifically for shutil.rmtree
         fallback_logged = any(
             f"git worktree remove failed for {self.wt_path}, falling back to shutil.rmtree" in call_arg[0][0]
             for call_arg in mock_log.call_args_list
@@ -85,7 +94,7 @@ class TestRemoveWorktree(unittest.TestCase):
     @patch("engineering_dispatcher.run")
     def test_remove_worktree_nonexistent_path(self, mock_run, mock_log):
         """When worktree path does not exist, neither git command nor fallback should run."""
-        nonexistent = Path(self.tmp_dir) / "does-not-exist"
+        nonexistent = self.worktrees_dir / "does-not-exist"
         remove_worktree(nonexistent)
 
         mock_run.assert_not_called()
@@ -94,8 +103,8 @@ class TestRemoveWorktree(unittest.TestCase):
     @patch("engineering_dispatcher.log")
     @patch("engineering_dispatcher.run")
     def test_remove_worktree_file_fallback(self, mock_run, mock_log):
-        """When path is a stray file rather than directory, it is unlinked in fallback."""
-        file_path = Path(self.tmp_dir) / "stray-file"
+        """When path is a stray file rather than directory, it is unlinked with accurate log."""
+        file_path = self.worktrees_dir / "stray-file"
         file_path.write_text("dummy")
 
         mock_run.return_value = subprocess.CompletedProcess(
@@ -107,6 +116,53 @@ class TestRemoveWorktree(unittest.TestCase):
 
         self.assertFalse(file_path.exists())
         mock_run.assert_called_once()
+        fallback_logged = any(
+            f"git worktree remove failed for {file_path}, falling back to filesystem removal" in call_arg[0][0]
+            for call_arg in mock_log.call_args_list
+        )
+        self.assertTrue(fallback_logged, f"Expected filesystem removal log, got: {mock_log.call_args_list}")
+
+    @patch("engineering_dispatcher.log")
+    @patch("engineering_dispatcher.run")
+    def test_remove_worktree_refuses_repo_root(self, mock_run, mock_log):
+        """Containment guard refuses to remove the repository root."""
+        remove_worktree(self.repo_dir)
+
+        self.assertTrue(self.repo_dir.exists())
+        mock_run.assert_not_called()
+        self.assertTrue(
+            any("Refusing to remove repository root" in call[0][0] for call in mock_log.call_args_list),
+            f"Expected repo root refusal log, got: {mock_log.call_args_list}",
+        )
+
+    @patch("engineering_dispatcher.log")
+    @patch("engineering_dispatcher.run")
+    def test_remove_worktree_refuses_worktrees_dir(self, mock_run, mock_log):
+        """Containment guard refuses to remove the worktrees container directory."""
+        remove_worktree(self.worktrees_dir)
+
+        self.assertTrue(self.worktrees_dir.exists())
+        mock_run.assert_not_called()
+        self.assertTrue(
+            any("Refusing to remove worktrees directory" in call[0][0] for call in mock_log.call_args_list),
+            f"Expected worktrees dir refusal log, got: {mock_log.call_args_list}",
+        )
+
+    @patch("engineering_dispatcher.log")
+    @patch("engineering_dispatcher.run")
+    def test_remove_worktree_refuses_path_outside_worktrees_dir(self, mock_run, mock_log):
+        """Containment guard refuses to remove paths outside WORKTREES_DIR."""
+        outside_dir = Path(self.tmp_dir) / "outside"
+        outside_dir.mkdir(parents=True)
+
+        remove_worktree(outside_dir)
+
+        self.assertTrue(outside_dir.exists())
+        mock_run.assert_not_called()
+        self.assertTrue(
+            any("Refusing to remove path outside WORKTREES_DIR" in call[0][0] for call in mock_log.call_args_list),
+            f"Expected outside WORKTREES_DIR refusal log, got: {mock_log.call_args_list}",
+        )
 
 
 if __name__ == "__main__":
