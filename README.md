@@ -364,6 +364,26 @@ Autonomous agents running this plugin strictly adhere to 12 non-negotiable rules
 
 ---
 
+## Security Model & Trust Boundaries
+
+### Defense-in-Depth Layers
+
+1. **TOCTOU-Checked GitHub Ingestion & Quarantine (`safe_ingest.py`)** — External issues, PRs, and comments are withheld until a trusted maintainer approves them (via `/approve` for the full thread or `/approve-body` for the issue/PR description only). Post-approval edits or commits invalidate approval, hidden Unicode/HTML content is stripped, and optional Model Armor scanning quarantines prompt-injection attempts.
+2. **Structural PreToolUse Gate & Deterministic HITL (`pre_tool_gate.py` + `shell_analysis.py`)** — Every file write, shell command, URL read, and web search/browser tool call passes through a fail-closed gate. Shell commands are lexed structurally across wrappers (`bash -c`, `eval`, `$(...)`, `xargs`, `find -exec`), autonomous sessions are blocked from external web browsing/search and management mutations, and interactive management changes (`manage.py`) require explicit human confirmation (`force_ask`).
+3. **Egress Secret Scanning (`safe_post.py` + `git push`)** — Outbound GitHub mutations and `git push` operations are scanned against both the configured secret backend (`BetterLeaks`) and a non-removable built-in regex floor covering cloud credentials, API keys, and tokens.
+4. **Snapshot Integrity Monitoring (`integrity_monitor.py`)** — Pre/post `run_command` hooks record and verify SHA-256 digests of protected specification files, sidecar configs, and security scripts, automatically rolling back unauthorized modifications.
+
+### Residual Risks & Operator Recommendations
+
+Because the configured `test_command` executes arbitrary code inside the target repository worktree under the local user account without OS-level containerization, a prompt-injected agent that modifies application or test files could execute code during test runs with ambient user privileges (such as `~/.config/gh` credentials and local filesystem access).
+
+For high-risk or public repositories, operators should:
+- Run the daemon inside an isolated VM, container, or devcontainer.
+- Authenticate `gh` using fine-grained, repository-scoped GitHub tokens (`GH_TOKEN`) rather than broad personal access tokens.
+- Install `betterleaks` and enable Model Armor prompt-injection scanning.
+
+---
+
 ## Consumer Hook API
 
 If your project has its own PreToolUse hooks, you can differentiate between autonomous bug-fixer sessions and interactive human sessions:

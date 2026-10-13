@@ -38,6 +38,7 @@ from typing import Any
 from pre_tool_gate import _find_daemon_dir
 
 APPROVAL_COMMENT_REGEX = re.compile(r"^\s*/?approved?\s*[.!]*\s*$", re.IGNORECASE)
+APPROVAL_BODY_ONLY_REGEX = re.compile(r"^\s*/approve-body\s*[.!]*\s*$", re.IGNORECASE)
 REPO_SLUG_REGEX = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GRAPHQL_PAGE_LIMIT = 100
 
@@ -494,6 +495,8 @@ def is_approval_comment(
     comment: dict[str, Any],
     trusted_users: set[str],
     bot_prefixes: Sequence[str] | None = None,
+    *,
+    include_body_only: bool = True,
 ) -> bool:
     """Returns True iff `comment` is an explicit human maintainer 'approved' comment."""
     if not isinstance(comment, dict):
@@ -511,18 +514,29 @@ def is_approval_comment(
     for prefix in prefixes:
         if upper_body.startswith(str(prefix).upper()):
             return False
-    return bool(APPROVAL_COMMENT_REGEX.match(body))
+    if APPROVAL_COMMENT_REGEX.match(body):
+        return True
+    if include_body_only and APPROVAL_BODY_ONLY_REGEX.match(body):
+        return True
+    return False
 
 
 def get_latest_approval_timestamp(
     comments: Iterable[dict[str, Any]],
     trusted_users: set[str],
     bot_prefixes: Sequence[str] | None = None,
+    *,
+    include_body_only: bool = True,
 ) -> datetime | None:
     """Finds the latest UTC timestamp among valid maintainer 'approved' comments."""
     latest: datetime | None = None
     for comment in comments or []:
-        if not is_approval_comment(comment, trusted_users, bot_prefixes=bot_prefixes):
+        if not is_approval_comment(
+            comment,
+            trusted_users,
+            bot_prefixes=bot_prefixes,
+            include_body_only=include_body_only,
+        ):
             continue
         ts = parse_iso_timestamp(
             comment.get("createdAt")
@@ -770,6 +784,7 @@ def filter_comments_list(
     trusted_users: set[str],
     latest_approval_ts: datetime | None,
     comment_edit_map: dict[str, str | None] | None = None,
+    leak_patterns: Sequence[re.Pattern[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Strips unapproved external comments/reviews and any external entry edited after approval."""
     sanitized: list[dict[str, Any]] = []
@@ -781,7 +796,12 @@ def filter_comments_list(
             continue
         author = extract_author_login(comment)
         if author in trusted_users:
-            sanitized.append(comment)
+            if leak_patterns and isinstance(comment.get("body"), str):
+                c_copy = dict(comment)
+                c_copy["body"] = redact_leaks_from_text(c_copy["body"], leak_patterns)
+                sanitized.append(c_copy)
+            else:
+                sanitized.append(comment)
             continue
         if latest_approval_ts is None:
             continue
@@ -809,10 +829,15 @@ def filter_comments_list(
             continue
         elif updated_str:
             updated_ts = parse_iso_timestamp(updated_str)
-            if updated_ts is not None and updated_ts > latest_approval_ts:
+            if updated_ts is None or updated_ts > latest_approval_ts:
                 continue
 
-        sanitized.append(comment)
+        if leak_patterns and isinstance(comment.get("body"), str):
+            c_copy = dict(comment)
+            c_copy["body"] = redact_leaks_from_text(c_copy["body"], leak_patterns)
+            sanitized.append(c_copy)
+        else:
+            sanitized.append(comment)
     return sanitized
 
 
@@ -873,7 +898,12 @@ def evaluate_and_sanitize_item(
     comments = item.get("comments") if isinstance(item.get("comments"), list) else []
     reviews = item.get("reviews") if isinstance(item.get("reviews"), list) else []
     commits_list = item.get("commits") if isinstance(item.get("commits"), list) else []
-    latest_approval_ts = get_latest_approval_timestamp([*comments, *reviews], trusted_users, bot_prefixes=bot_prefixes)
+    latest_approval_ts = get_latest_approval_timestamp(
+        [*comments, *reviews], trusted_users, bot_prefixes=bot_prefixes, include_body_only=True
+    )
+    latest_comment_approval_ts = get_latest_approval_timestamp(
+        [*comments, *reviews], trusted_users, bot_prefixes=bot_prefixes, include_body_only=False
+    )
 
     # Check if we need GraphQL edit metadata (external item with approval, or external edited comments/reviews)
     comment_edit_map: dict[str, str | None] = {}
@@ -889,7 +919,7 @@ def evaluate_and_sanitize_item(
     )
 
     if author in trusted_users:
-        effective_approval_ts = latest_approval_ts
+        effective_approval_ts = latest_comment_approval_ts
         if exceeds_page_boundary:
             effective_approval_ts = None
         elif effective_approval_ts is not None and has_external_edited_comment:
@@ -907,10 +937,12 @@ def evaluate_and_sanitize_item(
         sanitized = dict(item)
         if "comments" in sanitized:
             sanitized["comments"] = filter_comments_list(
-                comments, trusted_users, effective_approval_ts, comment_edit_map
+                comments, trusted_users, effective_approval_ts, comment_edit_map, leak_patterns
             )
         if "reviews" in sanitized:
-            sanitized["reviews"] = filter_comments_list(reviews, trusted_users, effective_approval_ts, comment_edit_map)
+            sanitized["reviews"] = filter_comments_list(
+                reviews, trusted_users, effective_approval_ts, comment_edit_map, leak_patterns
+            )
         sanitized = _apply_content_normalisation(sanitized)
         if leak_patterns:
             sanitized = redact_leaks_from_item(sanitized, leak_patterns)
@@ -936,7 +968,7 @@ def evaluate_and_sanitize_item(
     need_graphql_meta = (
         (last_edited_raw is None and includes_edit is None)
         or (last_edited_raw is None and includes_edit is True)
-        or has_external_edited_comment
+        or (has_external_edited_comment and latest_comment_approval_ts is not None)
     )
     if (last_edited_raw is None or need_graphql_meta) and edit_metadata_fetcher is not None and item.get("number"):
         meta = edit_metadata_fetcher(int(item["number"]))
@@ -951,7 +983,9 @@ def evaluate_and_sanitize_item(
             **(meta.get("reviewLastEditedAt") or {}),
         }
     elif (last_edited_raw is None and includes_edit is None) or (
-        has_external_edited_comment and edit_metadata_fetcher is None
+        has_external_edited_comment
+        and latest_comment_approval_ts is not None
+        and edit_metadata_fetcher is None
     ):
         # Fail-closed if no edit metadata source was provided for an external item or edited external review/comment
         return _reject("MISSING_EDIT_METADATA")
@@ -977,9 +1011,13 @@ def evaluate_and_sanitize_item(
 
     sanitized = dict(item)
     if "comments" in sanitized:
-        sanitized["comments"] = filter_comments_list(comments, trusted_users, latest_approval_ts, comment_edit_map)
+        sanitized["comments"] = filter_comments_list(
+            comments, trusted_users, latest_comment_approval_ts, comment_edit_map, leak_patterns
+        )
     if "reviews" in sanitized:
-        sanitized["reviews"] = filter_comments_list(reviews, trusted_users, latest_approval_ts, comment_edit_map)
+        sanitized["reviews"] = filter_comments_list(
+            reviews, trusted_users, latest_comment_approval_ts, comment_edit_map, leak_patterns
+        )
     sanitized = _apply_content_normalisation(sanitized)
     if leak_patterns:
         sanitized = redact_leaks_from_item(sanitized, leak_patterns)
@@ -1030,9 +1068,14 @@ def sanitize_inline_pr_comments(
         if reviews:
             top_level_candidates.extend(reviews)
         latest_approval_ts = get_latest_approval_timestamp(
-            top_level_candidates, trusted_users, bot_prefixes=bot_prefixes
+            top_level_candidates,
+            trusted_users,
+            bot_prefixes=bot_prefixes,
+            include_body_only=False,
         )
-        res = filter_comments_list(inline_comments, trusted_users, latest_approval_ts)
+        res = filter_comments_list(
+            inline_comments, trusted_users, latest_approval_ts, leak_patterns=leak_patterns
+        )
 
     if leak_patterns:
         cleaned = []

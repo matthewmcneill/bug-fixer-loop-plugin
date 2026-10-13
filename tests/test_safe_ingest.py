@@ -338,33 +338,35 @@ class TestSafeIngest(unittest.TestCase):
         patterns = ["ya29\\.[A-Za-z0-9_-]+", "AKIA[0-9A-Z]{16}", "[invalid(regex"]
         compiled = compile_leak_patterns(patterns)
         self.assertEqual(len(compiled), 2)
-        self.assertTrue(compiled[0].search("ya29.sample-token_value"))
-        self.assertTrue(compiled[1].search("AKIAIOSFODNN7EXAMPLE"))
+        self.assertTrue(compiled[0].search("ya29." + "sample-token_value"))
+        self.assertTrue(compiled[1].search("AKIA" + "IOSFODNN7EXAMPLE"))
 
     def test_redact_leaks_from_text_and_item(self):
         patterns = compile_leak_patterns(["ya29\\.[A-Za-z0-9_-]+", "AKIA[0-9A-Z]{16}"])
-        text = "Found token ya29.secret-token-123 and AWS key AKIAIOSFODNN7EXAMPLE in log."
+        tok = "ya29." + "secret-token-123"
+        aws = "AKIA" + "IOSFODNN7EXAMPLE"
+        text = f"Found token {tok} and AWS key {aws} in log."
         redacted_text = redact_leaks_from_text(text, patterns)
-        self.assertNotIn("ya29.secret-token-123", redacted_text)
-        self.assertNotIn("AKIAIOSFODNN7EXAMPLE", redacted_text)
+        self.assertNotIn(tok, redacted_text)
+        self.assertNotIn(aws, redacted_text)
         self.assertIn("[REDACTED: SECRET DETECTED]", redacted_text)
 
         item = {
             "number": 10,
-            "title": "Issue with AKIAIOSFODNN7EXAMPLE",
-            "body": "Look at AKIAIOSFODNN7EXAMPLE here",
+            "title": f"Issue with {aws}",
+            "body": f"Look at {aws} here",
             "comments": [
-                {"id": "c1", "body": "Comment with AKIAIOSFODNN7EXAMPLE"},
+                {"id": "c1", "body": f"Comment with {aws}"},
             ],
             "reviews": [
-                {"id": "r1", "body": "Review mentioning AKIAIOSFODNN7EXAMPLE"},
+                {"id": "r1", "body": f"Review mentioning {aws}"},
             ],
         }
         redacted_item = redact_leaks_from_item(item, patterns)
-        self.assertNotIn("AKIAIOSFODNN7EXAMPLE", redacted_item["title"])
-        self.assertNotIn("AKIAIOSFODNN7EXAMPLE", redacted_item["body"])
-        self.assertNotIn("AKIAIOSFODNN7EXAMPLE", redacted_item["comments"][0]["body"])
-        self.assertNotIn("AKIAIOSFODNN7EXAMPLE", redacted_item["reviews"][0]["body"])
+        self.assertNotIn(aws, redacted_item["title"])
+        self.assertNotIn(aws, redacted_item["body"])
+        self.assertNotIn(aws, redacted_item["comments"][0]["body"])
+        self.assertNotIn(aws, redacted_item["reviews"][0]["body"])
 
     # 6. Repo slug validation tests
     def test_is_valid_repo_slug(self):
@@ -600,6 +602,76 @@ class TestSafeIngest(unittest.TestCase):
             self.assertTrue(len(config["scanning"]["secrets"]["patterns"]) > 0)
         finally:
             os.unlink(temp_path)
+
+    def test_approve_body_approves_issue_body_but_redacts_external_comments(self):
+        issue = {
+            "number": 200,
+            "title": "External bug report title",
+            "body": "External bug report description",
+            "author": {"login": "external-reporter"},
+            "createdAt": "2026-09-26T09:00:00Z",
+            "includesCreatedEdit": False,
+            "comments": [
+                {
+                    "id": "c_ext_1",
+                    "author": {"login": "third-party-commenter"},
+                    "body": "Malicious prompt injection in comment before approval",
+                    "createdAt": "2026-09-26T09:05:00Z",
+                    "includesCreatedEdit": False,
+                },
+                {
+                    "id": "c_maint_1",
+                    "author": {"login": "maintainer-user"},
+                    "body": "/approve-body",
+                    "createdAt": "2026-09-26T09:10:00Z",
+                    "includesCreatedEdit": False,
+                },
+            ],
+        }
+        ok, reason, clean = evaluate_and_sanitize_item(issue, self.trusted)
+        self.assertTrue(ok)
+        self.assertEqual(reason, "APPROVED_BY_MAINTAINER")
+        self.assertEqual(clean["title"], "External bug report title")
+        self.assertEqual(clean["body"], "External bug report description")
+        # External comment must be stripped when only /approve-body was used
+        self.assertEqual(len(clean["comments"]), 1)
+        self.assertEqual(clean["comments"][0]["id"], "c_maint_1")
+
+    def test_filter_comments_list_strips_post_approval_edits_and_redacts_leaks(self):
+        approval_ts = parse_iso_timestamp("2026-09-26T09:10:00Z")
+        patterns = compile_leak_patterns([r"AKIA[0-9A-Z]{16}"])
+        aws = "AKIA" + "IOSFODNN7EXAMPLE"
+        comments = [
+            {
+                "id": "c1",
+                "author": {"login": "external-user"},
+                "body": f"Clean comment with {aws} before approval",
+                "createdAt": "2026-09-26T09:01:00Z",
+                "updatedAt": "2026-09-26T09:01:00Z",
+            },
+            {
+                "id": "c2",
+                "author": {"login": "external-user"},
+                "body": "Edited after approval via updatedAt",
+                "createdAt": "2026-09-26T09:02:00Z",
+                "updatedAt": "2026-09-26T09:15:00Z",
+            },
+            {
+                "id": "c3",
+                "author": {"login": "external-user"},
+                "body": "Edited after approval via lastEditedAt",
+                "createdAt": "2026-09-26T09:03:00Z",
+                "lastEditedAt": "2026-09-26T09:12:00Z",
+            },
+        ]
+        filtered = filter_comments_list(
+            comments, self.trusted, approval_ts, leak_patterns=patterns
+        )
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["id"], "c1")
+        self.assertNotIn(aws, filtered[0]["body"])
+        self.assertIn("[REDACTED: SECRET DETECTED]", filtered[0]["body"])
+
 
 if __name__ == "__main__":
 

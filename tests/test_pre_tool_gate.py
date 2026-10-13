@@ -1534,3 +1534,143 @@ class TestWO2EgressAndIntegrity(unittest.TestCase):
             with io.StringIO() as err_buf, redirect_stderr(err_buf):
                 rc = run_git_hook(tmp_dir, config=TEST_CONFIG)
             self.assertEqual(rc, 1)
+
+
+class TestWO3FailClosedAndSupplyChain(unittest.TestCase):
+    """Unit tests for WO3: Fail-Closed Gates, Tool Surface, Supply Chain & Security Model."""
+
+    def test_hooks_json_includes_multi_replace_and_web_gates(self):
+        hooks_path = PLUGIN_ROOT / "daemon" / "hooks.json"
+        hooks = json.loads(hooks_path.read_text(encoding="utf-8"))
+
+        file_gate = hooks.get("bug-fixer-file-gate", {}).get("PreToolUse", [])
+        self.assertTrue(file_gate)
+        file_matcher = file_gate[0].get("matcher", "")
+        self.assertIn("write_to_file", file_matcher)
+        self.assertIn("replace_file_content", file_matcher)
+        self.assertIn("multi_replace_file_content", file_matcher)
+
+        all_matchers = [
+            entry.get("matcher", "")
+            for group in hooks.values()
+            if isinstance(group, dict)
+            for entry in group.get("PreToolUse", [])
+            if isinstance(entry, dict)
+        ]
+        combined = "|".join(all_matchers)
+        self.assertIn("browser_subagent", combined)
+        self.assertIn("search_web", combined)
+
+    def test_web_tools_denied_in_autonomous_session_and_allowed_in_interactive(self):
+        from pre_tool_gate import evaluate_pretool_call
+
+        cfg = dict(TEST_CONFIG, repo_dir=str(PLUGIN_ROOT))
+        for tool in ("browser_subagent", "search_web"):
+            payload = {
+                "toolCall": {"name": tool, "args": {"query": "test"}},
+                "conversationId": "conv-123",
+            }
+            with unittest.mock.patch("pre_tool_gate._is_autonomous_session", return_value=True):
+                res_auto = evaluate_pretool_call(payload, cfg)
+                self.assertEqual(res_auto["decision"], "deny")
+                self.assertIn("disabled in autonomous bug-fixer sessions", res_auto["reason"])
+
+            with unittest.mock.patch("pre_tool_gate._is_autonomous_session", return_value=False):
+                res_inter = evaluate_pretool_call(payload, cfg)
+                self.assertEqual(res_inter["decision"], "allow")
+
+    def test_empty_non_tty_stdin_fails_closed(self):
+        for stdin_input in ("", "   \n", "{}"):
+            with self.subTest(stdin_input=repr(stdin_input)):
+                proc = subprocess.run(
+                    [sys.executable, str(GATE_SCRIPT)],
+                    cwd=str(PLUGIN_ROOT),
+                    input=stdin_input,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                )
+                res = json.loads(proc.stdout.strip())
+                self.assertEqual(res["decision"], "deny")
+                self.assertIn("Empty hook payload on stdin", res["reason"])
+
+    def test_malformed_or_missing_explicit_config_fails_closed(self):
+        payload = {
+            "toolCall": {
+                "name": "write_to_file",
+                "args": {"TargetFile": "src/main.py"},
+            }
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+            tf.write("{malformed json")
+            bad_cfg_path = tf.name
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(GATE_SCRIPT), "--config", bad_cfg_path],
+                cwd=str(PLUGIN_ROOT),
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            res = json.loads(proc.stdout.strip())
+            self.assertEqual(res["decision"], "deny")
+            self.assertIn("Configuration error (failing closed):", res["reason"])
+        finally:
+            os.unlink(bad_cfg_path)
+
+        # Missing explicit --config also fails closed
+        proc_missing = subprocess.run(
+            [sys.executable, str(GATE_SCRIPT), "--config", "/nonexistent/config.json"],
+            cwd=str(PLUGIN_ROOT),
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        res_missing = json.loads(proc_missing.stdout.strip())
+        self.assertEqual(res_missing["decision"], "deny")
+        self.assertIn("Configuration error (failing closed):", res_missing["reason"])
+
+    def test_core_gh_invariants_enforced_when_unenrolled(self):
+        from pre_tool_gate import REASON_SECRET_DISCLOSURE, evaluate_pretool_call
+
+        unenrolled_cfg = normalise_config(
+            {
+                "_enrolled": False,
+                "spec_file_path": "",
+                "protected_files": [],
+                "leak_patterns": [],
+            }
+        )
+        blocked_cases = [
+            ("gh pr merge 10 --squash", REASON_AUTO_MERGE),
+            ("gh pr review 10 --approve", REASON_SELF_APPROVAL),
+            ("gh issue comment 10 --body 'approved'", REASON_APPROVAL_INJECTION),
+            ("gh issue comment 10 --body '/approve-body'", REASON_APPROVAL_INJECTION),
+            ("gh auth token", REASON_SECRET_DISCLOSURE),
+        ]
+        for cmd, expected_reason in blocked_cases:
+            with self.subTest(cmd=cmd):
+                payload = {
+                    "toolCall": {"name": "run_command", "args": {"CommandLine": cmd}},
+                }
+                res = evaluate_pretool_call(payload, unenrolled_cfg)
+                self.assertEqual(res["decision"], "deny")
+                self.assertEqual(res["reason"], expected_reason)
+
+        # Raw gh reads remain allowed in unenrolled workspaces
+        res_view = evaluate_pretool_call(
+            {"toolCall": {"name": "run_command", "args": {"CommandLine": "gh issue view 10"}}},
+            unenrolled_cfg,
+        )
+        self.assertEqual(res_view["decision"], "allow")
+
+    def test_release_workflow_hardening(self):
+        workflow_path = PLUGIN_ROOT / ".github" / "workflows" / "release.yml"
+        content = workflow_path.read_text(encoding="utf-8")
+        self.assertIn("INPUT_TAG: ${{ inputs.tag_name }}", content)
+        self.assertNotIn('TAG="${{ inputs.tag_name }}"', content)
+        self.assertIn("SHA256SUMS", content)
+        self.assertIn("actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683", content)
+        self.assertIn("softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda", content)

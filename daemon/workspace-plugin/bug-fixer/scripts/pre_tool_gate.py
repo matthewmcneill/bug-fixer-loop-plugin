@@ -488,7 +488,12 @@ _STDIN_PATHS = re.compile(r"^/(dev/(stdin|fd/\d+|tty)|proc/[^/]+/fd/\d+)$")
 # or unknown directory (writing src/app/config.json is legitimate).
 _GENERIC_PROTECTED_BASENAMES = frozenset({"config.json"})
 
-APPROVAL_TEXT_REGEX = re.compile(r"^\s*/?(?:approved?|lgtm)\s*[.!]*\s*$", re.IGNORECASE)
+# Note: PreToolUse and safe_post.py only intercept agent tool calls
+# (run_command / safe_post.py), never human comments posted through the GitHub
+# web UI or a maintainer's normal terminal outside an enrolled agent session.
+APPROVAL_TEXT_REGEX = re.compile(
+    r"^\s*/?(?:approved?|approve-body|lgtm)\s*[.!]*\s*$", re.IGNORECASE
+)
 
 
 def _looks_like_approval(text: str) -> bool:
@@ -2609,8 +2614,8 @@ def _check_command_text(
     except ShellParseError:
         return _deny(REASON_PARSE)
     _workflow_reasons = {
-        REASON_RAW_GH, REASON_AUTO_MERGE, REASON_SELF_APPROVAL,
-        REASON_ISSUE_REOPEN, REASON_APPROVAL_INJECTION,
+        REASON_RAW_GH,
+        REASON_ISSUE_REOPEN,
     }
     active_segments = [
         s for s in parsed.segments
@@ -2781,6 +2786,12 @@ def evaluate_gate_b(
 
 def evaluate_pretool_call(payload: dict[str, Any], config: dict[str, Any]) -> dict[str, str]:
     """Evaluates PreToolUse payload against Gates A, B, and C."""
+    if config and config.get("_config_error"):
+        return {
+            "decision": "deny",
+            "reason": f"Configuration error (failing closed): {config['_config_error']}",
+        }
+
     # Ensure SCANNER_PROTECTED_FILES matches the loaded config
     global SCANNER_PROTECTED_FILES
     loaded_from = config.get("_loaded_from") if config else None
@@ -2805,7 +2816,17 @@ def evaluate_pretool_call(payload: dict[str, Any], config: dict[str, Any]) -> di
     spec_file_path = str(config.get("spec_file_path", "")).strip()
     protected_files = list(config.get("protected_files", []))
     repo_dir = str(config.get("repo_dir", "")).strip() or None
-    conversation_id = str(payload.get("conversationId") or "").strip()
+    conversation_id = str(
+        payload.get("conversationId") or payload.get("conversation_id") or ""
+    ).strip()
+
+    if tool_name in ("browser_subagent", "search_web"):
+        if _is_autonomous_session(conversation_id):
+            return {
+                "decision": "deny",
+                "reason": "External web browsing and search tools are disabled in autonomous bug-fixer sessions to prevent data exfiltration.",
+            }
+        return {"decision": "allow"}
 
     workspace_paths = (
         payload.get("workspacePaths") if isinstance(payload.get("workspacePaths"), list) else []
@@ -3482,8 +3503,19 @@ def main() -> int:
     
     if not _non_hook_modes:
         if not sys.stdin.isatty():
+            raw_str = sys.stdin.read()
+            if not raw_str.strip():
+                print(
+                    json.dumps(
+                        {
+                            "decision": "deny",
+                            "reason": "Empty hook payload on stdin — failing closed.",
+                        }
+                    )
+                )
+                return 0
             try:
-                raw = json.load(sys.stdin)
+                raw = json.loads(raw_str)
                 if isinstance(raw, dict):
                     stdin_data = raw
             except (json.JSONDecodeError, ValueError):
@@ -3500,8 +3532,9 @@ def main() -> int:
         if config_loaded_from:
             SCANNER_PROTECTED_FILES = _derive_workspace_paths(Path(config_loaded_from))
     except Exception as exc:
-        sys.stderr.write(f"Config loading error: {exc} — enforcing with defaults\n")
+        sys.stderr.write(f"Config loading error: {exc} — failing closed\n")
         config = {
+            "_config_error": str(exc),
             "spec_file_path": "docs/plugin-architecture.md",
             "protected_files": ["docs/plugin-architecture.md"],
             "leak_patterns": [],
@@ -3577,7 +3610,14 @@ def main() -> int:
             parser.print_help()
             return 0
         else:
-            print(json.dumps({"decision": "allow"}))
+            print(
+                json.dumps(
+                    {
+                        "decision": "deny",
+                        "reason": "Empty hook payload on stdin — failing closed.",
+                    }
+                )
+            )
             return 0
 
     result = evaluate_pretool_call(stdin_data, config)
