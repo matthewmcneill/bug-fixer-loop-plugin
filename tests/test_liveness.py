@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -222,7 +223,7 @@ class TestLivenessRemoveWorktree(unittest.TestCase):
 
     @patch("liveness._run")
     def test_remove_worktree_fallback_when_git_fails_and_dir_remains(self, mock_run):
-        """When git worktree remove fails or metadata is pruned, fallback to shutil.rmtree removes directory."""
+        """When git worktree remove fails or metadata is pruned, fallback to shutil.rmtree removes directory and prunes."""
         mock_log = MagicMock()
         mock_run.return_value = subprocess.CompletedProcess(
             args=["git", "worktree", "remove"],
@@ -235,7 +236,8 @@ class TestLivenessRemoveWorktree(unittest.TestCase):
         remove_worktree(self.wt_path, log_fn=mock_log)
 
         self.assertFalse(self.wt_path.exists())
-        mock_run.assert_called_once()
+        self.assertEqual(mock_run.call_count, 2)
+        mock_run.assert_any_call(["git", "-C", str(self.repo_dir.resolve()), "worktree", "prune"])
         fallback_logged = any(
             f"git worktree remove failed for {self.wt_path}, falling back to shutil.rmtree" in call_arg[0][0]
             for call_arg in mock_log.call_args_list
@@ -253,8 +255,33 @@ class TestLivenessRemoveWorktree(unittest.TestCase):
         mock_log.assert_not_called()
 
     @patch("liveness._run")
+    def test_remove_worktree_broken_symlink_fallback(self, mock_run):
+        """When path is a broken symlink, it is not skipped by existence check and is unlinked with prune."""
+        mock_log = MagicMock()
+        broken_link = self.worktrees_dir / "broken-symlink"
+        os.symlink("/nonexistent/target/path", broken_link)
+
+        self.assertTrue(broken_link.is_symlink())
+        self.assertFalse(broken_link.exists())
+
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=128, stdout="", stderr="fatal: not a working tree"
+        )
+
+        remove_worktree(broken_link, log_fn=mock_log)
+
+        self.assertFalse(broken_link.is_symlink())
+        self.assertEqual(mock_run.call_count, 2)
+        mock_run.assert_any_call(["git", "-C", str(self.repo_dir.resolve()), "worktree", "prune"])
+        fallback_logged = any(
+            f"git worktree remove failed for {broken_link}, falling back to filesystem removal" in call_arg[0][0]
+            for call_arg in mock_log.call_args_list
+        )
+        self.assertTrue(fallback_logged, f"Expected filesystem removal log, got: {mock_log.call_args_list}")
+
+    @patch("liveness._run")
     def test_remove_worktree_file_fallback(self, mock_run):
-        """When path is a stray file rather than directory, it is unlinked with accurate log."""
+        """When path is a stray file rather than directory, it is unlinked with accurate log and pruned."""
         mock_log = MagicMock()
         file_path = self.worktrees_dir / "stray-file"
         file_path.write_text("dummy")
@@ -267,7 +294,8 @@ class TestLivenessRemoveWorktree(unittest.TestCase):
         remove_worktree(file_path, log_fn=mock_log)
 
         self.assertFalse(file_path.exists())
-        mock_run.assert_called_once()
+        self.assertEqual(mock_run.call_count, 2)
+        mock_run.assert_any_call(["git", "-C", str(self.repo_dir.resolve()), "worktree", "prune"])
         fallback_logged = any(
             f"git worktree remove failed for {file_path}, falling back to filesystem removal" in call_arg[0][0]
             for call_arg in mock_log.call_args_list
@@ -320,13 +348,31 @@ class TestLivenessRemoveWorktree(unittest.TestCase):
     def test_remove_worktree_infers_dirs_from_worktrees_structure(self, mock_run):
         """When repo_dir and worktrees_dir are omitted, they are inferred from path structure."""
         mock_log = MagicMock()
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        def fake_git_remove(cmd):
+            shutil.rmtree(self.wt_path, ignore_errors=True)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = fake_git_remove
         remove_worktree(self.wt_path, log_fn=mock_log)
         mock_run.assert_called_once()
         self.assertEqual(mock_run.call_args[0][0][2], str(self.repo_dir.resolve()))
         self.assertEqual(mock_run.call_args[0][0][6], str(self.wt_path))
+
+    @patch("liveness._run")
+    def test_remove_worktree_handles_relative_and_redundant_paths(self, mock_run):
+        """Redundant path segments like '..' or '.' are resolved before directory inference."""
+        mock_log = MagicMock()
+        def fake_git_remove(cmd):
+            shutil.rmtree(self.wt_path, ignore_errors=True)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = fake_git_remove
+        relative_path = self.repo_dir / "worktrees" / ".." / "worktrees" / "issue-77"
+        remove_worktree(relative_path, log_fn=mock_log)
+        mock_run.assert_called_once()
+        self.assertEqual(mock_run.call_args[0][0][2], str(self.repo_dir.resolve()))
+        self.assertEqual(mock_run.call_args[0][0][6], str(relative_path))
+
 
     @patch("liveness.remove_worktree")
     @patch("liveness._append_to_ledger")
