@@ -12,13 +12,16 @@ Design principles:
   - If resume fails, dump context so humans or architects can pick up
 """
 
+from collections.abc import Callable
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 BRAIN_DIR = Path.home() / ".gemini" / "antigravity" / "brain"
 STALE_THRESHOLD = 300       # seconds — transcript must be fresher than this
@@ -69,6 +72,57 @@ _SAFE_POST = Path(__file__).resolve().parent / "safe_post.py"
 def _safe_post(*args) -> subprocess.CompletedProcess:
     """Route body-carrying GitHub writes through the egress proxy."""
     return _run([sys.executable, str(_SAFE_POST), *args])
+
+
+def remove_worktree(
+    wt_path: Path | str,
+    repo_dir: Path | None = None,
+    worktrees_dir: Path | None = None,
+    log_fn: Callable[[str], Any] = print,
+) -> None:
+    """Remove a git worktree with containment guards and filesystem fallback."""
+    wt = Path(wt_path)
+    if not wt.exists() and not wt.is_symlink():
+        return
+
+    # For symlinks, resolve the parent directory while keeping the link entry name
+    # to avoid chasing targets outside the worktree container.
+    resolved_wt = (wt.parent.resolve() / wt.name) if wt.is_symlink() else wt.resolve()
+
+    effective_repo_dir: Path | None = None
+    if repo_dir:
+        effective_repo_dir = Path(repo_dir).resolve()
+    elif resolved_wt.parent.name == "worktrees":
+        effective_repo_dir = resolved_wt.parent.parent.resolve()
+
+    effective_worktrees_dir: Path | None = None
+    if worktrees_dir:
+        effective_worktrees_dir = Path(worktrees_dir).resolve()
+    elif effective_repo_dir:
+        effective_worktrees_dir = (effective_repo_dir / "worktrees").resolve()
+
+    if effective_repo_dir and resolved_wt == effective_repo_dir:
+        log_fn(f"Refusing to remove repository root: {wt}")
+        return
+    if effective_worktrees_dir and resolved_wt == effective_worktrees_dir:
+        log_fn(f"Refusing to remove worktrees directory: {wt}")
+        return
+    if not effective_worktrees_dir or not resolved_wt.is_relative_to(effective_worktrees_dir):
+        log_fn(f"Refusing to remove path outside WORKTREES_DIR: {wt}")
+        return
+
+    git_repo = str(effective_repo_dir) if effective_repo_dir else str(resolved_wt.parent.parent)
+    _run(["git", "-C", git_repo, "worktree", "remove", "-f", str(wt)])
+    if wt.exists() or wt.is_symlink():
+        if wt.is_dir() and not wt.is_symlink():
+            log_fn(f"git worktree remove failed for {wt}, falling back to shutil.rmtree")
+            shutil.rmtree(wt, ignore_errors=True)
+        else:
+            log_fn(f"git worktree remove failed for {wt}, falling back to filesystem removal")
+            wt.unlink(missing_ok=True)
+        _run(["git", "-C", git_repo, "worktree", "prune"])
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -681,8 +735,8 @@ def _recover(dispatch: dict, dispatches_dir: Path, target_repo: str,
                 lock = claims_dir / f"{issue_num}.lock"
                 lock.unlink(missing_ok=True)
             wt_path = dispatch.get("worktree_path")
-            if wt_path and Path(wt_path).exists():
-                _run(["git", "-C", str(Path(wt_path).parent.parent), "worktree", "remove", "-f", wt_path])
+            if wt_path:
+                remove_worktree(wt_path, log_fn=log_fn)
 
             # Record per-issue failure for re-dispatch prevention
             _record_issue_dispatch_failure(
@@ -833,8 +887,8 @@ def sweep_dispatches(dispatches_dir: Path, target_repo: str,
         if _check_success(dispatch, target_repo):
             log_fn(f"Dispatch {conv_id[:8]}... ({dispatch['type']}) completed successfully.")
             wt_path = dispatch.get("worktree_path")
-            if wt_path and Path(wt_path).exists():
-                _run(["git", "-C", str(Path(wt_path).parent.parent), "worktree", "remove", "-f", wt_path])
+            if wt_path:
+                remove_worktree(wt_path, log_fn=log_fn)
             _append_to_ledger(dispatch, target_repo, dispatches_dir, log_fn)
             dispatch_file.unlink(missing_ok=True)
             continue

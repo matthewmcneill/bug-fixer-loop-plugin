@@ -15,7 +15,6 @@ Architecture:
 import json
 import os
 import re
-import shutil
 import signal
 import subprocess
 import sys
@@ -32,7 +31,8 @@ from injection_scanner import CachedInjectionScanner, InjectionScanner
 from liveness import (record_dispatch, sweep_dispatches,
                       transcript_age_seconds, transcript_path, is_stalled,
                       is_in_error_loop, should_skip_issue_dispatch,
-                      clear_issue_dispatch_failure, agentapi_is_reachable)
+                      clear_issue_dispatch_failure, agentapi_is_reachable,
+                      remove_worktree as _remove_worktree)
 
 
 def log(msg: str):
@@ -363,27 +363,7 @@ def ensure_worktree(branch_name: str, label: str = "") -> Path | None:
     return None
 
 def remove_worktree(wt_path: Path):
-    if not wt_path.exists():
-        return
-
-    if REPO_DIR and wt_path.resolve() == REPO_DIR.resolve():
-        log(f"Refusing to remove repository root: {wt_path}")
-        return
-    if WORKTREES_DIR and wt_path.resolve() == WORKTREES_DIR.resolve():
-        log(f"Refusing to remove worktrees directory: {wt_path}")
-        return
-    if WORKTREES_DIR and not wt_path.resolve().is_relative_to(WORKTREES_DIR.resolve()):
-        log(f"Refusing to remove path outside WORKTREES_DIR: {wt_path}")
-        return
-
-    run(["git", "-C", str(REPO_DIR), "worktree", "remove", "-f", str(wt_path)], check=False)
-    if wt_path.exists():
-        if wt_path.is_dir() and not wt_path.is_symlink():
-            log(f"git worktree remove failed for {wt_path}, falling back to shutil.rmtree")
-            shutil.rmtree(wt_path, ignore_errors=True)
-        else:
-            log(f"git worktree remove failed for {wt_path}, falling back to filesystem removal")
-            wt_path.unlink(missing_ok=True)
+    _remove_worktree(wt_path, repo_dir=REPO_DIR, worktrees_dir=WORKTREES_DIR, log_fn=log)
 
 def main():
     if not os.environ.get("ANTIGRAVITY_PROJECT_ID"):
