@@ -576,6 +576,20 @@ class TestSafeIngest(unittest.TestCase):
         self.assertTrue(clean_ext.get("has_hidden_content"))
         self.assertEqual(clean_ext["title"], "External Title ")
 
+        # Ensure HIDDEN_CONTENT status does not cause _project_requested_fields to redact title/body
+        from safe_ingest import _project_requested_fields, _is_item_unapproved_or_quarantined
+        self.assertFalse(_is_item_unapproved_or_quarantined(clean))
+        self.assertFalse(_is_item_unapproved_or_quarantined(clean_ext))
+        projected_trusted = _project_requested_fields(clean, ["number", "title", "body"], trusted_users=self.trusted)
+        self.assertEqual(projected_trusted["title"], "Clean Title ")
+        self.assertEqual(projected_trusted["body"], "Normal body with zero-width space injected")
+        self.assertTrue(projected_trusted.get("has_hidden_content"))
+
+        projected_ext = _project_requested_fields(clean_ext, ["number", "title", "body"], trusted_users=self.trusted)
+        self.assertEqual(projected_ext["title"], "External Title ")
+        self.assertEqual(projected_ext["body"], "External Body")
+        self.assertTrue(projected_ext.get("has_hidden_content"))
+
 
 
     def test_load_config_v2_workspace(self):
@@ -600,6 +614,24 @@ class TestSafeIngest(unittest.TestCase):
             self.assertTrue(len(config["scanning"]["secrets"]["patterns"]) > 0)
         finally:
             os.unlink(temp_path)
+
+    def test_hidden_content_status_does_not_clobber_trusted_author(self):
+        """Issue #79: HIDDEN_CONTENT status must not cause _project_requested_fields to redact title/body."""
+        from safe_ingest import _project_requested_fields, _is_item_unapproved_or_quarantined
+        item = {
+            "number": 79,
+            "title": "safe_ingest: HIDDEN_CONTENT status bug",
+            "body": "Body containing <!-- some comment --> that triggers normalisation",
+            "author": {"login": "maintainer-user"},
+            "createdAt": "2026-10-14T07:24:03Z",
+            "approval_status": "HIDDEN_CONTENT",
+            "has_hidden_content": True,
+        }
+        self.assertFalse(_is_item_unapproved_or_quarantined(item))
+        projected = _project_requested_fields(item, ["number", "title", "body"], trusted_users=self.trusted)
+        self.assertEqual(projected["title"], "safe_ingest: HIDDEN_CONTENT status bug")
+        self.assertEqual(projected["body"], "Body containing <!-- some comment --> that triggers normalisation")
+        self.assertTrue(projected.get("has_hidden_content"))
 
 if __name__ == "__main__":
 

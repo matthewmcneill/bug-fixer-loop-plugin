@@ -1105,7 +1105,7 @@ def _is_item_unapproved_or_quarantined(item: dict[str, Any]) -> bool:
     if has_quarantine_label(item):
         return True
     status = str(item.get("approval_status") or "").strip().upper()
-    if status and status not in ("TRUSTED_AUTHOR", "APPROVED_BY_MAINTAINER", "APPROVED"):
+    if status and status not in ("TRUSTED_AUTHOR", "APPROVED_BY_MAINTAINER", "APPROVED", "HIDDEN_CONTENT"):
         return True
     return False
 
