@@ -185,6 +185,81 @@ class TestLiveness(unittest.TestCase):
         self.assertFalse(_check_success(dispatch, "owner/repo"))
         mock_gh.assert_called_with("issue", "view", "48", "--repo", "owner/repo", "--json", "state,labels", "--jq", '.state == "OPEN" and ([.labels[].name] | any(. == "bug-fixer:architect:awaiting-review"))')
 
+    @patch("liveness._gh")
+    def test_check_success_architect_review_states(self, mock_gh):
+        from liveness import _check_success
+
+        dispatch = {"type": "architect_review", "pr_number": 78}
+
+        # Success when OPEN and contains [ARCHITECT] comment
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "OPEN",
+                "comments": [{"body": "[ARCHITECT] Approved: looks good"}],
+            }),
+            stderr="",
+        )
+        self.assertTrue(_check_success(dispatch, "owner/repo"))
+
+        # Issue #81: Success when MERGED and contains [ARCHITECT] comment
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "MERGED",
+                "comments": [{"body": "[ARCHITECT] Approved: ready to merge"}],
+            }),
+            stderr="",
+        )
+        self.assertTrue(_check_success(dispatch, "owner/repo"))
+
+        # Issue #81: Success when CLOSED and contains [ARCHITECT] comment
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "CLOSED",
+                "comments": [{"body": "[ARCHITECT] Changes Requested: fix issues"}],
+            }),
+            stderr="",
+        )
+        self.assertTrue(_check_success(dispatch, "owner/repo"))
+
+        # Failure when comments do not have [ARCHITECT]
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "MERGED",
+                "comments": [{"body": "A normal user comment"}],
+            }),
+            stderr="",
+        )
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+
+        # Failure when state is not recognized or invalid
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "UNKNOWN",
+                "comments": [{"body": "[ARCHITECT] comment"}],
+            }),
+            stderr="",
+        )
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+
+        # Failure when gh call fails
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="API error"
+        )
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+
+        # Failure when pr_number is missing
+        self.assertFalse(_check_success({"type": "architect_review"}, "owner/repo"))
+
 
 class TestLivenessRemoveWorktree(unittest.TestCase):
     def setUp(self):

@@ -623,14 +623,14 @@ def _check_success(dispatch: dict, target_repo: str) -> bool:
         pr_num = dispatch.get("pr_number")
         if not pr_num:
             return False
-        # Check PR is OPEN and for [ARCHITECT] comment posted after spawn
+        # Check for [ARCHITECT] comment posted (PR state may be OPEN, MERGED, or CLOSED)
         r = _gh("pr", "view", str(pr_num), "--repo", target_repo,
                 "--comments", "--json", "state,comments")
         if r.returncode != 0:
             return False
         try:
             data = json.loads(r.stdout)
-            if data.get("state") != "OPEN":
+            if str(data.get("state", "")).upper() not in ("OPEN", "MERGED", "CLOSED"):
                 return False
             for c in data.get("comments", []):
                 if "[ARCHITECT]" in c.get("body", ""):
