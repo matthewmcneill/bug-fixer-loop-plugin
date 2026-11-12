@@ -421,6 +421,8 @@ class TestCommitRecencyGuard(unittest.TestCase):
         comments = [
             {"author": {"login": "maintainer"}, "body": "[ARCHITECT] Changes Requested: round 1", "createdAt": "2026-11-12T10:00:00Z"},
             {"author": {"login": "maintainer"}, "body": "Please iterate", "createdAt": "2026-11-12T11:00:00Z"},
+            {"author": {"login": "maintainer"}, "body": "> [ARCHITECT] Changes Requested: round 1\nQuoting previous findings", "createdAt": "2026-11-12T11:30:00Z"},
+            {"author": {"login": "maintainer"}, "body": None, "createdAt": "2026-11-12T11:45:00Z"},
             {"author": {"login": "maintainer"}, "body": "[ARCHITECT] Changes Requested: round 2", "createdAt": "2026-11-12T12:00:00Z"},
         ]
         count, ts = extract_review_comments_info(comments, trusted)
@@ -471,6 +473,13 @@ class TestCommitRecencyGuard(unittest.TestCase):
 
         # Prior architect comment exists, but commit time is unknown -> NOT ready
         self.assertFalse(check_commit_recency(t1, None))
+
+        # Naive datetimes defensively normalized to UTC without TypeError
+        t_naive1 = datetime(2026, 11, 12, 10, 0, 0)
+        t_naive2 = datetime(2026, 11, 12, 11, 0, 0)
+        self.assertTrue(check_commit_recency(t_naive1, t_naive2))
+        self.assertTrue(check_commit_recency(t1, t_naive2))
+        self.assertFalse(check_commit_recency(t_naive2, t1))
 
 
 class TestArchitectDispatcherPolling(unittest.TestCase):
@@ -687,7 +696,9 @@ class TestArchitectDispatcherPolling(unittest.TestCase):
 
         self.assertEqual(spawned, 1)
         mock_record_dispatch.assert_called_once()
-        mock_inject_conv_tag.assert_called_once_with(14, "agy_arch_conv_id", "new-arch-conv-123")
+        mock_inject_conv_tag.assert_called_once_with(
+            14, "agy_arch_conv_id", "new-arch-conv-123", target_repo=self.target_repo
+        )
 
     @patch("architect_dispatcher.inject_conv_tag")
     @patch("architect_dispatcher.record_dispatch")
@@ -794,6 +805,128 @@ class TestArchitectDispatcherPolling(unittest.TestCase):
         self.assertIn("bug-fixer:human:needs-intervention", edit_call)
         self.assertIn("--remove-label", edit_call)
         self.assertIn("bug-fixer:architect:awaiting-review", edit_call)
+
+    @patch("architect_dispatcher.inject_conv_tag")
+    @patch("architect_dispatcher.record_dispatch")
+    @patch("architect_dispatcher.run")
+    @patch("architect_dispatcher.gh")
+    def test_null_body_pr_handled_safely(
+        self, mock_gh, mock_run, mock_record_dispatch, mock_inject_conv_tag
+    ):
+        """PR with null body and null title does not raise TypeError."""
+        list_output = json.dumps([
+            {
+                "number": 17,
+                "title": None,
+                "labels": [
+                    {"name": "bug-fixer:system:pr"},
+                    {"name": "bug-fixer:architect:awaiting-review"},
+                ],
+                "body": None,
+            }
+        ])
+        view_output = json.dumps({
+            "comments": [{"body": None, "author": {"login": "maintainer"}, "createdAt": "2026-11-12T10:00:00Z"}],
+            "commits": [{"committedDate": "2026-11-12T10:30:00Z"}],
+        })
+
+        mock_gh.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=list_output, stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=view_output, stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="diff content", stderr=""),
+        ]
+
+        def mock_run_side_effect(cmd, **kwargs):
+            if cmd and cmd[0] == "agentapi":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout=json.dumps({"response": {"newConversation": {"conversationId": "null-body-conv"}}}),
+                    stderr="",
+                )
+            if len(cmd) > 1 and "safe_ingest.py" in str(cmd[1]):
+                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout='{"comments": []}', stderr="")
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = mock_run_side_effect
+
+        from architect_dispatcher import poll_prs_for_review
+        spawned = poll_prs_for_review(
+            target_repo=self.target_repo,
+            config=self.config,
+            trusted_authors=self.trusted_authors,
+        )
+
+        self.assertEqual(spawned, 1)
+
+    @patch("architect_dispatcher.inject_conv_tag")
+    @patch("architect_dispatcher.record_dispatch")
+    @patch("architect_dispatcher.run")
+    @patch("architect_dispatcher.gh")
+    def test_unnormalized_trusted_authors_matched(
+        self, mock_gh, mock_run, mock_record_dispatch, mock_inject_conv_tag
+    ):
+        """Mixed-case trusted authors are normalized and matched properly."""
+        list_output = json.dumps([
+            {
+                "number": 18,
+                "title": "PR with mixed-case author",
+                "labels": [
+                    {"name": "bug-fixer:system:pr"},
+                    {"name": "bug-fixer:architect:awaiting-review"},
+                ],
+                "body": "Fixes #18",
+            }
+        ])
+        view_output = json.dumps({
+            "comments": [
+                {
+                    "author": {"login": "maintainer"},
+                    "body": "[ARCHITECT] Changes Requested:\n- Fix X",
+                    "createdAt": "2026-11-12T12:00:00Z",
+                }
+            ],
+            "commits": [{"committedDate": "2026-11-12T11:00:00Z"}],
+        })
+
+        mock_gh.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=list_output, stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=view_output, stderr=""),
+        ]
+
+        from architect_dispatcher import poll_prs_for_review
+        # Pass unnormalized mixed-case trusted authors with whitespace
+        spawned = poll_prs_for_review(
+            target_repo=self.target_repo,
+            config=self.config,
+            trusted_authors={"  Maintainer  "},
+        )
+
+        # Comment is recognized as trusted architect comment and is newer than commit -> skipped
+        self.assertEqual(spawned, 0)
+
+    @patch("architect_dispatcher.safe_post")
+    @patch("architect_dispatcher.gh")
+    def test_inject_conv_tag_explicit_target_repo(self, mock_gh, mock_safe_post):
+        """inject_conv_tag respects explicit target_repo parameter."""
+        from architect_dispatcher import inject_conv_tag
+
+        custom_repo = "org/custom-repo"
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="PR body text", stderr=""
+        )
+        mock_safe_post.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+
+        success = inject_conv_tag(99, "agy_arch_conv_id", "conv-xyz", target_repo=custom_repo)
+
+        self.assertTrue(success)
+        mock_gh.assert_called_once_with(
+            "pr", "view", "99", "--repo", custom_repo, "--json", "body", "--jq", ".body"
+        )
+        safe_post_call = mock_safe_post.call_args[0]
+        self.assertEqual(safe_post_call[0:4], ("pr-edit", "99", "--repo", custom_repo))
 
 
 if __name__ == "__main__":
