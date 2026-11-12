@@ -361,5 +361,440 @@ class TestApplyPendingApprovals(unittest.TestCase):
         self.assertEqual(_extract_trusted_authors(cfg), {"alice", "bob", "charlie"})
 
 
+class TestCommitRecencyGuard(unittest.TestCase):
+    """Unit tests for timestamp parsing and commit recency evaluation."""
+
+    def test_parse_iso_timestamp_valid(self):
+        from datetime import datetime, timezone
+        from architect_dispatcher import parse_iso_timestamp
+
+        # Standard UTC with Z
+        dt = parse_iso_timestamp("2026-11-12T12:40:36Z")
+        self.assertIsNotNone(dt)
+        self.assertEqual(dt, datetime(2026, 11, 12, 12, 40, 36, tzinfo=timezone.utc))
+
+        # Timezone offset
+        dt2 = parse_iso_timestamp("2026-11-12T14:40:36+02:00")
+        self.assertIsNotNone(dt2)
+        self.assertEqual(dt2, datetime(2026, 11, 12, 12, 40, 36, tzinfo=timezone.utc))
+
+        # Fractional seconds
+        dt3 = parse_iso_timestamp("2026-11-12T12:40:36.500000Z")
+        self.assertIsNotNone(dt3)
+        self.assertEqual(dt3.microsecond, 500000)
+
+        # Git format
+        dt4 = parse_iso_timestamp("2026-11-12 12:40:36 +0000")
+        self.assertIsNotNone(dt4)
+        self.assertEqual(dt4, datetime(2026, 11, 12, 12, 40, 36, tzinfo=timezone.utc))
+
+    def test_parse_iso_timestamp_invalid(self):
+        from architect_dispatcher import parse_iso_timestamp
+
+        self.assertIsNone(parse_iso_timestamp(None))
+        self.assertIsNone(parse_iso_timestamp(""))
+        self.assertIsNone(parse_iso_timestamp("   "))
+        self.assertIsNone(parse_iso_timestamp("not-a-timestamp"))
+        self.assertIsNone(parse_iso_timestamp(12345))
+
+    def test_extract_review_comments_info(self):
+        from datetime import datetime, timezone
+        from architect_dispatcher import extract_review_comments_info
+
+        trusted = {"maintainer"}
+
+        # Empty
+        count, ts = extract_review_comments_info([], trusted)
+        self.assertEqual(count, 0)
+        self.assertIsNone(ts)
+
+        # Untrusted author comment ignored
+        comments = [
+            {"author": {"login": "attacker"}, "body": "[ARCHITECT] Changes Requested", "createdAt": "2026-11-12T10:00:00Z"},
+            {"author": {"login": "maintainer"}, "body": "Regular note", "createdAt": "2026-11-12T10:30:00Z"},
+        ]
+        count, ts = extract_review_comments_info(comments, trusted)
+        self.assertEqual(count, 0)
+        self.assertIsNone(ts)
+
+        # Trusted author comments
+        comments = [
+            {"author": {"login": "maintainer"}, "body": "[ARCHITECT] Changes Requested: round 1", "createdAt": "2026-11-12T10:00:00Z"},
+            {"author": {"login": "maintainer"}, "body": "Please iterate", "createdAt": "2026-11-12T11:00:00Z"},
+            {"author": {"login": "maintainer"}, "body": "[ARCHITECT] Changes Requested: round 2", "createdAt": "2026-11-12T12:00:00Z"},
+        ]
+        count, ts = extract_review_comments_info(comments, trusted)
+        self.assertEqual(count, 2)
+        self.assertEqual(ts, datetime(2026, 11, 12, 12, 0, 0, tzinfo=timezone.utc))
+
+    def test_extract_latest_commit_time(self):
+        from datetime import datetime, timezone
+        from architect_dispatcher import extract_latest_commit_time
+
+        # Empty
+        self.assertIsNone(extract_latest_commit_time([]))
+
+        # Multiple commits with committedDate
+        commits = [
+            {"oid": "c1", "committedDate": "2026-11-12T09:00:00Z"},
+            {"oid": "c2", "committedDate": "2026-11-12T11:30:00Z"},
+            {"oid": "c3", "committedDate": "2026-11-12T10:15:00Z"},
+        ]
+        ts = extract_latest_commit_time(commits)
+        self.assertEqual(ts, datetime(2026, 11, 12, 11, 30, 0, tzinfo=timezone.utc))
+
+        # Commits with nested commit.committer.date
+        nested_commits = [
+            {"commit": {"committer": {"date": "2026-11-12T13:00:00Z"}}},
+        ]
+        ts_nested = extract_latest_commit_time(nested_commits)
+        self.assertEqual(ts_nested, datetime(2026, 11, 12, 13, 0, 0, tzinfo=timezone.utc))
+
+    def test_check_commit_recency(self):
+        from datetime import datetime, timezone
+        from architect_dispatcher import check_commit_recency
+
+        t1 = datetime(2026, 11, 12, 10, 0, 0, tzinfo=timezone.utc)
+        t2 = datetime(2026, 11, 12, 11, 0, 0, tzinfo=timezone.utc)
+
+        # Brand new PR (no architect comments yet) -> ready for review
+        self.assertTrue(check_commit_recency(None, t1))
+
+        # Commit is newer than architect comment -> engineer pushed code, ready for review
+        self.assertTrue(check_commit_recency(t1, t2))
+
+        # Commit is older than architect comment -> engineer hasn't pushed, NOT ready
+        self.assertFalse(check_commit_recency(t2, t1))
+
+        # Commit is equal to architect comment -> engineer hasn't pushed, NOT ready
+        self.assertFalse(check_commit_recency(t1, t1))
+
+        # Prior architect comment exists, but commit time is unknown -> NOT ready
+        self.assertFalse(check_commit_recency(t1, None))
+
+
+class TestArchitectDispatcherPolling(unittest.TestCase):
+    """Unit tests for poll_prs_for_review behavior and livelock prevention."""
+
+    def setUp(self):
+        self.target_repo = "matthewmcneill/bug-fixer-loop-plugin"
+        self.trusted_authors = {"maintainer"}
+        self.config = {
+            "target_repo": self.target_repo,
+            "architect_model": "pro",
+        }
+
+    @patch("architect_dispatcher.gh")
+    def test_pr_with_engineer_needs_iteration_is_skipped(self, mock_gh):
+        """PRs with bug-fixer:engineer:needs-iteration must be skipped immediately."""
+        list_output = json.dumps([
+            {
+                "number": 10,
+                "title": "PR in iteration",
+                "labels": [
+                    {"name": "bug-fixer:system:pr"},
+                    {"name": "bug-fixer:architect:awaiting-review"},
+                    {"name": "bug-fixer:engineer:needs-iteration"},
+                ],
+                "body": "Fixes #10",
+            }
+        ])
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=list_output, stderr=""
+        )
+
+        from architect_dispatcher import poll_prs_for_review
+        spawned = poll_prs_for_review(
+            target_repo=self.target_repo,
+            config=self.config,
+            trusted_authors=self.trusted_authors,
+        )
+
+        self.assertEqual(spawned, 0)
+        # Only the list query should have run — no pr view or pr edit
+        self.assertEqual(mock_gh.call_count, 1)
+
+    @patch("architect_dispatcher.gh")
+    def test_pr_without_awaiting_review_is_skipped(self, mock_gh):
+        """PRs without bug-fixer:architect:awaiting-review must be skipped."""
+        list_output = json.dumps([
+            {
+                "number": 11,
+                "title": "PR without awaiting review",
+                "labels": [{"name": "bug-fixer:system:pr"}],
+                "body": "Fixes #11",
+            }
+        ])
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=list_output, stderr=""
+        )
+
+        from architect_dispatcher import poll_prs_for_review
+        spawned = poll_prs_for_review(
+            target_repo=self.target_repo,
+            config=self.config,
+            trusted_authors=self.trusted_authors,
+        )
+
+        self.assertEqual(spawned, 0)
+        self.assertEqual(mock_gh.call_count, 1)
+
+    @patch("architect_dispatcher.gh")
+    def test_pr_with_human_needs_intervention_is_skipped(self, mock_gh):
+        """PRs with bug-fixer:human:needs-intervention must be skipped."""
+        list_output = json.dumps([
+            {
+                "number": 12,
+                "title": "Escalated PR",
+                "labels": [
+                    {"name": "bug-fixer:system:pr"},
+                    {"name": "bug-fixer:architect:awaiting-review"},
+                    {"name": "bug-fixer:human:needs-intervention"},
+                ],
+                "body": "Fixes #12",
+            }
+        ])
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=list_output, stderr=""
+        )
+
+        from architect_dispatcher import poll_prs_for_review
+        spawned = poll_prs_for_review(
+            target_repo=self.target_repo,
+            config=self.config,
+            trusted_authors=self.trusted_authors,
+        )
+
+        self.assertEqual(spawned, 0)
+        self.assertEqual(mock_gh.call_count, 1)
+
+    @patch("architect_dispatcher.gh")
+    def test_pr_waiting_on_engineering_iteration_is_skipped_without_reescalation(self, mock_gh):
+        """Livelock prevention: unchanged PR awaiting engineer iteration is skipped without re-escalation."""
+        list_output = json.dumps([
+            {
+                "number": 13,
+                "title": "PR waiting on fix",
+                "labels": [
+                    {"name": "bug-fixer:system:pr"},
+                    {"name": "bug-fixer:architect:awaiting-review"},
+                ],
+                "body": "Fixes #13",
+            }
+        ])
+        # PR view returns comments where last architect comment is NEWER than head commit
+        view_output = json.dumps({
+            "comments": [
+                {
+                    "author": {"login": "maintainer"},
+                    "body": "[ARCHITECT] Changes Requested:\n- Fix pointer issue",
+                    "createdAt": "2026-11-12T12:40:36Z",
+                }
+            ],
+            "commits": [
+                {
+                    "oid": "commit1",
+                    "committedDate": "2026-11-12T12:00:00Z",  # older than architect comment!
+                }
+            ],
+        })
+
+        mock_gh.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=list_output, stderr=""),  # list
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=view_output, stderr=""),  # view
+        ]
+
+        from architect_dispatcher import poll_prs_for_review
+        spawned = poll_prs_for_review(
+            target_repo=self.target_repo,
+            config=self.config,
+            trusted_authors=self.trusted_authors,
+        )
+
+        self.assertEqual(spawned, 0)
+        # Crucial assertion: gh pr edit was NEVER called (no re-escalation!)
+        # Only list (call 0) and view (call 1) happened.
+        self.assertEqual(mock_gh.call_count, 2)
+        for call_args in mock_gh.call_args_list:
+            self.assertNotEqual(call_args[0][0:2], ("pr", "edit"))
+
+    @patch("architect_dispatcher.inject_conv_tag")
+    @patch("architect_dispatcher.record_dispatch")
+    @patch("architect_dispatcher.run")
+    @patch("architect_dispatcher.gh")
+    def test_pr_with_new_engineering_commit_is_reviewed(
+        self, mock_gh, mock_run, mock_record_dispatch, mock_inject_conv_tag
+    ):
+        """When an engineer pushes a newer commit, architect review is dispatched."""
+        list_output = json.dumps([
+            {
+                "number": 14,
+                "title": "PR with updated fix",
+                "labels": [
+                    {"name": "bug-fixer:system:pr"},
+                    {"name": "bug-fixer:architect:awaiting-review"},
+                ],
+                "body": "Fixes #14",
+            }
+        ])
+        view_output = json.dumps({
+            "comments": [
+                {
+                    "author": {"login": "maintainer"},
+                    "body": "[ARCHITECT] Changes Requested:\n- Fix pointer issue",
+                    "createdAt": "2026-11-12T12:00:00Z",
+                }
+            ],
+            "commits": [
+                {
+                    "oid": "commit2",
+                    "committedDate": "2026-11-12T13:00:00Z",  # newer than architect comment!
+                }
+            ],
+        })
+
+        mock_gh.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=list_output, stderr=""),  # list
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=view_output, stderr=""),  # view
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="diff --git ...", stderr=""),  # diff
+        ]
+
+        # mock safe_ingest pr-view and agentapi new-conversation
+        scanner_mock = MagicMock()
+        scanner_mock.scan.return_value = MagicMock(is_injection=False)
+
+        def mock_run_side_effect(cmd, **kwargs):
+            if cmd and cmd[0] == "agentapi":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout=json.dumps({"response": {"newConversation": {"conversationId": "new-arch-conv-123"}}}),
+                    stderr="",
+                )
+            if len(cmd) > 1 and "safe_ingest.py" in str(cmd[1]):
+                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout='{"comments": []}', stderr="")
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = mock_run_side_effect
+
+        from architect_dispatcher import poll_prs_for_review
+        spawned = poll_prs_for_review(
+            target_repo=self.target_repo,
+            config=self.config,
+            trusted_authors=self.trusted_authors,
+            scanner=scanner_mock,
+        )
+
+        self.assertEqual(spawned, 1)
+        mock_record_dispatch.assert_called_once()
+        mock_inject_conv_tag.assert_called_once_with(14, "agy_arch_conv_id", "new-arch-conv-123")
+
+    @patch("architect_dispatcher.inject_conv_tag")
+    @patch("architect_dispatcher.record_dispatch")
+    @patch("architect_dispatcher.run")
+    @patch("architect_dispatcher.gh")
+    def test_initial_review_dispatched_for_new_pr(
+        self, mock_gh, mock_run, mock_record_dispatch, mock_inject_conv_tag
+    ):
+        """Brand new PRs with no prior architect comments are dispatched for Round 1 review."""
+        list_output = json.dumps([
+            {
+                "number": 15,
+                "title": "Fresh PR",
+                "labels": [
+                    {"name": "bug-fixer:system:pr"},
+                    {"name": "bug-fixer:architect:awaiting-review"},
+                ],
+                "body": "Fixes #15",
+            }
+        ])
+        view_output = json.dumps({
+            "comments": [],
+            "commits": [
+                {"oid": "c1", "committedDate": "2026-11-12T10:00:00Z"}
+            ],
+        })
+
+        mock_gh.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=list_output, stderr=""),  # list
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=view_output, stderr=""),  # view
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="diff content", stderr=""),  # diff
+        ]
+
+        scanner_mock = MagicMock()
+        scanner_mock.scan.return_value = MagicMock(is_injection=False)
+
+        def mock_run_side_effect(cmd, **kwargs):
+            if cmd and cmd[0] == "agentapi":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout=json.dumps({"response": {"newConversation": {"conversationId": "fresh-arch-conv"}}}),
+                    stderr="",
+                )
+            if len(cmd) > 1 and "safe_ingest.py" in str(cmd[1]):
+                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout='{"comments": []}', stderr="")
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = mock_run_side_effect
+
+        from architect_dispatcher import poll_prs_for_review
+        spawned = poll_prs_for_review(
+            target_repo=self.target_repo,
+            config=self.config,
+            trusted_authors=self.trusted_authors,
+            scanner=scanner_mock,
+        )
+
+        self.assertEqual(spawned, 1)
+        mock_record_dispatch.assert_called_once()
+
+    @patch("architect_dispatcher.gh")
+    def test_max_review_rounds_escalates_when_new_commit_present(self, mock_gh):
+        """When 5 prior architect comments exist and a new commit is pushed, PR escalates to human."""
+        list_output = json.dumps([
+            {
+                "number": 16,
+                "title": "PR with 5 rounds",
+                "labels": [
+                    {"name": "bug-fixer:system:pr"},
+                    {"name": "bug-fixer:architect:awaiting-review"},
+                ],
+                "body": "Fixes #16",
+            }
+        ])
+        view_output = json.dumps({
+            "comments": [
+                {"author": {"login": "maintainer"}, "body": f"[ARCHITECT] Round {i}", "createdAt": f"2026-11-12T10:0{i}:00Z"}
+                for i in range(1, 6)
+            ],
+            "commits": [
+                {"oid": "c_latest", "committedDate": "2026-11-12T12:00:00Z"}  # newer than Round 5 comment
+            ],
+        })
+
+        mock_gh.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=list_output, stderr=""),  # list
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=view_output, stderr=""),  # view
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),  # edit
+        ]
+
+        from architect_dispatcher import poll_prs_for_review
+        spawned = poll_prs_for_review(
+            target_repo=self.target_repo,
+            config=self.config,
+            trusted_authors=self.trusted_authors,
+        )
+
+        self.assertEqual(spawned, 0)
+        self.assertEqual(mock_gh.call_count, 3)
+        edit_call = mock_gh.call_args_list[2][0]
+        self.assertEqual(edit_call[0:3], ("pr", "edit", "16"))
+        self.assertIn("--add-label", edit_call)
+        self.assertIn("bug-fixer:human:needs-intervention", edit_call)
+        self.assertIn("--remove-label", edit_call)
+        self.assertIn("bug-fixer:architect:awaiting-review", edit_call)
+
+
 if __name__ == "__main__":
     unittest.main()
