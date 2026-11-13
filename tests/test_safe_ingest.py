@@ -469,6 +469,70 @@ class TestSafeIngest(unittest.TestCase):
             "Start  <!-- agy_dev_conv_id: abc123 --> End",
         )
 
+    def test_normalise_visible_content_preserves_discovery_breadcrumbs(self):
+        # Discovery breadcrumb comments are preserved
+        self.assertEqual(
+            normalise_visible_content("<!-- discovery_source_pr: #42 -->"),
+            "<!-- discovery_source_pr: #42 -->",
+        )
+        self.assertEqual(
+            normalise_visible_content("<!-- discovery_source_issue: #85 -->"),
+            "<!-- discovery_source_issue: #85 -->",
+        )
+        self.assertEqual(
+            normalise_visible_content("<!-- discovery_chain: #10 -->"),
+            "<!-- discovery_chain: #10 -->",
+        )
+        self.assertEqual(
+            normalise_visible_content("<!-- discovery_chain: #10 → #20 -->"),
+            "<!-- discovery_chain: #10 → #20 -->",
+        )
+        self.assertEqual(
+            normalise_visible_content("<!-- discovery_chain: #10 → #20 → #30 -->"),
+            "<!-- discovery_chain: #10 → #20 → #30 -->",
+        )
+        # Preserved with arbitrary spacing around arrow or colons
+        self.assertEqual(
+            normalise_visible_content("<!-- discovery_chain:   #10  →  #20   -->"),
+            "<!-- discovery_chain:   #10  →  #20   -->",
+        )
+        # Preserved when all three are embedded in a body
+        body = (
+            "## Finding\nSome description\n\n"
+            "## Discovery Breadcrumb\n"
+            "<!-- discovery_source_pr: #123 -->\n"
+            "<!-- discovery_source_issue: #456 -->\n"
+            "<!-- discovery_chain: #400 → #456 -->\n"
+        )
+        self.assertEqual(normalise_visible_content(body), body)
+
+    def test_normalise_visible_content_strips_malformed_discovery_tags(self):
+        # Malformed discovery breadcrumbs are stripped
+        self.assertEqual(
+            normalise_visible_content("<!-- discovery_chain: free text -->"),
+            "",
+        )
+        self.assertEqual(
+            normalise_visible_content("<!-- discovery_chain: #10 with extra text -->"),
+            "",
+        )
+        self.assertEqual(
+            normalise_visible_content("<!-- discovery_chain: #10 → #20 extra -->"),
+            "",
+        )
+        self.assertEqual(
+            normalise_visible_content("<!-- discovery_source_pr: 42 -->"),
+            "",
+        )
+        self.assertEqual(
+            normalise_visible_content("<!-- discovery_source_issue: abc -->"),
+            "",
+        )
+        self.assertEqual(
+            normalise_visible_content("<!-- discovery_source_issue: # -->"),
+            "",
+        )
+
     def test_normalise_visible_content_strips_unicode_tags(self):
         # 3. Unicode tag characters (U+E0001, ASCII smuggling range U+E0000-U+E007F)
         self.assertEqual(
@@ -645,6 +709,48 @@ class TestSafeIngest(unittest.TestCase):
         self.assertTrue(ok_c)
         self.assertNotIn("has_hidden_content", clean_c)
         self.assertIn("<!-- agy_dev_conv_id: abc123 -->", clean_c["body"])
+
+        # Clean item with valid discovery breadcrumbs does not set has_hidden_content
+        issue_breadcrumbs = {
+            "number": 1021,
+            "title": "[Review Discovery] Potential issue",
+            "body": (
+                "## Finding\nDescription\n\n"
+                "## Discovery Breadcrumb\n"
+                "<!-- discovery_source_pr: #42 -->\n"
+                "<!-- discovery_source_issue: #85 -->\n"
+                "<!-- discovery_chain: #80 → #85 -->\n"
+            ),
+            "author": {"login": "maintainer-user"},
+            "createdAt": "2026-09-26T09:00:00Z",
+            "labels": [{"name": "bug"}],
+            "comments": [],
+        }
+        ok_b, reason_b, clean_b = evaluate_and_sanitize_item(issue_breadcrumbs, self.trusted)
+        self.assertTrue(ok_b)
+        self.assertNotIn("has_hidden_content", clean_b)
+        self.assertIn("<!-- discovery_source_pr: #42 -->", clean_b["body"])
+        self.assertIn("<!-- discovery_source_issue: #85 -->", clean_b["body"])
+        self.assertIn("<!-- discovery_chain: #80 → #85 -->", clean_b["body"])
+
+        # Item with malformed discovery breadcrumb sets has_hidden_content
+        issue_malformed_breadcrumb = {
+            "number": 1022,
+            "title": "[Review Discovery] Potential issue",
+            "body": (
+                "## Finding\nDescription\n\n"
+                "## Discovery Breadcrumb\n"
+                "<!-- discovery_chain: free text -->\n"
+            ),
+            "author": {"login": "maintainer-user"},
+            "createdAt": "2026-09-26T09:00:00Z",
+            "labels": [{"name": "bug"}],
+            "comments": [],
+        }
+        ok_mb, reason_mb, clean_mb = evaluate_and_sanitize_item(issue_malformed_breadcrumb, self.trusted)
+        self.assertTrue(ok_mb)
+        self.assertTrue(clean_mb.get("has_hidden_content"))
+        self.assertNotIn("<!-- discovery_chain: free text -->", clean_mb["body"])
 
         # External author with approval also sets has_hidden_content: true when hidden content present
         issue_external = {

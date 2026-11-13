@@ -42,7 +42,11 @@ REPO_SLUG_REGEX = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GRAPHQL_PAGE_LIMIT = 100
 
 ALLOWLISTED_TAG_REGEX = re.compile(
-    r"^<!--\s*(?:agy_arch_conv_id|agy_dev_conv_id):\s*[a-zA-Z0-9_-]+\s*-->$"
+    r"^<!--\s*(?:"
+    r"(?:agy_arch_conv_id|agy_dev_conv_id):\s*[a-zA-Z0-9_-]+"
+    r"|(?:discovery_source_pr|discovery_source_issue):\s*#\d+"
+    r"|discovery_chain:\s*#\d+(?:\s*→\s*#\d+)*"
+    r")\s*-->$"
 )
 HTML_COMMENT_REGEX = re.compile(r"<!--[\s\S]*?-->")
 UNICODE_HIDDEN_REGEX = re.compile(
