@@ -623,20 +623,51 @@ def _check_success(dispatch: dict, target_repo: str) -> bool:
         pr_num = dispatch.get("pr_number")
         if not pr_num:
             return False
-        # Check PR is OPEN and for [ARCHITECT] comment posted after spawn
+        # Check for [ARCHITECT] comment posted after spawn (PR state may be OPEN, MERGED, or CLOSED)
         r = _gh("pr", "view", str(pr_num), "--repo", target_repo,
                 "--comments", "--json", "state,comments")
         if r.returncode != 0:
             return False
         try:
             data = json.loads(r.stdout)
-            if data.get("state") != "OPEN":
+            if not isinstance(data, dict):
                 return False
-            for c in data.get("comments", []):
-                if "[ARCHITECT]" in c.get("body", ""):
-                    # Good enough — architect posted something
+            if str(data.get("state", "")).upper() not in ("OPEN", "MERGED", "CLOSED"):
+                return False
+
+            spawned_dt = None
+            if spawned:
+                try:
+                    dt = datetime.fromisoformat(spawned.replace("Z", "+00:00"))
+                    spawned_dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    pass
+
+            comments = data.get("comments")
+            if not isinstance(comments, list):
+                return False
+
+            for c in comments:
+                if not isinstance(c, dict):
+                    continue
+                body = c.get("body", "")
+                if not isinstance(body, str):
+                    continue
+                if "[ARCHITECT]" in body:
+                    if spawned_dt is not None:
+                        created_raw = c.get("createdAt")
+                        if not created_raw or not isinstance(created_raw, str):
+                            continue
+                        try:
+                            c_dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+                            created_dt = c_dt if c_dt.tzinfo else c_dt.replace(tzinfo=timezone.utc)
+                        except (ValueError, TypeError):
+                            continue
+                        if created_dt < spawned_dt:
+                            continue
+                    # Good enough — architect posted something after spawn
                     return True
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, AttributeError):
             pass
         return False
 

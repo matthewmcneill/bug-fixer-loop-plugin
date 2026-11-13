@@ -153,8 +153,6 @@ class TestLiveness(unittest.TestCase):
 
     @patch("liveness.read_last_transcript_step")
     def test_check_success_trajectory_and_triage(self, mock_read_last):
-        from liveness import _check_success
-        
         # Test missing conv_id
         dispatch = {"type": "trajectory"}
         self.assertFalse(_check_success(dispatch, "owner/repo"))
@@ -184,6 +182,192 @@ class TestLiveness(unittest.TestCase):
         dispatch = {"type": "fresh_fix", "issue_number": 48}
         self.assertFalse(_check_success(dispatch, "owner/repo"))
         mock_gh.assert_called_with("issue", "view", "48", "--repo", "owner/repo", "--json", "state,labels", "--jq", '.state == "OPEN" and ([.labels[].name] | any(. == "bug-fixer:architect:awaiting-review"))')
+
+    @patch("liveness._gh")
+    def test_check_success_architect_review_states(self, mock_gh):
+        dispatch = {"type": "architect_review", "pr_number": 78}
+
+        # Success when OPEN and contains [ARCHITECT] comment
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "OPEN",
+                "comments": [{"body": "[ARCHITECT] Approved: looks good"}],
+            }),
+            stderr="",
+        )
+        self.assertTrue(_check_success(dispatch, "owner/repo"))
+
+        # Issue #81: Success when MERGED and contains [ARCHITECT] comment
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "MERGED",
+                "comments": [{"body": "[ARCHITECT] Approved: ready to merge"}],
+            }),
+            stderr="",
+        )
+        self.assertTrue(_check_success(dispatch, "owner/repo"))
+
+        # Issue #81: Success when CLOSED and contains [ARCHITECT] comment
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "CLOSED",
+                "comments": [{"body": "[ARCHITECT] Changes Requested: fix issues"}],
+            }),
+            stderr="",
+        )
+        self.assertTrue(_check_success(dispatch, "owner/repo"))
+
+        # Failure when comments do not have [ARCHITECT]
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "MERGED",
+                "comments": [{"body": "A normal user comment"}],
+            }),
+            stderr="",
+        )
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+
+        # Failure when state is not recognized or invalid
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "UNKNOWN",
+                "comments": [{"body": "[ARCHITECT] comment"}],
+            }),
+            stderr="",
+        )
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+
+        # Failure when gh call fails
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="API error"
+        )
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+
+        # Failure when pr_number is missing
+        self.assertFalse(_check_success({"type": "architect_review"}, "owner/repo"))
+
+    @patch("liveness._gh")
+    def test_check_success_architect_review_spawned_at_timestamps(self, mock_gh):
+        # 1. Comment created prior to spawned_at returns False
+        dispatch = {
+            "type": "architect_review",
+            "pr_number": 78,
+            "spawned_at": "2026-10-14T08:00:00Z",
+        }
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "OPEN",
+                "comments": [{
+                    "body": "[ARCHITECT] Changes Requested: round 1",
+                    "createdAt": "2026-10-14T07:59:59Z",
+                }],
+            }),
+            stderr="",
+        )
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+
+        # 2. Comment created exactly at spawned_at returns True
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "OPEN",
+                "comments": [{
+                    "body": "[ARCHITECT] Approved: looks good",
+                    "createdAt": "2026-10-14T08:00:00Z",
+                }],
+            }),
+            stderr="",
+        )
+        self.assertTrue(_check_success(dispatch, "owner/repo"))
+
+        # 3. Comment created after spawned_at returns True
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "OPEN",
+                "comments": [{
+                    "body": "[ARCHITECT] Approved: looks good",
+                    "createdAt": "2026-10-14T08:05:00Z",
+                }],
+            }),
+            stderr="",
+        )
+        self.assertTrue(_check_success(dispatch, "owner/repo"))
+
+        # 4. Multi-round scenario: Round 1 prior, Round 2 after
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "OPEN",
+                "comments": [
+                    {
+                        "body": "[ARCHITECT] Changes Requested: round 1",
+                        "createdAt": "2026-10-14T07:30:00Z",
+                    },
+                    {
+                        "body": "[ARCHITECT] Approved: round 2",
+                        "createdAt": "2026-10-14T08:15:00Z",
+                    },
+                ],
+            }),
+            stderr="",
+        )
+        self.assertTrue(_check_success(dispatch, "owner/repo"))
+
+    @patch("liveness._gh")
+    def test_check_success_architect_review_schema_validation(self, mock_gh):
+        dispatch = {"type": "architect_review", "pr_number": 78, "spawned_at": "2026-10-14T08:00:00Z"}
+
+        # Non-dict payload (e.g. JSON list) returns False without crashing
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(["not", "a", "dict"]), stderr=""
+        )
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+
+        # Malformed comments attribute (not a list) returns False
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps({"state": "OPEN", "comments": "invalid"}), stderr=""
+        )
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+
+        # Malformed comment element (None, non-dict, non-string body) returns False without crashing
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "OPEN",
+                "comments": [None, 123, "string", {"body": None}, {"body": 456}],
+            }),
+            stderr="",
+        )
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
+
+        # Comment with missing/unparseable createdAt when spawned_at is set is skipped
+        mock_gh.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({
+                "state": "OPEN",
+                "comments": [{"body": "[ARCHITECT] comment", "createdAt": "invalid-timestamp"}],
+            }),
+            stderr="",
+        )
+        self.assertFalse(_check_success(dispatch, "owner/repo"))
 
 
 class TestLivenessRemoveWorktree(unittest.TestCase):
