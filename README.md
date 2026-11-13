@@ -132,7 +132,7 @@ export ANTIGRAVITY_PROJECT_ID="<your-project-id>"  # from agy project list
 
 </details>
 
-This creates a per-repo sidecar with its own config and state, and registers the workspace plugin in your repo's `.agents/plugins.json`.
+This creates a per-repo sidecar with its own config and state, and stages the workspace plugin into your repo's `.agents/plugins/bug-fixer/` directory (and excludes it in `<git-dir>/info/exclude`).
 
 ### 3. Configure
 

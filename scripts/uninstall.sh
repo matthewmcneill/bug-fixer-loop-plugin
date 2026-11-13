@@ -60,6 +60,36 @@ if command -v agy &>/dev/null; then
   echo "Disabled bug-fixer-daemon via 'agy plugin disable'"
 fi
 
+# Clean up staged workspace plugins in any enrolled repos before removing INSTALL_DIR
+if [[ -d "$INSTALL_DIR/sidecars" && -f "$INSTALL_DIR/scripts/manage.py" ]]; then
+  python3 - "$INSTALL_DIR/scripts" "$INSTALL_DIR/sidecars" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+scripts_dir, sidecars_dir = sys.argv[1], Path(sys.argv[2])
+sys.path.insert(0, scripts_dir)
+import manage
+
+for sc in sorted(sidecars_dir.iterdir()):
+    cfg_path = sc / "config.json"
+    if not cfg_path.is_file():
+        continue
+    try:
+        repo_dir = json.loads(cfg_path.read_text(encoding="utf-8")).get("repo_dir", "")
+    except (json.JSONDecodeError, OSError):
+        continue
+    if repo_dir and Path(repo_dir).is_dir():
+        if manage._unstage_workspace_plugin(repo_dir):
+            print(
+                f"Removed staged workspace plugin: {Path(repo_dir) / '.agents' / 'plugins' / 'bug-fixer'}"
+            )
+        pj = manage._remove_bug_fixer_from_plugins_json(repo_dir)
+        if pj in ("updated", "unlinked"):
+            print(f"Cleaned consumer plugins.json in {repo_dir} ({pj})")
+PY
+fi
+
 # Remove plugin directory
 if [[ -d "$INSTALL_DIR" ]]; then
   rm -rf "$INSTALL_DIR"

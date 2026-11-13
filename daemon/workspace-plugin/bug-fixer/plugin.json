@@ -1,4 +1,5 @@
 {
   "name": "bug-fixer",
+  "version": "0.2.0",
   "description": "Bug-fixer workspace plugin — hooks, skills, rules for enrolled repos"
 }

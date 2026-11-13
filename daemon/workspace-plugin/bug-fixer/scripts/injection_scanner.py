@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import os
 import sys
+import tempfile
 from pathlib import Path
 import json
 import urllib.request
@@ -8,7 +11,7 @@ import subprocess
 import hashlib
 import random
 import time
-from security_audit import log_security_event
+from security_audit import _sidecar_dir_for_cwd, log_security_event
 
 class InjectionResult:
     """Result of an injection scan."""
@@ -204,8 +207,10 @@ def _get_cache_path(config_path: str | None = None) -> Path:
         return Path(config_env).resolve().parent / "injection_cache.json"
     if config_path and Path(config_path).is_file():
         return Path(config_path).resolve().parent / "injection_cache.json"
-    # Legacy fallback
-    return Path(__file__).resolve().parent.parent / "injection_cache.json"
+    sidecar_dir = _sidecar_dir_for_cwd()
+    if sidecar_dir is not None:
+        return sidecar_dir / "injection_cache.json"
+    return Path(tempfile.gettempdir()) / f"bug-fixer-injection-cache-{os.getuid()}.json"
 
 
 class CachedInjectionScanner:

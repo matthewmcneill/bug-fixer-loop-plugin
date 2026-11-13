@@ -23,6 +23,8 @@ variable expansion, @file references) because the proxy sees the
 actual content, not a shell command string.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -59,8 +61,31 @@ PROTECTED_ADD_LABELS = frozenset({
 APPROVAL_TEXT_REGEX = re.compile(r"^\s*/?(?:approved?|lgtm)\s*[.!]*\s*$", re.IGNORECASE)
 
 
+def _find_daemon_dir(script_dir: Path) -> Path | None:
+    """Walk up from script_dir for bug-fixer-daemon, else check default install dir."""
+    for ancestor in (script_dir.parent, *script_dir.parents):
+        manifest = ancestor / "plugin.json"
+        if manifest.is_file():
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+                if data.get("name") == "bug-fixer-daemon":
+                    return ancestor
+            except (json.JSONDecodeError, OSError):
+                continue
+    default_daemon = Path.home() / ".gemini" / "config" / "plugins" / "bug-fixer-daemon"
+    default_manifest = default_daemon / "plugin.json"
+    if default_manifest.is_file():
+        try:
+            data = json.loads(default_manifest.read_text(encoding="utf-8"))
+            if data.get("name") == "bug-fixer-daemon":
+                return default_daemon
+        except (json.JSONDecodeError, OSError):
+            pass
+    return None
+
+
 def _candidate_configs() -> list[Path]:
-    """Config search order: env → sidecar scan → legacy."""
+    """Config search order: env -> sidecar scan -> legacy."""
     candidates: list[Path] = []
     config_env = os.environ.get("BUG_FIXER_CONFIG", "")
     if config_env:
@@ -68,11 +93,7 @@ def _candidate_configs() -> list[Path]:
     # Scan sidecars (same as pre_tool_gate.load_config)
     script_dir = Path(__file__).resolve().parent
     plugin_dir = script_dir.parent
-    daemon_dir = plugin_dir
-    while daemon_dir and daemon_dir != daemon_dir.parent:
-        if (daemon_dir / "plugin.json").is_file() or (daemon_dir / "hooks.json").is_file():
-            break
-        daemon_dir = daemon_dir.parent
+    daemon_dir = _find_daemon_dir(script_dir)
     sidecars_dir = daemon_dir / "sidecars" if daemon_dir else plugin_dir.parent.parent / "sidecars"
     if sidecars_dir.is_dir():
         for sidecar_sub in sidecars_dir.iterdir():

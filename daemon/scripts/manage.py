@@ -9,7 +9,11 @@ PreToolUse hook (force_ask confirmation), and autonomous sessions are denied.
 Read-only operations (status, logs, config --show) can be run freely.
 """
 
+from __future__ import annotations
+
 import argparse
+import fnmatch
+import hashlib
 import json
 import os
 import shutil
@@ -26,6 +30,190 @@ DAEMON_DIR = Path(__file__).resolve().parent.parent
 SIDECARS_DIR = DAEMON_DIR / "sidecars"
 SCRIPTS_DIR = DAEMON_DIR / "scripts"
 WORKSPACE_PLUGIN_ENTRY = "~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer"
+_STAGE_IGNORE_GLOBS = (
+    "__pycache__",
+    "*.pyc",
+    "*.pyo",
+    "*.egg-info",
+    ".DS_Store",
+    "injection_cache.json",
+    "security_refusals.jsonl",
+    ".integrity_snapshot*",
+)
+_GIT_EXCLUDE_PATTERNS = (".agents/plugins/bug-fixer/", ".agents/plugins.json")
+
+
+def _resolve_workspace_plugin_source(daemon_dir: Path | None = None) -> Path:
+    return (daemon_dir or DAEMON_DIR) / "workspace-plugin" / "bug-fixer"
+
+
+def _is_ignored_stage_name(name: str) -> bool:
+    return any(fnmatch.fnmatchcase(name, pat) for pat in _STAGE_IGNORE_GLOBS)
+
+
+def _stage_workspace_plugin(repo_dir: str | Path, daemon_dir: Path | None = None) -> Path:
+    src = _resolve_workspace_plugin_source(daemon_dir)
+    if not src.is_dir():
+        raise FileNotFoundError(f"Workspace plugin source directory not found: {src}")
+    dest = Path(repo_dir) / ".agents" / "plugins" / "bug-fixer"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_symlink():
+        dest.unlink()
+    elif dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(
+        src,
+        dest,
+        symlinks=False,
+        ignore=shutil.ignore_patterns(*_STAGE_IGNORE_GLOBS),
+    )
+    scripts_dir = dest / "scripts"
+    if scripts_dir.is_dir():
+        for item in scripts_dir.iterdir():
+            if item.is_file() and item.suffix in (".py", ".sh"):
+                item.chmod(0o755)
+    return dest
+
+
+def _unstage_workspace_plugin(repo_dir: str | Path) -> bool:
+    dest = Path(repo_dir) / ".agents" / "plugins" / "bug-fixer"
+    if dest.is_symlink():
+        dest.unlink()
+        return True
+    if dest.exists():
+        shutil.rmtree(dest)
+        return True
+    return False
+
+
+def _is_bug_fixer_plugin_entry(entry: object) -> bool:
+    if isinstance(entry, str):
+        path = entry
+        name = ""
+    elif isinstance(entry, dict):
+        path = str(entry.get("path") or "")
+        name = str(entry.get("name") or "")
+    else:
+        return False
+    if name == "bug-fixer" or path == WORKSPACE_PLUGIN_ENTRY:
+        return True
+    return any(
+        marker in path
+        for marker in (
+            "workspace-plugin/bug-fixer",
+            "bug-fixer-daemon/workspace-plugin",
+            ".agents/plugins/bug-fixer",
+        )
+    )
+
+
+def _plugins_json_needs_scrub(repo_dir: str | Path) -> bool:
+    plugins_json = Path(repo_dir) / ".agents" / "plugins.json"
+    if not plugins_json.exists() and not plugins_json.is_symlink():
+        return False
+    if plugins_json.is_symlink():
+        return True
+    try:
+        data = json.loads(plugins_json.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        return False
+    if any(_is_bug_fixer_plugin_entry(e) for e in entries):
+        return True
+    other_keys = {k: v for k, v in data.items() if k != "entries"}
+    return len(entries) == 0 and not other_keys
+
+
+def _remove_bug_fixer_from_plugins_json(repo_dir: str | Path) -> str:
+    plugins_json = Path(repo_dir) / ".agents" / "plugins.json"
+    if not plugins_json.exists() and not plugins_json.is_symlink():
+        return "missing"
+    if plugins_json.is_symlink():
+        plugins_json.unlink()
+        return "unlinked"
+    try:
+        data = json.loads(plugins_json.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return "unchanged"
+    if not isinstance(data, dict):
+        return "unchanged"
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        return "unchanged"
+    new_entries = [e for e in entries if not _is_bug_fixer_plugin_entry(e)]
+    changed = len(new_entries) != len(entries)
+    other_keys = {k: v for k, v in data.items() if k != "entries"}
+    if not new_entries and not other_keys:
+        plugins_json.unlink()
+        return "unlinked"
+    if not changed:
+        return "unchanged"
+    data["entries"] = new_entries
+    plugins_json.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return "updated"
+
+
+def _resolve_git_exclude_path(repo_dir: str | Path) -> Path | None:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_dir), "rev-parse", "--git-path", "info/exclude"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return None
+        rel_or_abs = Path(proc.stdout.strip())
+        return rel_or_abs if rel_or_abs.is_absolute() else (Path(repo_dir) / rel_or_abs)
+    except OSError:
+        return None
+
+
+def _ensure_repo_git_excludes(repo_dir: str | Path) -> bool:
+    exclude_path = _resolve_git_exclude_path(repo_dir)
+    if exclude_path is None:
+        return False
+    exclude_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = exclude_path.read_text(encoding="utf-8") if exclude_path.is_file() else ""
+    existing_set = {line.strip() for line in existing.splitlines()}
+    missing = [p for p in _GIT_EXCLUDE_PATTERNS if p not in existing_set]
+    if not missing:
+        return False
+    new_content = existing
+    if new_content and not new_content.endswith("\n"):
+        new_content += "\n"
+    new_content += "\n".join(missing) + "\n"
+    exclude_path.write_text(new_content, encoding="utf-8")
+    return True
+
+
+def _tree_digest(root: Path) -> dict[str, str] | None:
+    if not root.exists() or root.is_symlink() or not root.is_dir():
+        return None
+    digest: dict[str, str] = {}
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        cur = Path(dirpath)
+        kept_dirs = []
+        for d in sorted(dirnames):
+            dp = cur / d
+            if dp.is_symlink():
+                return None
+            if not _is_ignored_stage_name(d):
+                kept_dirs.append(d)
+        dirnames[:] = kept_dirs
+        for fn in sorted(filenames):
+            fp = cur / fn
+            if fp.is_symlink():
+                return None
+            if _is_ignored_stage_name(fn):
+                continue
+            rel = fp.relative_to(root).as_posix()
+            digest[rel] = hashlib.sha256(fp.read_bytes()).hexdigest()
+    return digest
 
 REQUIRED_LABELS = {
     "bug-fixer:engineer:needs-fix":            "0E8A16",
@@ -334,7 +522,9 @@ def cmd_enroll(args):
     repo = args.repo
     repo_dir = os.path.abspath(args.dir)
     project_id = args.project_id
-    path_env = args.path or os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    path_env = getattr(args, "path", None) or os.environ.get(
+        "PATH", "/usr/local/bin:/usr/bin:/bin"
+    )
 
     if not os.path.isdir(repo_dir):
         print(f"ERROR: directory does not exist: {repo_dir}", file=sys.stderr)
@@ -374,19 +564,14 @@ def cmd_enroll(args):
     for subdir in ["claims", "dispatches", "tmp"]:
         (state_dir / subdir).mkdir(exist_ok=True)
 
-    # 4. Consumer .agents/plugins.json
-    plugins_json = Path(repo_dir) / ".agents" / "plugins.json"
-    plugins_json.parent.mkdir(parents=True, exist_ok=True)
-    entry = {"path": WORKSPACE_PLUGIN_ENTRY}
-    data = load_json(plugins_json)
-    if "entries" not in data:
-        data["entries"] = []
-    if entry not in data["entries"]:
-        data["entries"].append(entry)
-        plugins_json.write_text(json.dumps(data, indent=2) + "\n")
-        print(f"Updated consumer plugins.json: {plugins_json}")
-    else:
-        print(f"Consumer plugins.json already has entry: {plugins_json}")
+    # 4. Stage workspace plugin into consumer .agents/plugins/bug-fixer/
+    staged = _stage_workspace_plugin(repo_dir, DAEMON_DIR)
+    print(f"Staged workspace plugin: {staged}")
+    pj_status = _remove_bug_fixer_from_plugins_json(repo_dir)
+    if pj_status in ("updated", "unlinked"):
+        print(f"Cleaned legacy bug-fixer entry from .agents/plugins.json ({pj_status})")
+    if _ensure_repo_git_excludes(repo_dir):
+        print("Updated git info/exclude for staged plugin paths")
 
     print(f"\n\u2705 Enrollment complete for {repo}")
     print(f"   Sidecar will start ticking within 5 minutes.")
@@ -419,21 +604,14 @@ def cmd_unenroll(args):
     shutil.rmtree(sidecar_dir)
     print(f"Removed sidecar: {sidecar_dir}")
 
-    # Clean consumer plugins.json
+    # Clean staged workspace plugin and legacy consumer plugins.json
     if repo_dir:
-        plugins_json = Path(repo_dir) / ".agents" / "plugins.json"
-        if plugins_json.exists():
-            data = load_json(plugins_json)
-            remove_paths = {
-                WORKSPACE_PLUGIN_ENTRY,
-                "~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin",
-            }
-            entries = data.get("entries", [])
-            new_entries = [e for e in entries if e.get("path") not in remove_paths]
-            if len(new_entries) != len(entries):
-                data["entries"] = new_entries
-                plugins_json.write_text(json.dumps(data, indent=2) + "\n")
-                print(f"Removed from consumer plugins.json: {plugins_json}")
+        if _unstage_workspace_plugin(repo_dir):
+            staged = Path(repo_dir) / ".agents" / "plugins" / "bug-fixer"
+            print(f"Removed staged workspace plugin: {staged}")
+        pj_status = _remove_bug_fixer_from_plugins_json(repo_dir)
+        if pj_status in ("updated", "unlinked"):
+            print(f"Removed bug-fixer from consumer plugins.json ({pj_status})")
 
     print(f"\n\u2705 Unenrolled {repo}")
     return 0
@@ -559,11 +737,141 @@ def cmd_refresh(args):
         sidecar = build_sidecar(repo, repo_dir, project_id, sidecar_dir, path_env)
         sidecar_path = sidecar_dir / "sidecar.json"
         sidecar_path.write_text(json.dumps(sidecar, indent=2) + "\n")
+        if (
+            repo_dir
+            and Path(repo_dir).is_dir()
+            and _resolve_workspace_plugin_source(DAEMON_DIR).is_dir()
+        ):
+            _stage_workspace_plugin(repo_dir, DAEMON_DIR)
+            _remove_bug_fixer_from_plugins_json(repo_dir)
+            _ensure_repo_git_excludes(repo_dir)
         print(f"  \u2705 Refreshed: {repo}")
         refreshed += 1
 
     print(f"\nRefreshed {refreshed}/{len(repos)} sidecar(s)")
     return 0
+
+
+def _read_manifest_version(manifest_path: Path) -> str | None:
+    if not manifest_path.is_file():
+        return None
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    ver = data.get("version") if isinstance(data, dict) else None
+    return ver.strip() if isinstance(ver, str) and ver.strip() else None
+
+
+def cmd_doctor(args):
+    """Verify (and optionally repair) daemon and consumer workspace plugin health."""
+    fix = bool(getattr(args, "fix", False))
+    repo_filter = getattr(args, "repo", None)
+    issues = 0
+    fixed = 0
+
+    def report_issue(msg: str) -> None:
+        nonlocal issues
+        issues += 1
+        print(f"  [ISSUE] {msg}")
+
+    def report_fixed(msg: str) -> None:
+        nonlocal fixed
+        fixed += 1
+        print(f"  [FIXED] {msg}")
+
+    # 1. Global daemon must NOT have hooks.json
+    global_hooks = DAEMON_DIR / "hooks.json"
+    if global_hooks.exists() or global_hooks.is_symlink():
+        if fix:
+            global_hooks.unlink()
+            report_fixed(f"Removed stray global hooks file: {global_hooks}")
+        else:
+            report_issue(f"Stray global hooks file present: {global_hooks}")
+
+    # 2. Manifest versions
+    daemon_ver = _read_manifest_version(DAEMON_DIR / "plugin.json")
+    if not daemon_ver:
+        report_issue(f"Missing or invalid version in {DAEMON_DIR / 'plugin.json'}")
+    src_ws = _resolve_workspace_plugin_source(DAEMON_DIR)
+    ws_ver = _read_manifest_version(src_ws / "plugin.json")
+    if not ws_ver:
+        report_issue(f"Missing or invalid version in {src_ws / 'plugin.json'}")
+
+    # 3. Workspace plugin hooks.json validity
+    ws_hooks = src_ws / "hooks.json"
+    if not ws_hooks.is_file():
+        report_issue(f"Missing workspace hooks.json: {ws_hooks}")
+    else:
+        try:
+            hooks_text = ws_hooks.read_text(encoding="utf-8")
+            if "workspace-plugin/bug-fixer/" in hooks_text:
+                report_issue(f"Stale daemon-relative command path in {ws_hooks}")
+        except OSError as exc:
+            report_issue(f"Unreadable workspace hooks.json ({ws_hooks}): {exc}")
+
+    # 4. Enrolled consumer repos
+    src_digest = _tree_digest(src_ws)
+    matched_repos = 0
+    if SIDECARS_DIR.is_dir():
+        for sc_dir in sorted(SIDECARS_DIR.iterdir()):
+            if not sc_dir.is_dir():
+                continue
+            cfg = load_json(sc_dir / "config.json")
+            sc = load_json(sc_dir / "sidecar.json")
+            if not cfg and not sc:
+                continue
+            repo_name = cfg.get("target_repo") or (
+                sc_dir.name.replace("--", "/") if "--" in sc_dir.name else sc_dir.name
+            )
+            if repo_filter and repo_name != repo_filter:
+                continue
+            matched_repos += 1
+            repo_dir = str(cfg.get("repo_dir") or "").strip()
+            if not repo_dir or not Path(repo_dir).is_dir():
+                report_issue(f"{repo_name}: repo_dir missing on disk ({repo_dir or 'unset'})")
+                continue
+
+            repo_path = Path(repo_dir)
+            staged_dir = repo_path / ".agents" / "plugins" / "bug-fixer"
+            staged_digest = _tree_digest(staged_dir)
+            if src_digest is not None and staged_digest != src_digest:
+                if fix:
+                    _stage_workspace_plugin(repo_path, DAEMON_DIR)
+                    report_fixed(f"{repo_name}: staged real workspace plugin to {staged_dir}")
+                else:
+                    report_issue(f"{repo_name}: staged plugin missing, symlinked, or drifted ({staged_dir})")
+
+            if _plugins_json_needs_scrub(repo_path):
+                if fix:
+                    status = _remove_bug_fixer_from_plugins_json(repo_path)
+                    report_fixed(f"{repo_name}: scrubbed .agents/plugins.json ({status})")
+                else:
+                    report_issue(f"{repo_name}: legacy bug-fixer or empty .agents/plugins.json present")
+
+            exclude_path = _resolve_git_exclude_path(repo_path)
+            if exclude_path is not None:
+                existing = (
+                    {line.strip() for line in exclude_path.read_text(encoding="utf-8").splitlines()}
+                    if exclude_path.is_file()
+                    else set()
+                )
+                missing_excludes = [p for p in _GIT_EXCLUDE_PATTERNS if p not in existing]
+                if missing_excludes:
+                    if fix:
+                        _ensure_repo_git_excludes(repo_path)
+                        report_fixed(f"{repo_name}: added {missing_excludes} to {exclude_path}")
+                    else:
+                        report_issue(f"{repo_name}: missing {missing_excludes} in {exclude_path}")
+
+    if repo_filter and matched_repos == 0:
+        report_issue(f"Repository '{repo_filter}' is not enrolled")
+
+    if fix:
+        print(f"Doctor summary: {fixed} fixed, {issues} remaining issue(s)")
+    else:
+        print(f"Doctor summary: {issues} issue(s) found")
+    return 1 if issues else 0
 
 
 # ---------------------------------------------------------------------------
@@ -612,6 +920,9 @@ def main():
     p.add_argument("--repo", required=True, help="Target repo (owner/repo)")
 
     sub.add_parser("refresh-sidecars", help="Refresh sidecar.json for all repos (preserves values)")
+    p = sub.add_parser("doctor", help="Check and repair daemon/workspace plugin health")
+    p.add_argument("--fix", action="store_true", help="Repair detected issues")
+    p.add_argument("--repo", help="Optional owner/repo filter")
 
     args = parser.parse_args()
     if not args.command:
@@ -627,6 +938,7 @@ def main():
         "reset": cmd_reset,
         "labels": cmd_labels,
         "refresh-sidecars": cmd_refresh,
+        "doctor": cmd_doctor,
     }
     return handlers[args.command](args)
 

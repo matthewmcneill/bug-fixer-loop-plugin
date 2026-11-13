@@ -179,33 +179,22 @@ with open(out_path, "w") as f:
 PY
 echo "Created sidecar: $SIDECAR_PATH"
 
-# 3. Create or merge consumer .agents/plugins.json
-PLUGINS_JSON="$TARGET_REPO_DIR/.agents/plugins.json"
-mkdir -p "$(dirname "$PLUGINS_JSON")"
+# 3. Stage workspace plugin into consumer .agents/plugins/bug-fixer/ and clean legacy plugins.json
+python3 - "$INSTALL_DIR/scripts" "$TARGET_REPO_DIR" <<'PY'
+import sys
+from pathlib import Path
 
-python3 - "$PLUGINS_JSON" <<'PY'
-import json, os, sys
-path = sys.argv[1]
-entry = {"path": "~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer"}
+scripts_dir, repo_dir = sys.argv[1], sys.argv[2]
+sys.path.insert(0, scripts_dir)
+import manage
 
-data = {"entries": []}
-if os.path.exists(path):
-    try:
-        with open(path, "r") as f:
-            data = json.load(f)
-    except Exception:
-        pass
-
-if "entries" not in data:
-    data["entries"] = []
-
-if entry not in data["entries"]:
-    data["entries"].append(entry)
-
-with open(path, "w") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
+dest = manage._stage_workspace_plugin(repo_dir, Path(scripts_dir).parent)
+print(f"Staged workspace plugin: {dest}")
+pj_status = manage._remove_bug_fixer_from_plugins_json(repo_dir)
+if pj_status in ("updated", "unlinked"):
+    print(f"Cleaned legacy bug-fixer entry from .agents/plugins.json ({pj_status})")
+if manage._ensure_repo_git_excludes(repo_dir):
+    print("Updated git info/exclude for staged plugin paths")
 PY
-echo "Updated consumer plugins.json: $PLUGINS_JSON"
 
 echo "Enrollment complete."

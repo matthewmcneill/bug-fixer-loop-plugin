@@ -13,3 +13,7 @@ build/
 *_tick_preview.json
 *.workspace.json
 pr_completions.jsonl
+
+# Staged workspace plugin artifacts
+.agents/plugins/bug-fixer/
+.agents/plugins.json

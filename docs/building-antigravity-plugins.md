@@ -96,8 +96,8 @@ The **split-daemon pattern** resolves this cleanly:
 
 | Component | Role | Where | Scope |
 |-----------|------|-------|-------|
-| **Global Daemon** | Scheduler, background heartbeat, sidecar host | `~/.gemini/config/plugins/<daemon>/` | Global (installed once per machine) |
-| **Shared Workspace Plugin** | Execution bundle: hooks, rules, skills, agents, scripts | `~/.gemini/config/plugins/<daemon>/workspace-plugin/<name>/` | Workspace (loaded per-repo via `.agents/plugins.json`) |
+| **Global Daemon** | Scheduler, background heartbeat, sidecar host | `~/.gemini/config/plugins/<daemon>/` | Global (installed once per machine, no `hooks.json`) |
+| **Staged Workspace Plugin** | Execution bundle: hooks, rules, skills, agents, scripts | `<repo>/.agents/plugins/<name>/` (staged from `workspace-plugin/<name>/`) | Workspace (real copy per enrolled repo, git-excluded via `info/exclude`) |
 | **Per-Repo Sidecars & State** | Cron sidecar, per-repo config, runtime state | `~/.gemini/config/plugins/<daemon>/sidecars/<repo-slug>/` | Per-repo |
 
 ### Directory Layout
@@ -105,34 +105,35 @@ The **split-daemon pattern** resolves this cleanly:
 ```
 my-plugin/  (Source Repository)
 ├── daemon/
-│   ├── plugin.json                        ← Global daemon manifest
-│   ├── hooks.json                         ← Global hooks (if needed)
+│   ├── plugin.json                        ← Global daemon manifest (no hooks.json)
 │   ├── scripts/
+│   │   ├── manage.py                      ← Enroll/unenroll/doctor staging CLI
 │   │   └── tick.py                        ← Heartbeat entry point
 │   └── workspace-plugin/
-│       └── my-plugin/                     ← Shared workspace plugin
+│       └── my-plugin/                     ← Workspace plugin template
 │           ├── plugin.json                ← Workspace plugin manifest
-│           ├── hooks.json                 ← Per-workspace hooks
+│           ├── hooks.json                 ← Workspace-scoped hooks (./scripts/...)
 │           ├── rules/                     ← Agent rules
 │           ├── skills/                    ← Agent skills
 │           ├── agents/                    ← Custom agents
 │           └── scripts/                   ← Dispatchers, gates, APIs
 └── scripts/
-    ├── install.sh                         ← Deploys daemon globally
-    ├── enroll.sh                          ← Enrolls a repository
-    ├── unenroll.sh                        ← Unenrolls a repository
+    ├── install.sh                         ← Deploys daemon globally + runs doctor --fix
+    ├── enroll.sh                          ← Creates sidecar & stages workspace plugin
+    ├── unenroll.sh                        ← Removes sidecar & unstages plugin
     └── uninstall.sh                       ← Removes everything
 
 ~/.gemini/config/plugins/<daemon>/  (Installed)
 ├── plugin.json
-├── hooks.json
-├── scripts/tick.py
+├── scripts/
+│   ├── manage.py
+│   └── tick.py
 ├── sidecars/
 │   └── <owner--repo>/
 │       ├── sidecar.json                   ← Cron schedule
 │       ├── config.json                    ← Per-repo settings
 │       └── state/                         ← Runtime state
-└── workspace-plugin/<name>/               ← Shared plugin bundle
+└── workspace-plugin/<name>/               ← Source template staged into consumer repos
 ```
 
 ### The Immutable Plugin Root Principle
@@ -213,23 +214,13 @@ cat > "$SIDECAR_DIR/sidecar.json" <<JSON
 }
 JSON
 
-# 5. Register workspace plugin in consumer repo
-# This is how the consumer repo discovers your hooks, rules, skills
-python3 -c "
-import json, os, sys
-path = '$TARGET_REPO_DIR/.agents/plugins.json'
-entry = {'path': '~/.gemini/config/plugins/my-daemon/workspace-plugin'}
-data = {'entries': []}
-if os.path.exists(path):
-    with open(path) as f: data = json.load(f)
-if 'entries' not in data: data['entries'] = []
-if entry not in data['entries']: data['entries'].append(entry)
-with open(path, 'w') as f: json.dump(data, f, indent=2)
-"
+# 5. Stage workspace plugin as a real copy in consumer repo (.agents/plugins/<name>/)
+# Do NOT symlink (Antigravity ignores symlinks) and do NOT rely on .agents/plugins.json indirection.
+python3 "$INSTALL_DIR/scripts/manage.py" doctor --fix --repo "$TARGET_REPO"
 ```
 
 **Key insights:**
-- The consumer repo only gets a lightweight `.agents/plugins.json` entry — no scripts, no git submodules
+- Staging a real directory copy into `<repo>/.agents/plugins/<name>/` keeps `hooks.json` strictly scoped to enrolled repos (never leaking globally via `~/.gemini/.../hooks.json`)
 - Environment variables (`MY_PLUGIN_CONFIG`, `MY_PLUGIN_STATE_DIR`) give scripts a reliable way to find their config without path assumptions
 - `agent_permissions.workspace_uris` scopes the sidecar to the enrolled repo
 
@@ -245,8 +236,7 @@ fi
 # 2. Remove sidecar directory
 rm -rf "$SIDECAR_DIR"
 
-# 3. Remove workspace-plugin entry from consumer repo's plugins.json
-# (parse JSON, filter out the entry, write back)
+# 3. Remove staged <repo>/.agents/plugins/<name>/ and scrub legacy plugins.json
 ```
 
 ### Uninstall Script Pattern
@@ -281,31 +271,17 @@ The split-daemon architecture natively scales to multiple repositories:
         └── state/              ← Project-b state
 ```
 
-Each consumer repo's `.agents/plugins.json` points to the same shared workspace plugin. No submodules, no duplicated scripts. Enroll a new repo and it immediately inherits all hooks, rules, and skills.
+Each consumer repo receives a staged `<repo>/.agents/plugins/<name>/` copy synced during `enroll`, `install.sh`, and `manage.py doctor --fix` (excluded from git via `<git-dir>/info/exclude`).
 
 ---
 
 ## Discovery & Loading
 
-### Consumer Repo Declaration
+### Consumer Repo Staging (`.agents/plugins/<name>/`)
 
-A consumer project enables your plugin by declaring it in `.agents/plugins.json`:
+Antigravity 1.5.8 discovers workspace plugins from `<repo>/.agents/plugins/<name>/` directly (containing `plugin.json` with `"version"` and workspace-scoped `hooks.json` using `./scripts/...` commands). Symlinks and `.agents/plugins.json` indirection are avoided so hooks stay isolated to enrolled workspaces without global hook leakage.
 
-```json
-{
-  "entries": [
-    {
-      "path": "~/.gemini/config/plugins/my-daemon/workspace-plugin"
-    }
-  ]
-}
-```
-
-> **Important:**
-> - The JSON structure requires the `"entries"` key (an array of objects), **not** `"plugins"`
-> - The `"path"` points to the directory *containing* the plugin. Antigravity scans one level deep for `plugin.json` manifests
-
-When Antigravity opens the consumer project, it discovers your plugin and ingests its skills, rules, hooks, and agents.
+When Antigravity opens the consumer project, it discovers the staged workspace plugin and ingests its skills, rules, hooks, and agents for that workspace only.
 
 ### Loading Priority
 
@@ -559,13 +535,10 @@ The hook schema differs between hosts:
 
 A dual-host repository can safely keep both files without collision.
 
-### Empirical Hook Discovery Findings
+### Hook Discovery Findings (Antigravity 1.5.8+)
 
-From direct testing (October 2026):
-
-- **Workspace plugin hooks via `plugins.json`:** Hooks on workspace plugins (nested under `workspace-plugin/`) were **NOT** discovered — the runtime does not load hooks from nested/referenced workspace plugins.
-- **Daemon plugin hooks at root:** Hooks at `<daemon-plugin-root>/hooks.json` (the globally-installed plugin) **ARE** discovered and fire correctly.
-- **Resolution:** Place `hooks.json` on the daemon plugin (global), use the workspace plugin (via `plugins.json`) only for skills, rules, and agents.
+- **Staged workspace plugin hooks (`<repo>/.agents/plugins/<name>/hooks.json`):** Discovered and scoped strictly to the enrolled workspace when staged as a real (non-symlink) directory copy with `"version"` set in `plugin.json` and `./scripts/...` hook commands.
+- **Avoid global `hooks.json` on the daemon plugin:** Putting `hooks.json` at `~/.gemini/config/plugins/<daemon>/hooks.json` leaks workspace-specific tool gates into every unrelated repo. Keep `hooks.json` off the global daemon and stage the workspace plugin into each enrolled repo via `manage.py enroll` / `manage.py doctor --fix`.
 
 ---
 
@@ -837,7 +810,7 @@ state/
 
 **Problem:** Wrote hooks, rules, and scripts to `~/.gemini/config/`. A broken global hook bricked every project on the machine.
 
-**Fix:** Use the split-daemon + workspace plugin pattern. Scope hooks and skills to enrolled workspaces via `.agents/plugins.json`.
+**Fix:** Keep `hooks.json` off `~/.gemini/config/`; stage `<repo>/.agents/plugins/<name>/` into enrolled workspaces via `manage.py`.
 
 ### 2. Absolute Paths in Config
 
@@ -869,11 +842,11 @@ state/
 
 **Fix:** Single heartbeat sidecar per repo, delegating to a tick receiver for interval-based dispatching.
 
-### 7. Hooks on Workspace Plugins
+### 7. Hooks on Global Daemon vs Staged Workspace Plugins
 
-**Problem:** Placed `hooks.json` on the workspace plugin (loaded via `plugins.json`). Hooks were never discovered.
+**Problem:** Hooks placed at `~/.gemini/config/plugins/<daemon>/hooks.json` leak into every unenrolled workspace, while symlinked plugins or `.agents/plugins.json` indirection fail strict discovery/scoping.
 
-**Fix:** Place `hooks.json` on the daemon plugin (global install). Use the workspace plugin only for skills, rules, and agents.
+**Fix:** Keep `hooks.json` off the global daemon plugin and stage a real non-symlink copy into `<repo>/.agents/plugins/<name>/` (with `hooks.json` using `./scripts/...` relative commands), repaired automatically by `manage.py doctor --fix`.
 
 ### 8. Prompt-Level `ask_question` as a Security Gate
 
@@ -885,11 +858,11 @@ state/
 
 ## Checklist: Shipping a Plugin
 
-- [ ] Global daemon manifest exists (`daemon/plugin.json`)
-- [ ] Shared workspace plugin manifest exists (`daemon/workspace-plugin/<name>/plugin.json`)
-- [ ] Hooks are on the daemon plugin root, not the workspace plugin
-- [ ] Hooks use clean relative commands (`python3 scripts/my_gate.py`)
-- [ ] Consumer repos reference workspace-plugin via `.agents/plugins.json` with `"entries"` key
+- [ ] Global daemon manifest exists (`daemon/plugin.json` with `"version"` and NO `hooks.json`)
+- [ ] Workspace plugin manifest exists (`daemon/workspace-plugin/<name>/plugin.json` with `"version"`)
+- [ ] Hooks live on the staged workspace plugin (`daemon/workspace-plugin/<name>/hooks.json`), not the global daemon
+- [ ] Hooks use clean relative commands (`python3 ./scripts/my_gate.py`)
+- [ ] Consumer repos receive real non-symlink copies at `.agents/plugins/<name>/` excluded via `<git-dir>/info/exclude` (no `.agents/plugins.json` entry)
 - [ ] Single sidecar per repo using the unified tick pattern
 - [ ] Sidecar manifests specify `agent_permissions.workspace_uris`
 - [ ] Sidecar `env` block provides config and state paths
