@@ -12,6 +12,8 @@ No-op conditions (exit silently):
   - No open issues missing a classification label AND no pending T2 approvals
 """
 
+from __future__ import annotations
+
 import json
 import os
 import subprocess
@@ -20,8 +22,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from liveness import agentapi_is_reachable, record_dispatch
-from injection_scanner import InjectionScanner, CachedInjectionScanner
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from injection_scanner import CachedInjectionScanner, InjectionScanner  # noqa: E402
+from liveness import agentapi_is_reachable, record_dispatch  # noqa: E402
 
 CLASSIFICATION_LABELS = {
     "bug-fixer:engineer:needs-fix",
@@ -29,6 +35,10 @@ CLASSIFICATION_LABELS = {
     "bug-fixer:human:input-needed",
     "bug-fixer:human:project-candidate",
     "bug-fixer:human:required",
+}
+
+SKIP_LABELS = CLASSIFICATION_LABELS | {
+    "bug-fixer:engineer:in-progress",
 }
 
 # Prefixes used by the triage agent's approach review comments.
@@ -39,10 +49,11 @@ BOT_COMMENT_PREFIXES = (
     "[BUG-FIXER-TRIAGE]",
     "[ANTIGRAVITY]",
     "[CONTEXT]",
+    "## \U0001f3db Principal Architect Review",
 )
 
 
-def log(msg: str):
+def log(msg: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"TRIAGE_DISPATCH: {ts} — {msg}", flush=True)
 
@@ -55,7 +66,6 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
 # Configuration
 # ---------------------------------------------------------------------------
 
-SCRIPT_DIR = Path(__file__).resolve().parent
 PLUGIN_DIR = SCRIPT_DIR.parent
 
 # Ensure agentapi is on PATH — sidecar scheduler may not inherit user's shell PATH
@@ -63,34 +73,32 @@ AGENTAPI_DIR = Path.home() / ".gemini" / "antigravity" / "bin"
 if AGENTAPI_DIR.is_dir():
     os.environ["PATH"] = str(AGENTAPI_DIR) + os.pathsep + os.environ.get("PATH", "")
 
-if not os.environ.get("ANTIGRAVITY_PROJECT_ID"):
-    log("FATAL: ANTIGRAVITY_PROJECT_ID not set — agentapi will fail with "
-        "'project_id is required when providing project_env_config'. "
-        "Re-run install.sh from within an Antigravity session.")
-    sys.exit(1)
-
 # Workspace config resolution:
 # 1. BUG_FIXER_CONFIG env var (set by sidecar stubs — absolute, most reliable)
 # 2. Relative path from plugin dir: ../bug-fixer-loop-workspace/config.json
 _config_env = os.environ.get("BUG_FIXER_CONFIG", "")
 _config_relative = PLUGIN_DIR / "../bug-fixer-loop-workspace/config.json"
 
+WORKSPACE_CONFIG = None
 if _config_env and Path(_config_env).exists():
     WORKSPACE_CONFIG = Path(_config_env)
 elif _config_relative.exists():
     WORKSPACE_CONFIG = _config_relative
-else:
-    log("No workspace config found. Run install.sh first. Exiting.")
-    sys.exit(0)
 
-CONFIG_FILE = WORKSPACE_CONFIG.resolve()
-
-with open(CONFIG_FILE) as f:
-    config = json.load(f)
-
-TARGET_REPO = config["target_repo"]
+config: dict = {}
+CONFIG_FILE: Path | None = None
+TARGET_REPO = ""
 SKILL_PATH = PLUGIN_DIR / "skills/bug-fixer-triage/SKILL.md"
 SAFE_INGEST = PLUGIN_DIR / "scripts/safe_ingest.py"
+
+if WORKSPACE_CONFIG:
+    CONFIG_FILE = WORKSPACE_CONFIG.resolve()
+    try:
+        with open(CONFIG_FILE) as f:
+            config = json.load(f)
+        TARGET_REPO = config.get("target_repo", "")
+    except (json.JSONDecodeError, OSError) as e:
+        log(f"Failed to load config {CONFIG_FILE}: {e}")
 
 _state_env = os.environ.get("BUG_FIXER_STATE_DIR")
 if _state_env:
@@ -108,176 +116,259 @@ MAX_TRIAGE_FAILURES = 3
 TRIAGE_COOLDOWN_SECONDS = 3600
 CLAIMS_DIR = STATE_DIR / "claims"
 DISPATCHES_DIR = STATE_DIR / "dispatches"
+APPROVAL_SEEN_FILE = STATE_DIR / "approval_dispatched_comments.json"
 
-# Circuit breaker check
-if TRIAGE_COOLDOWN_FILE.exists():
+
+# ---------------------------------------------------------------------------
+# Approval comment deduplication and issue filtering helpers
+# ---------------------------------------------------------------------------
+
+def load_seen_approvals(seen_file: Path | None = None) -> dict[str, str]:
+    """Return {issue_number_str: comment_id} of already-dispatched comments."""
+    target = seen_file if seen_file is not None else APPROVAL_SEEN_FILE
+    if target.exists():
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {str(k): str(v) for k, v in data.items() if v}
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def save_seen_approvals(seen: dict[str, str], seen_file: Path | None = None) -> None:
+    """Persist seen approval comment IDs per issue."""
+    target = seen_file if seen_file is not None else APPROVAL_SEEN_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(seen, indent=2), encoding="utf-8")
+
+
+def find_untriaged(issues: list[dict]) -> list[dict]:
+    """Find issues missing ALL classification/status labels."""
+    untriaged: list[dict] = []
+    for issue in issues:
+        label_names = {label.get("name", "") for label in issue.get("labels", [])}
+        # Always skip if a classification label or bug-fixer:engineer:in-progress is present
+        if label_names & SKIP_LABELS:
+            continue
+        # Skip bug-fixer:architect:awaiting-review ONLY if a classification label is also present
+        # (if classification label was removed, re-triage is needed)
+        if (
+            "bug-fixer:architect:awaiting-review" in label_names
+            and label_names & CLASSIFICATION_LABELS
+        ):
+            continue
+        untriaged.append(issue)
+    return untriaged
+
+
+def find_pending_approvals(
+    issues: list[dict],
+    seen_approvals: dict[str, str] | None = None,
+) -> list[dict]:
+    """Detect T2 issues with unseen human replies after the bot's approach comment.
+
+    Heuristic: if the last comment on a needs-approach-review issue is NOT
+    from the bot, a human has replied and the issue may need transitioning.
+
+    Dedup: skip if we already dispatched a triage run for this exact comment ID
+    so a non-approval reply does not re-trigger on every hourly tick.
+    """
+    pending: list[dict] = []
+    for issue in issues:
+        label_names = {label.get("name", "") for label in issue.get("labels", [])}
+        if "bug-fixer:human:needs-approach-review" not in label_names:
+            continue
+        comments = issue.get("comments", [])
+        if not comments:
+            continue
+        last_comment = comments[-1]
+        last_body = (last_comment.get("body") or "").lstrip()
+        if any(last_body.startswith(prefix) for prefix in BOT_COMMENT_PREFIXES):
+            continue
+        comment_id = str(last_comment.get("id") or "")
+        issue_key = str(issue["number"])
+        if seen_approvals and comment_id and seen_approvals.get(issue_key) == comment_id:
+            continue
+        pending.append(issue)
+    return pending
+
+
+def record_dispatched_approvals(
+    pending_approvals: list[dict],
+    seen_approvals: dict[str, str],
+    seen_file: Path | None = None,
+) -> dict[str, str]:
+    """Record last comment IDs for dispatched pending-approval issues."""
+    for issue in pending_approvals:
+        comments = issue.get("comments", [])
+        if not comments:
+            continue
+        comment_id = str(comments[-1].get("id") or "")
+        if comment_id:
+            seen_approvals[str(issue["number"])] = comment_id
+    save_seen_approvals(seen_approvals, seen_file=seen_file)
+    return seen_approvals
+
+
+def main() -> None:
+    if not os.environ.get("ANTIGRAVITY_PROJECT_ID"):
+        log("FATAL: ANTIGRAVITY_PROJECT_ID not set — agentapi will fail with "
+            "'project_id is required when providing project_env_config'. "
+            "Re-run install.sh from within an Antigravity session.")
+        sys.exit(1)
+
+    if not WORKSPACE_CONFIG or not config:
+        log("No workspace config found. Run install.sh first. Exiting.")
+        sys.exit(0)
+
+    # Circuit breaker check
+    if TRIAGE_COOLDOWN_FILE.exists():
+        try:
+            cooldown = json.loads(TRIAGE_COOLDOWN_FILE.read_text())
+            if time.time() < cooldown.get("expires_at", 0):
+                log(f"TRIAGE_EXIT: Cooling down until {cooldown.get('expires_at_iso', 'unknown')}")
+                sys.exit(0)
+            TRIAGE_COOLDOWN_FILE.unlink(missing_ok=True)
+            TRIAGE_FAILURE_FILE.unlink(missing_ok=True)
+        except (json.JSONDecodeError, OSError):
+            TRIAGE_COOLDOWN_FILE.unlink(missing_ok=True)
+
+    if not agentapi_is_reachable():
+        log("TRIAGE_EXIT: agentapi is unreachable — skipping this cycle.")
+        sys.exit(0)
+
+    log(f"Checking {TARGET_REPO} for untriaged issues")
+
+    # -----------------------------------------------------------------------
+    # Check for untriaged issues
+    # -----------------------------------------------------------------------
+
+    r = run([sys.executable, str(SAFE_INGEST), "issue-list",
+             "--repo", TARGET_REPO, "--state", "open",
+             "--limit", "200",
+             "--json", "number,title,body,labels,comments"])
+
     try:
-        cooldown = json.loads(TRIAGE_COOLDOWN_FILE.read_text())
-        if time.time() < cooldown.get("expires_at", 0):
-            log(f"TRIAGE_EXIT: Cooling down until {cooldown.get('expires_at_iso', 'unknown')}")
-            sys.exit(0)
-        TRIAGE_COOLDOWN_FILE.unlink(missing_ok=True)
-        TRIAGE_FAILURE_FILE.unlink(missing_ok=True)
-    except (json.JSONDecodeError, OSError):
-        TRIAGE_COOLDOWN_FILE.unlink(missing_ok=True)
+        issues = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        log(f"Failed to parse issue list: {r.stderr}")
+        sys.exit(0)
 
-if not agentapi_is_reachable():
-    log("TRIAGE_EXIT: agentapi is unreachable — skipping this cycle.")
-    sys.exit(0)
+    untriaged = find_untriaged(issues)
 
-log(f"Checking {TARGET_REPO} for untriaged issues")
+    # -----------------------------------------------------------------------
+    # Injection Scan
+    # -----------------------------------------------------------------------
+    injection_config = config.get("scanning", {}).get("injection", {})
+    scanner = CachedInjectionScanner(InjectionScanner(injection_config))
 
+    safe_untriaged = []
+    for issue in untriaged:
+        text = f"{issue.get('title', '')} {issue.get('body', '')}"
+        result = scanner.scan(text)
+        if result.is_injection:
+            log(f"INJECTION DETECTED on #{issue['number']}: "
+                f"{result.provider} confidence={result.confidence}")
+            r_edit = run(["gh", "issue", "edit", str(issue["number"]),
+                          "--add-label", "security:prompt-injection"])
+            if r_edit.returncode != 0:
+                log(f"Failed to apply security label to #{issue['number']}: {r_edit.stderr}")
+        else:
+            safe_untriaged.append(issue)
+    untriaged = safe_untriaged
 
-# ---------------------------------------------------------------------------
-# Check for untriaged issues
-# ---------------------------------------------------------------------------
+    # -----------------------------------------------------------------------
+    # Check for T2 issues with pending maintainer approval (approach reviews)
+    # -----------------------------------------------------------------------
+    seen_approvals = load_seen_approvals()
+    pending_approvals = find_pending_approvals(issues, seen_approvals)
 
-r = run([sys.executable, str(SAFE_INGEST), "issue-list",
-         "--repo", TARGET_REPO, "--state", "open",
-         "--limit", "200",
-         "--json", "number,title,body,labels,comments"])
+    if pending_approvals:
+        approval_nums = ", ".join(f"#{i['number']}" for i in pending_approvals)
+        log(f"{len(pending_approvals)} T2 issue(s) with pending approval response: {approval_nums}")
 
-try:
-    issues = json.loads(r.stdout)
-except json.JSONDecodeError:
-    log(f"Failed to parse issue list: {r.stderr}")
-    sys.exit(0)
+    if not untriaged and not pending_approvals:
+        log("No untriaged issues and no pending T2 approvals. Exiting.")
+        sys.exit(0)
 
-# Issues with any of these labels are already handled — skip them
-SKIP_LABELS = CLASSIFICATION_LABELS | {
-    "bug-fixer:engineer:in-progress",
-}
+    if untriaged:
+        issue_nums = ", ".join(f"#{i['number']}" for i in untriaged[:10])
+        log(f"{len(untriaged)} untriaged issue(s) found: {issue_nums}")
 
-# Find issues missing ALL classification/status labels
-untriaged = []
-for issue in issues:
-    label_names = {l.get("name", "") for l in issue.get("labels", [])}
-    # Always skip if a classification label or bug-fixer:engineer:in-progress is present
-    if label_names & SKIP_LABELS:
-        continue
-    # Skip bug-fixer:architect:awaiting-review ONLY if a classification label is also present
-    # (if classification label was removed, re-triage is needed)
-    if "bug-fixer:architect:awaiting-review" in label_names and label_names & CLASSIFICATION_LABELS:
-        continue
-    untriaged.append(issue)
+    # -----------------------------------------------------------------------
+    # Spawn triage conversation
+    # -----------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Injection Scan
-# ---------------------------------------------------------------------------
-injection_config = config.get("scanning", {}).get("injection", {})
-scanner = CachedInjectionScanner(InjectionScanner(injection_config))
+    # Build the prompt with both work streams
+    prompt_parts = [
+        f"Run the bug-fixer-triage skill for repository {TARGET_REPO}.",
+        "",
+        f"Read the skill at: {SKILL_PATH}",
+        f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.",
+        f"Configuration is at: {CONFIG_FILE}",
+    ]
 
-safe_untriaged = []
-for issue in untriaged:
-    text = f"{issue.get('title', '')} {issue.get('body', '')}"
-    result = scanner.scan(text)
-    if result.is_injection:
-        log(f"INJECTION DETECTED on #{issue['number']}: "
-            f"{result.provider} confidence={result.confidence}")
-        r_edit = run(["gh", "issue", "edit", str(issue["number"]),
-             "--add-label", "security:prompt-injection"])
-        if r_edit.returncode != 0:
-            log(f"Failed to apply security label to #{issue['number']}: {r_edit.stderr}")
+    if untriaged:
+        issue_nums = ", ".join(f"#{i['number']}" for i in untriaged[:10])
+        prompt_parts.append("")
+        prompt_parts.append(
+            f"There are {len(untriaged)} untriaged issue(s) to classify: {issue_nums}"
+        )
+
+    if pending_approvals:
+        approval_nums = ", ".join(f"#{i['number']}" for i in pending_approvals)
+        prompt_parts.append("")
+        prompt_parts.append(
+            f"There are {len(pending_approvals)} T2 issue(s) with pending maintainer "
+            f"approval that may need T2→T1 transition (Step 4 of the skill): {approval_nums}"
+        )
+
+    total_work = len(untriaged) + len(pending_approvals)
+    title = f"Triage: {total_work} issue(s) to process"
+    prompt = "\n".join(prompt_parts)
+
+    model = config.get("triage_model", "flash")
+    r = run(["agentapi", "new-conversation", f"--model={model}", f"--title={title}", prompt])
+
+    try:
+        result = json.loads(r.stdout)
+        conv_id = result["response"]["newConversation"]["conversationId"]
+        log(f"Spawned triage conversation {conv_id}")
+        record_dispatch(DISPATCHES_DIR, conv_id, "triage", timeout_minutes=30)
+        # Mark pending approval comments as dispatched so they don't re-trigger
+        if pending_approvals:
+            record_dispatched_approvals(pending_approvals, seen_approvals)
+    except (json.JSONDecodeError, KeyError):
+        log(f"Failed to spawn triage conversation: {r.stderr or r.stdout}")
+
+    # Circuit breaker: track spawn failure
+    if r.returncode != 0 or "conversationId" not in r.stdout:
+        try:
+            count = (
+                int(TRIAGE_FAILURE_FILE.read_text().strip()) + 1
+                if TRIAGE_FAILURE_FILE.exists()
+                else 1
+            )
+        except (ValueError, OSError):
+            count = 1
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        TRIAGE_FAILURE_FILE.write_text(str(count))
+        if count >= MAX_TRIAGE_FAILURES:
+            expires = time.time() + TRIAGE_COOLDOWN_SECONDS
+            TRIAGE_COOLDOWN_FILE.write_text(json.dumps({
+                "reason": f"{count} consecutive triage spawn failures",
+                "entered_at": datetime.now(timezone.utc).isoformat(),
+                "expires_at": expires,
+                "expires_at_iso": datetime.fromtimestamp(expires, timezone.utc).isoformat(),
+            }))
+            log(
+                f"Triage circuit breaker tripped after {count} failures. "
+                f"Cooling down for {TRIAGE_COOLDOWN_SECONDS}s."
+            )
     else:
-        safe_untriaged.append(issue)
-untriaged = safe_untriaged
-
-# ---------------------------------------------------------------------------
-# Check for T2 issues with pending maintainer approval (approach reviews)
-# ---------------------------------------------------------------------------
-# The triage skill's Step 4 handles T2→T1 transitions when a maintainer
-# replies "approved" on a needs-approach-review issue. But that logic only
-# runs if the triage agent is spawned. Without this check, approved T2
-# issues are a dead-end: the dispatcher sees them as "already classified"
-# and never invokes the agent.
-#
-# Heuristic: if the last comment on a needs-approach-review issue is NOT
-# from the bot, a human has replied and the issue may need transitioning.
-# False positives are cheap (one extra triage spawn); the skill evaluates
-# the actual approval semantics.
-
-pending_approvals = []
-for issue in issues:
-    label_names = {l.get("name", "") for l in issue.get("labels", [])}
-    if "bug-fixer:human:needs-approach-review" not in label_names:
-        continue
-    comments = issue.get("comments", [])
-    if not comments:
-        continue
-    last_body = (comments[-1].get("body") or "").lstrip()
-    if not any(last_body.startswith(prefix) for prefix in BOT_COMMENT_PREFIXES):
-        pending_approvals.append(issue)
-
-if pending_approvals:
-    approval_nums = ", ".join(f"#{i['number']}" for i in pending_approvals)
-    log(f"{len(pending_approvals)} T2 issue(s) with pending approval response: {approval_nums}")
-
-if not untriaged and not pending_approvals:
-    log("No untriaged issues and no pending T2 approvals. Exiting.")
-    sys.exit(0)
-
-if untriaged:
-    issue_nums = ", ".join(f"#{i['number']}" for i in untriaged[:10])
-    log(f"{len(untriaged)} untriaged issue(s) found: {issue_nums}")
+        TRIAGE_FAILURE_FILE.unlink(missing_ok=True)
 
 
-# ---------------------------------------------------------------------------
-# Spawn triage conversation
-# ---------------------------------------------------------------------------
-
-# Build the prompt with both work streams
-prompt_parts = [
-    f"Run the bug-fixer-triage skill for repository {TARGET_REPO}.",
-    "",
-    f"Read the skill at: {SKILL_PATH}",
-    f"Use safe_ingest.py at: {SAFE_INGEST} for all GitHub reads.",
-    f"Configuration is at: {CONFIG_FILE}",
-]
-
-if untriaged:
-    issue_nums = ", ".join(f"#{i['number']}" for i in untriaged[:10])
-    prompt_parts.append("")
-    prompt_parts.append(f"There are {len(untriaged)} untriaged issue(s) to classify: {issue_nums}")
-
-if pending_approvals:
-    approval_nums = ", ".join(f"#{i['number']}" for i in pending_approvals)
-    prompt_parts.append("")
-    prompt_parts.append(
-        f"There are {len(pending_approvals)} T2 issue(s) with pending maintainer "
-        f"approval that may need T2→T1 transition (Step 4 of the skill): {approval_nums}"
-    )
-
-total_work = len(untriaged) + len(pending_approvals)
-title = f"Triage: {total_work} issue(s) to process"
-prompt = "\n".join(prompt_parts)
-
-model = config.get("triage_model", "flash")
-r = run(["agentapi", "new-conversation", f"--model={model}", f"--title={title}", prompt])
-
-try:
-    result = json.loads(r.stdout)
-    conv_id = result["response"]["newConversation"]["conversationId"]
-    log(f"Spawned triage conversation {conv_id}")
-    record_dispatch(DISPATCHES_DIR, conv_id, "triage", timeout_minutes=30)
-except (json.JSONDecodeError, KeyError):
-    log(f"Failed to spawn triage conversation: {r.stderr or r.stdout}")
-
-# Circuit breaker: track spawn failure
-if r.returncode != 0 or 'conversationId' not in r.stdout:
-    try:
-        count = int(TRIAGE_FAILURE_FILE.read_text().strip()) + 1 if TRIAGE_FAILURE_FILE.exists() else 1
-    except (ValueError, OSError):
-        count = 1
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    TRIAGE_FAILURE_FILE.write_text(str(count))
-    if count >= MAX_TRIAGE_FAILURES:
-        expires = time.time() + TRIAGE_COOLDOWN_SECONDS
-        TRIAGE_COOLDOWN_FILE.write_text(json.dumps({
-            "reason": f"{count} consecutive triage spawn failures",
-            "entered_at": datetime.now(timezone.utc).isoformat(),
-            "expires_at": expires,
-            "expires_at_iso": datetime.fromtimestamp(expires, timezone.utc).isoformat(),
-        }))
-        log(f"Triage circuit breaker tripped after {count} failures. Cooling down for {TRIAGE_COOLDOWN_SECONDS}s.")
-else:
-    TRIAGE_FAILURE_FILE.unlink(missing_ok=True)
+if __name__ == "__main__":
+    main()
