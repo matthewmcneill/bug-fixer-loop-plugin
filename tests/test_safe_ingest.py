@@ -496,6 +496,100 @@ class TestSafeIngest(unittest.TestCase):
             "ABCDEFGHIJ",
         )
 
+    def test_normalise_visible_content_preserves_benign_emoji_variation_selectors(self):
+        # Issue #86: Benign U+FE0F / U+FE0E presentation selectors following valid emoji base
+        # 1. Warning U+26A0 U+FE0F
+        self.assertEqual(
+            normalise_visible_content("\u26a0\ufe0f"),
+            "\u26a0\ufe0f",
+        )
+        # 2. Heavy check mark U+2714 U+FE0F
+        self.assertEqual(
+            normalise_visible_content("\u2714\ufe0f"),
+            "\u2714\ufe0f",
+        )
+        # 3. Keycap 1 U+FE0F U+20E3 (#*0-9)
+        self.assertEqual(
+            normalise_visible_content("1\ufe0f\u20e3"),
+            "1\ufe0f\u20e3",
+        )
+        self.assertEqual(
+            normalise_visible_content("#\ufe0f\u20e3"),
+            "#\ufe0f\u20e3",
+        )
+        self.assertEqual(
+            normalise_visible_content("*\ufe0f\u20e3"),
+            "*\ufe0f\u20e3",
+        )
+        # 4. Heavy black heart U+2764 U+FE0F
+        self.assertEqual(
+            normalise_visible_content("\u2764\ufe0f"),
+            "\u2764\ufe0f",
+        )
+        # 5. Information source U+2139 U+FE0F
+        self.assertEqual(
+            normalise_visible_content("\u2139\ufe0f"),
+            "\u2139\ufe0f",
+        )
+        # 6. Text presentation selector U+FE0E on emoji
+        self.assertEqual(
+            normalise_visible_content("\u26a0\ufe0e"),
+            "\u26a0\ufe0e",
+        )
+        # 7. SMP emoji in U+1F000-U+1FAFF
+        self.assertEqual(
+            normalise_visible_content("\U0001f600\ufe0f"),
+            "\U0001f600\ufe0f",
+        )
+        # 8. Symbols with presentation sequences: copyright, registered, trademark
+        self.assertEqual(
+            normalise_visible_content("\u00a9\ufe0f and \u00ae\ufe0f and \u2122\ufe0f"),
+            "\u00a9\ufe0f and \u00ae\ufe0f and \u2122\ufe0f",
+        )
+        # 9. Multiple benign emoji in a sentence
+        sentence = "Status: \u26a0\ufe0f Warning, \u2714\ufe0f OK, 1\ufe0f\u20e3 First, \u2764\ufe0f Thanks!"
+        self.assertEqual(
+            normalise_visible_content(sentence),
+            sentence,
+        )
+        self.assertFalse(detect_hidden_content(sentence, normalise_visible_content(sentence)))
+
+    def test_normalise_visible_content_strips_malicious_or_invalid_variation_selectors(self):
+        # Issue #86: Runs of variation selectors or VS on non-emoji must be stripped
+        # 1. An 'a' followed by 8 variation selectors
+        smuggled_a = "a" + "\ufe0f" * 8
+        self.assertEqual(normalise_visible_content(smuggled_a), "a")
+        self.assertTrue(detect_hidden_content(smuggled_a, "a"))
+
+        # 2. An emoji followed by 3 selectors (consecutive run >= 2)
+        emoji_3_vs = "\u26a0" + "\ufe0f" * 3
+        self.assertEqual(normalise_visible_content(emoji_3_vs), "\u26a0")
+        self.assertTrue(detect_hidden_content(emoji_3_vs, "\u26a0"))
+
+        # 3. Single VS after base that has no presentation variant
+        self.assertEqual(normalise_visible_content("a\ufe0f"), "a")
+        self.assertTrue(detect_hidden_content("a\ufe0f", "a"))
+        self.assertEqual(normalise_visible_content("z\ufe0e"), "z")
+
+        # 4. Keycap base '1' without following U+20E3
+        self.assertEqual(normalise_visible_content("1\ufe0f"), "1")
+        self.assertTrue(detect_hidden_content("1\ufe0f", "1"))
+
+        # 5. U+FE00-U+FE0D (VS1-VS14) are always stripped
+        for cp in range(0xFE00, 0xFE0E):
+            raw = f"\u26a0{chr(cp)}"
+            self.assertEqual(normalise_visible_content(raw), "\u26a0")
+            self.assertTrue(detect_hidden_content(raw, "\u26a0"))
+
+        # 6. U+E0100-U+E01EF (VS17-VS256) are always stripped
+        self.assertEqual(normalise_visible_content("\u26a0\U000e0100"), "\u26a0")
+        self.assertTrue(detect_hidden_content("\u26a0\U000e0100", "\u26a0"))
+        self.assertEqual(normalise_visible_content("\u26a0\U000e01ef"), "\u26a0")
+
+        # 7. Lone variation selector at start or after space
+        self.assertEqual(normalise_visible_content("\ufe0f"), "")
+        self.assertEqual(normalise_visible_content(" \ufe0f"), " ")
+
     def test_detect_hidden_content(self):
         # 6. Returns True when content stripped and False when nothing changed
         self.assertTrue(detect_hidden_content("Hello <!-- hidden instruction --> world", "Hello  world"))
@@ -632,6 +726,53 @@ class TestSafeIngest(unittest.TestCase):
         self.assertEqual(projected["title"], "safe_ingest: HIDDEN_CONTENT status bug")
         self.assertEqual(projected["body"], "Body containing <!-- some comment --> that triggers normalisation")
         self.assertTrue(projected.get("has_hidden_content"))
+
+    def test_evaluate_and_sanitize_item_preserves_benign_emoji_and_does_not_flag_hidden_content(self):
+        """Issue #86: Benign emoji variation selectors must not flag HIDDEN_CONTENT."""
+        issue_with_emoji = {
+            "number": 86,
+            "title": "Bug report with \u26a0\ufe0f warning and \u2714\ufe0f check",
+            "body": "Fix step 1\ufe0f\u20e3: check \u2764\ufe0f heart and \u2139\ufe0f info",
+            "author": {"login": "maintainer-user"},
+            "createdAt": "2026-11-13T14:00:00Z",
+            "labels": [{"name": "bug"}],
+            "comments": [
+                {
+                    "id": "c1",
+                    "author": {"login": "maintainer-user"},
+                    "body": "Comment with \u26a0\ufe0f warning",
+                    "createdAt": "2026-11-13T14:05:00Z",
+                }
+            ],
+        }
+        ok, reason, clean = evaluate_and_sanitize_item(issue_with_emoji, self.trusted)
+        self.assertTrue(ok)
+        self.assertEqual(reason, "TRUSTED_AUTHOR")
+        self.assertIsNotNone(clean)
+        self.assertNotIn("has_hidden_content", clean)
+        self.assertNotEqual(clean.get("approval_status"), "HIDDEN_CONTENT")
+        self.assertEqual(clean["title"], "Bug report with \u26a0\ufe0f warning and \u2714\ufe0f check")
+        self.assertEqual(clean["body"], "Fix step 1\ufe0f\u20e3: check \u2764\ufe0f heart and \u2139\ufe0f info")
+        self.assertEqual(clean["comments"][0]["body"], "Comment with \u26a0\ufe0f warning")
+
+    def test_evaluate_and_sanitize_item_flags_smuggled_variation_selectors(self):
+        """Issue #86: Runs of variation selectors or VS on non-emoji must still flag HIDDEN_CONTENT."""
+        issue_smuggled = {
+            "number": 87,
+            "title": "Clean title",
+            "body": "Body with smuggled variation selectors: a" + "\ufe0f" * 8,
+            "author": {"login": "maintainer-user"},
+            "createdAt": "2026-11-13T14:00:00Z",
+            "labels": [{"name": "bug"}],
+            "comments": [],
+        }
+        ok, reason, clean = evaluate_and_sanitize_item(issue_smuggled, self.trusted)
+        self.assertTrue(ok)
+        self.assertEqual(reason, "TRUSTED_AUTHOR")
+        self.assertIsNotNone(clean)
+        self.assertTrue(clean.get("has_hidden_content"))
+        self.assertEqual(clean.get("approval_status"), "HIDDEN_CONTENT")
+        self.assertEqual(clean["body"], "Body with smuggled variation selectors: a")
 
 if __name__ == "__main__":
 

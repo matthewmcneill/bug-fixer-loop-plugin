@@ -329,6 +329,62 @@ def _strip_format_controls(text: str) -> str:
         result.append(ch)
     return ''.join(result)
 
+
+def _is_variation_selector(ch: str) -> bool:
+    """Returns True if ch is a Unicode variation selector (VS1-VS16 or VS17-VS256)."""
+    cp = ord(ch)
+    return (0xFE00 <= cp <= 0xFE0F) or (0xE0100 <= cp <= 0xE01EF)
+
+
+def _has_presentation_variant(base: str, next_ch: str | None) -> bool:
+    """Returns True if the base character has an emoji/text presentation sequence."""
+    cp = ord(base)
+    if 0x2190 <= cp <= 0x2BFF or 0x1F000 <= cp <= 0x1FAFF:
+        return True
+    if cp in (0x00A9, 0x00AE, 0x203C, 0x2049, 0x2122, 0x2139, 0x3030, 0x303D, 0x3297, 0x3299):
+        return True
+    if base in "#*0123456789" and next_ch == "\u20e3":
+        return True
+    return False
+
+
+def _normalise_variation_selectors(text: str) -> str:
+    """Normalises Unicode variation selectors in text.
+
+    Treats a single U+FE0F (or U+FE0E) as benign when it immediately follows a code
+    point that has an emoji/text presentation sequence:
+      - the base is in the common emoji blocks (U+2190-U+2BFF, U+1F000-U+1FAFF) or
+        specific symbols (U+00A9, U+00AE, U+203C, U+2049, U+2122, U+2139, U+3030,
+        U+303D, U+3297, U+3299), or
+      - the base is one of '#*0-9' where a keycap U+20E3 follows.
+
+    Strips:
+      - any run of two or more consecutive variation selectors
+      - any U+FE00-U+FE0D
+      - any variation selector after a base that has no presentation variant
+      - all of U+E0100-U+E01EF
+    """
+    result: list[str] = []
+    n = len(text)
+    for i, ch in enumerate(text):
+        if not _is_variation_selector(ch):
+            result.append(ch)
+            continue
+        prev_is_vs = (i > 0 and _is_variation_selector(text[i - 1]))
+        next_is_vs = (i + 1 < n and _is_variation_selector(text[i + 1]))
+        if prev_is_vs or next_is_vs:
+            continue
+        if ch not in ("\ufe0e", "\ufe0f"):
+            continue
+        if i == 0:
+            continue
+        base = text[i - 1]
+        next_ch = text[i + 1] if i + 1 < n else None
+        if _has_presentation_variant(base, next_ch):
+            result.append(ch)
+    return "".join(result)
+
+
 def normalise_visible_content(text: str) -> str:
     """Normalises visible content by stripping non-allowlisted HTML comments,
     Unicode tag characters (ASCII smuggling), zero-width characters, and bidi overrides.
@@ -354,8 +410,8 @@ def normalise_visible_content(text: str) -> str:
                 idx = cleaned.find("<!--", idx)
 
     cleaned = re.sub(r"\[//\]:\s*#\s*\([^)]*\)", "", cleaned)
-    cleaned = re.sub(r"[\ufe00-\ufe0f\U000e0100-\U000e01ef]", "", cleaned)
-    
+    cleaned = _normalise_variation_selectors(cleaned)
+
     return _strip_format_controls(cleaned)
 
 
