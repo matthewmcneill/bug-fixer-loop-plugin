@@ -52,32 +52,29 @@ else
 fi
 
 if [[ -n "$TARGET_REPO_DIR" ]]; then
-  PLUGINS_JSON="$TARGET_REPO_DIR/.agents/plugins.json"
-  if [[ -f "$PLUGINS_JSON" ]]; then
-    python3 - <<EOF
-import json
-import os
+  if [[ -f "$INSTALL_DIR/scripts/manage.py" ]]; then
+    python3 - "$INSTALL_DIR/scripts" "$TARGET_REPO_DIR" <<'PY'
+import sys
 
-path = "$PLUGINS_JSON"
-try:
-    with open(path, "r") as f:
-        data = json.load(f)
-    
-    entries = data.get("entries", [])
-    remove_paths = {
-        "~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin",
-        "~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer",
-    }
-    new_entries = [e for e in entries if e.get("path") not in remove_paths]
-    
-    data["entries"] = new_entries
-    
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-except Exception as e:
-    print(f"Error updating {path}: {e}")
-EOF
-    echo "Removed entry from $PLUGINS_JSON"
+scripts_dir, repo_dir = sys.argv[1], sys.argv[2]
+sys.path.insert(0, scripts_dir)
+import manage
+
+if manage._unstage_workspace_plugin(repo_dir):
+    print(f"Removed staged workspace plugin from {repo_dir}")
+pj_status = manage._remove_bug_fixer_from_plugins_json(repo_dir)
+if pj_status in ("updated", "unlinked"):
+    print(f"Cleaned consumer plugins.json ({pj_status})")
+PY
+  else
+    STAGED_DIR="$TARGET_REPO_DIR/.agents/plugins/bug-fixer"
+    if [[ -L "$STAGED_DIR" ]]; then
+      rm -f "$STAGED_DIR"
+      echo "Removed staged workspace plugin symlink: $STAGED_DIR"
+    elif [[ -d "$STAGED_DIR" ]]; then
+      rm -rf "$STAGED_DIR"
+      echo "Removed staged workspace plugin: $STAGED_DIR"
+    fi
   fi
 fi
 

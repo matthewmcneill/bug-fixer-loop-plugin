@@ -1,15 +1,72 @@
+from __future__ import annotations
+
+import fcntl
+import hashlib
 import json
 import os
-import hashlib
-import fcntl
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def _find_daemon_dir() -> Path | None:
+    """Locate bug-fixer-daemon root via ancestors or default ~/.gemini install dir."""
+    script_dir = Path(__file__).resolve().parent
+    for ancestor in (script_dir.parent, *script_dir.parents):
+        manifest = ancestor / "plugin.json"
+        if manifest.is_file():
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+                if data.get("name") == "bug-fixer-daemon":
+                    return ancestor
+            except (json.JSONDecodeError, OSError):
+                continue
+    default_daemon = Path.home() / ".gemini" / "config" / "plugins" / "bug-fixer-daemon"
+    default_manifest = default_daemon / "plugin.json"
+    if default_manifest.is_file():
+        try:
+            data = json.loads(default_manifest.read_text(encoding="utf-8"))
+            if data.get("name") == "bug-fixer-daemon":
+                return default_daemon
+        except (json.JSONDecodeError, OSError):
+            pass
+    return None
+
+
+def _sidecar_dir_for_cwd() -> Path | None:
+    """Resolve the active sidecar directory matching Path.cwd(), if any."""
+    daemon_dir = _find_daemon_dir()
+    if not daemon_dir:
+        return None
+    sidecars_dir = daemon_dir / "sidecars"
+    if not sidecars_dir.is_dir():
+        return None
+    try:
+        cwd_resolved = Path.cwd().resolve()
+    except OSError:
+        return None
+    for sidecar in sidecars_dir.iterdir():
+        cfg_path = sidecar / "config.json"
+        if not cfg_path.is_file():
+            continue
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            repo_dir = cfg.get("repo_dir", "")
+            if repo_dir and cwd_resolved.is_relative_to(Path(repo_dir).resolve()):
+                return sidecar
+        except (json.JSONDecodeError, OSError):
+            continue
+    return None
+
 
 def _get_audit_log_path(config_path: str = "") -> Path:
     config_env = os.environ.get("BUG_FIXER_CONFIG", config_path)
     if config_env and Path(config_env).is_file():
         return Path(config_env).resolve().parent / "security_refusals.jsonl"
-    return Path(__file__).resolve().parent.parent.parent.parent / "bug-fixer-loop-workspace" / "security_refusals.jsonl"
+    sidecar_dir = _sidecar_dir_for_cwd()
+    if sidecar_dir is not None:
+        return sidecar_dir / "security_refusals.jsonl"
+    return Path(tempfile.gettempdir()) / f"bug-fixer-security-refusals-{os.getuid()}.jsonl"
 
 def log_security_event(provider: str, reason: str, confidence: float, input_text: str, config_path: str = "") -> None:
     log_path = _get_audit_log_path(config_path)

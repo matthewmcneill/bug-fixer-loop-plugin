@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -104,8 +105,89 @@ class TestInstallScript(unittest.TestCase):
             self.assertEqual(result.returncode, 0, f"stdout: {result.stdout}, stderr: {result.stderr}")
             installed_daemon = fake_home / ".gemini" / "config" / "plugins" / "bug-fixer-daemon"
             self.assertTrue((installed_daemon / "plugin.json").exists())
+            self.assertFalse((installed_daemon / "hooks.json").exists())
+            self.assertTrue(
+                (installed_daemon / "workspace-plugin" / "bug-fixer" / "hooks.json").exists()
+            )
+            daemon_ver = json.loads((installed_daemon / "plugin.json").read_text())["version"]
+            ws_ver = json.loads(
+                (installed_daemon / "workspace-plugin" / "bug-fixer" / "plugin.json").read_text()
+            )["version"]
+            self.assertTrue(daemon_ver)
+            self.assertEqual(daemon_ver, ws_ver)
             self.assertTrue((installed_daemon / "scripts" / "manage.py").exists())
             self.assertTrue((installed_daemon / "sidecars").is_dir())
+        finally:
+            shutil.rmtree(tmpdir)
+
+    def test_from_release_upgrades_legacy_global_hooks_and_symlink_repo(self):
+        """Upgrading removes global hooks.json, replaces symlink, and scrubs plugins.json."""
+        tmpdir = tempfile.mkdtemp()
+        try:
+            tar_path = Path(tmpdir) / "bug-fixer-daemon.tar.gz"
+            subprocess.run(
+                [
+                    "tar",
+                    "--exclude=__pycache__",
+                    "--exclude=*.pyc",
+                    "-czf",
+                    str(tar_path),
+                    "-C",
+                    str(DAEMON_DIR),
+                    ".",
+                ],
+                check=True,
+            )
+
+            fake_home = Path(tmpdir) / "fake_home"
+            installed_daemon = fake_home / ".gemini" / "config" / "plugins" / "bug-fixer-daemon"
+            sc_dir = installed_daemon / "sidecars" / "o--r"
+            sc_dir.mkdir(parents=True)
+            (installed_daemon / "hooks.json").write_text("{}\n")
+
+            consumer = Path(tmpdir) / "consumer-repo"
+            consumer.mkdir()
+            (consumer / ".agents" / "plugins").mkdir(parents=True)
+            target_stub = Path(tmpdir) / "legacy-target"
+            target_stub.mkdir()
+            (target_stub / "keep.txt").write_text("intact")
+            os.symlink(target_stub, consumer / ".agents" / "plugins" / "bug-fixer")
+            (consumer / ".agents" / "plugins.json").write_text(
+                json.dumps(
+                    {
+                        "entries": [
+                            {
+                                "path": "~/.gemini/config/plugins/bug-fixer-daemon/"
+                                "workspace-plugin/bug-fixer"
+                            }
+                        ]
+                    }
+                )
+            )
+            (sc_dir / "config.json").write_text(
+                json.dumps({"target_repo": "o/r", "repo_dir": str(consumer)})
+            )
+            (sc_dir / "sidecar.json").write_text(json.dumps({"env": {}}))
+
+            env = os.environ.copy()
+            env["HOME"] = str(fake_home)
+            env["ANTIGRAVITY_PROJECT_ID"] = "proj-1"
+            result = subprocess.run(
+                [str(INSTALL_SH), f"--from-release=file://{tar_path}"],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(
+                result.returncode, 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+            )
+            self.assertFalse((installed_daemon / "hooks.json").exists())
+            staged = consumer / ".agents" / "plugins" / "bug-fixer"
+            self.assertTrue(staged.is_dir())
+            self.assertFalse(staged.is_symlink())
+            self.assertTrue((staged / "hooks.json").is_file())
+            self.assertFalse((consumer / ".agents" / "plugins.json").exists())
+            self.assertEqual((target_stub / "keep.txt").read_text(), "intact")
         finally:
             shutil.rmtree(tmpdir)
 

@@ -26,12 +26,13 @@ All commands below use: `python3 <MANAGE_SCRIPT> <subcommand> [args]`
 | **status** | `python3 <MANAGE_SCRIPT> status [--repo owner/repo]` |
 | **logs** | `python3 <MANAGE_SCRIPT> logs triage [--repo owner/repo] [-n 50]` |
 | **config** | `python3 <MANAGE_SCRIPT> config [--repo owner/repo]` |
+| **doctor** | `python3 <MANAGE_SCRIPT> doctor [--repo owner/repo]` |
 
 ---
 
 ## Mutable Commands — Deterministic HITL via `PreToolUse` (`force_ask`)
 
-> **IMPORTANT**: Mutable `manage.py` operations (`enroll`, `unenroll`, `config --set`, `reset`, `labels`, `refresh-sidecars`) are gated deterministically by `pre_tool_gate.py`.
+> **IMPORTANT**: Mutable `manage.py` operations (`enroll`, `unenroll`, `config --set`, `reset`, `labels`, `refresh-sidecars`, `doctor --fix`) are gated deterministically by `pre_tool_gate.py`.
 > - In **interactive sessions**, `pre_tool_gate.py` returns `{"decision": "force_ask", ...}`, which triggers the native Antigravity tool-execution confirmation prompt on the `run_command` call itself.
 > - In **autonomous sessions** (sidecar / dispatched agents), `pre_tool_gate.py` returns `{"decision": "deny", ...}` — autonomous loops cannot execute management mutations.
 > - **Do NOT call `ask_question` simply to confirm a `manage.py` command** before running `run_command` (doing so creates a redundant double-confirmation prompt). Only use `ask_question` if a required parameter is genuinely missing or ambiguous (e.g., multiple enrolled repos when the user didn't specify which one).
@@ -52,6 +53,7 @@ All commands below use: `python3 <MANAGE_SCRIPT> <subcommand> [args]`
 | **config --set** | `--set KEY=VALUE --repo SLUG` | Operational keys only (allowlisted) |
 | **reset** | `--cooldowns / --locks / --dispatches / --all [--repo SLUG]` | Clears stuck state |
 | **labels --sync** | `--repo SLUG` | Creates missing GitHub labels |
+| **doctor --fix** | `--fix [--repo SLUG]` | Stages/repairs `.agents/plugins/bug-fixer/` and cleans `.agents/plugins.json` |
 
 ---
 
@@ -113,6 +115,10 @@ After successful enrollment, tell the user:
 
 ### Labels
 1. Run label sync (native `force_ask` prompt confirms execution): `python3 <MANAGE_SCRIPT> labels --sync --repo owner/repo`
+
+### Doctor (verify / repair staged workspace plugin)
+1. Check installation and staged `<repo>/.agents/plugins/bug-fixer/` copies: `python3 <MANAGE_SCRIPT> doctor [--repo owner/repo]`
+2. Repair drifted/symlinked workspace plugin copies or stray legacy files (native `force_ask` prompt confirms execution): `python3 <MANAGE_SCRIPT> doctor --fix [--repo owner/repo]`
 
 ---
 

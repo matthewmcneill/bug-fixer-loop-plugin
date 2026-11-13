@@ -32,13 +32,42 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
+      - name: Stamp release version and verify manifests
+        run: |
+          VERSION="${{ steps.vars.outputs.tag }}"
+          VERSION="${VERSION#v}"
+          test ! -e daemon/hooks.json
+          test -f daemon/workspace-plugin/bug-fixer/hooks.json
+          python3 - "$VERSION" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          ver = sys.argv[1]
+          for path_str in (
+              "daemon/plugin.json",
+              "daemon/workspace-plugin/bug-fixer/plugin.json",
+          ):
+              p = Path(path_str)
+              data = json.loads(p.read_text(encoding="utf-8"))
+              data["version"] = ver
+              p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+          PY
+
       - name: Package daemon directory
         run: |
           mkdir -p dist
           # Build .tar.gz containing daemon/ contents at the root of the archive
-          tar --exclude='__pycache__' --exclude='*.pyc' --exclude='.DS_Store' -czf dist/bug-fixer-daemon.tar.gz -C daemon .
+          tar \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='*.pyo' \
+            --exclude='*.egg-info' \
+            --exclude='.DS_Store' \
+            -czf dist/bug-fixer-daemon.tar.gz -C daemon .
           # Build .zip containing daemon/ contents at the root of the archive
-          (cd daemon && zip -r ../dist/bug-fixer-daemon.zip . -x "*__pycache__*" "*.pyc" "*.DS_Store")
+          (cd daemon && zip -r ../dist/bug-fixer-daemon.zip . \
+            -x "*__pycache__*" "*.pyc" "*.pyo" "*.egg-info*" "*.DS_Store")
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2

@@ -73,7 +73,7 @@ REASON_AUTO_MERGE = (
 REASON_SELF_APPROVAL = (
     "Self-approval is prohibited: PR self-approval via `gh pr review --approve` is forbidden. "
     "To post a non-approval review, use: "
-    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py pr-review <number> --body \"...\"`"
+    "`python3 .agents/plugins/bug-fixer/scripts/safe_post.py pr-review <number> --body \"...\"`"
 )
 REASON_ISSUE_REOPEN = (
     "Issue reopening is prohibited: Autonomous agents are prohibited from running "
@@ -86,7 +86,8 @@ REASON_APPROVAL_INJECTION = (
 REASON_RAW_GH = (
     "Use safe_ingest.py instead of raw gh commands: Direct `gh issue/pr list` "
     "and `gh issue/pr view` commands are prohibited. Use "
-    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_ingest.py` instead, run from the repository root."
+    "`python3 .agents/plugins/bug-fixer/scripts/safe_ingest.py` instead, "
+    "run from the repository root."
 )
 REASON_SHELL_MUTATION = (
     "Protected file shell mutation blocked: Shell mutation targeting spec or "
@@ -96,13 +97,15 @@ REASON_EGRESS_LEAK = (
     "Egress leak blocked: Outbound GitHub command body contains content "
     "matching configured leak patterns. Content not sent. "
     "Route all GitHub writes through: "
-    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py` which scans content before posting."
+    "`python3 .agents/plugins/bug-fixer/scripts/safe_post.py` "
+    "which scans content before posting."
 )
 REASON_UNSCANNABLE = (
     "Egress blocked: outbound content comes from a source the gate cannot inspect "
     "(stdin, a shell variable, a command substitution or a glob). "
     "Route GitHub writes through: "
-    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py` which accepts body text as a CLI argument."
+    "`python3 .agents/plugins/bug-fixer/scripts/safe_post.py` "
+    "which accepts body text as a CLI argument."
 )
 REASON_UNSCANNABLE_STDIN = REASON_UNSCANNABLE
 REASON_DYNAMIC_EXEC = (
@@ -110,7 +113,7 @@ REASON_DYNAMIC_EXEC = (
     'runtime (bash -c "$VAR", eval, piping into a shell or interpreter, xargs into gh, '
     "gh aliases/extensions, git exec-config). Run the command directly. "
     "For GitHub reads use safe_ingest.py; for GitHub writes use: "
-    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py`"
+    "`python3 .agents/plugins/bug-fixer/scripts/safe_post.py`"
 )
 REASON_DYNAMIC_WRITE = (
     "Write target must be a literal path: the gate cannot verify that a runtime-built "
@@ -119,7 +122,7 @@ REASON_DYNAMIC_WRITE = (
 REASON_INLINE_GH = (
     "Inline code must not invoke gh: run gh commands directly so the gate can inspect them. "
     "For GitHub reads use safe_ingest.py; for GitHub writes use: "
-    "`python3 ~/.gemini/config/plugins/bug-fixer-daemon/workspace-plugin/bug-fixer/scripts/safe_post.py`"
+    "`python3 .agents/plugins/bug-fixer/scripts/safe_post.py`"
 )
 # REASON_PROXY removed — safe_post.py is now allowed for all agents.
 REASON_SECRET_DISCLOSURE = (
@@ -172,8 +175,8 @@ PROTECTED_ADD_LABELS = frozenset({
 
 HOST_SECURITY_SCRIPTS = frozenset({
     "pre_tool_gate.py", "safe_ingest.py", "safe_post.py",
-    "injection_scanner.py", "shell_analysis.py", "github_url_gate.py",
-    "integrity_monitor.py",
+    "injection_scanner.py", "shell_analysis.py", "security_audit.py",
+    "github_url_gate.py", "integrity_monitor.py",
 })
 # Scripts in the daemon scripts/ dir that agents may execute (but not write).
 DAEMON_TRUSTED_SCRIPTS = frozenset({
@@ -189,14 +192,20 @@ _STATIC_PROTECTED = frozenset(
     }
 )
 
+
 def _find_daemon_dir(script_dir: Path) -> Path | None:
     """Find the daemon plugin root by matching name == 'bug-fixer-daemon'.
 
     Must check the manifest name, not just existence, because the workspace
     plugin also has a plugin.json (name: 'bug-fixer').
     """
-    for ancestor in [script_dir.parent, script_dir.parent.parent,
-                     script_dir.parent.parent.parent]:
+    candidates = [
+        script_dir.parent,
+        script_dir.parent.parent,
+        script_dir.parent.parent.parent,
+        Path.home() / ".gemini" / "config" / "plugins" / "bug-fixer-daemon",
+    ]
+    for ancestor in candidates:
         manifest = ancestor / "plugin.json"
         if manifest.is_file():
             try:
@@ -208,43 +217,53 @@ def _find_daemon_dir(script_dir: Path) -> Path | None:
     return None
 
 
-def _derive_workspace_paths(loaded_config_path: Path | None = None) -> frozenset[str]:
+def _derive_workspace_paths(
+    loaded_config_path: Path | None = None,
+    repo_dir: str | None = None,
+) -> frozenset[str]:
     """Build the full SCANNER_PROTECTED_FILES set.
 
     Derives workspace paths from the config that was loaded, so they
-    always protect the target repo's config regardless of install layout.
-    Falls back to cwd-based derivation.
+    always protect the target repo's config and staged plugin files regardless
+    of install layout.
     """
     protected = set(_STATIC_PROTECTED)
 
     # Protect the loaded config's directory
+    repo_dir_str = repo_dir
     if loaded_config_path:
         ws_dir = loaded_config_path.resolve().parent
         protected.add(str(ws_dir / "config.json"))
         protected.add(str(ws_dir / "injection_cache.json"))
         protected.add(str(ws_dir / ".integrity_snapshot.json"))
         protected.add(str(ws_dir / "sidecar.json"))
+        if not repo_dir_str:
+            try:
+                data = json.loads(loaded_config_path.read_text())
+                repo_dir_str = data.get("repo_dir")
+            except (json.JSONDecodeError, OSError):
+                pass
 
     # Legacy relative paths
     protected.add(".agents/plugins/bug-fixer-loop-workspace/config.json")
     protected.add(".agents/plugins/bug-fixer-loop-workspace/injection_cache.json")
 
-    # Protect .agents/plugins.json (both absolute and relative)
+    # Protect .agents/plugins.json and staged .agents/plugins/bug-fixer/ manifests
     protected.add(".agents/plugins.json")
-    if loaded_config_path:
-        repo_dir_str = None
-        try:
-            data = json.loads(loaded_config_path.read_text())
-            repo_dir_str = data.get("repo_dir")
-        except (json.JSONDecodeError, OSError):
-            pass
-        if repo_dir_str:
-            protected.add(str(Path(repo_dir_str) / ".agents" / "plugins.json"))
+    protected.add(".agents/plugins/bug-fixer/plugin.json")
+    protected.add(".agents/plugins/bug-fixer/hooks.json")
 
-    # Prefix-protect the entire daemon install directory
+    if repo_dir_str:
+        protected.add(str(Path(repo_dir_str) / ".agents" / "plugins.json"))
+        staged_dir = Path(repo_dir_str) / ".agents" / "plugins" / "bug-fixer"
+        protected.add(f"PREFIX:{os.path.normpath(str(staged_dir))}/")
+        protected.add(f"PREFIX:{os.path.realpath(str(staged_dir))}/")
+
+    # Prefix-protect the entire daemon install directory (norm and realpath)
     daemon_dir = _find_daemon_dir(Path(__file__).resolve().parent)
     if daemon_dir:
-        protected.add(f"PREFIX:{daemon_dir}/")  # trailing slash prevents matching bug-fixer-daemon2/
+        protected.add(f"PREFIX:{os.path.normpath(str(daemon_dir))}/")
+        protected.add(f"PREFIX:{os.path.realpath(str(daemon_dir))}/")
 
     return frozenset(protected)
 
@@ -420,13 +439,34 @@ def evaluate_gate_a(
     workspace_paths: list[str] | None = None,
 ) -> dict[str, str] | None:
     """Gate A: File Write Protection."""
-    file_mutation_tools = {"write_to_file", "replace_file_content", "multi_replace_file_content"}
-    target_file = str(args.get("TargetFile") or args.get("target_file") or "").strip()
+    file_mutation_tools = {
+        "write_to_file",
+        "write_file",
+        "replace_file_content",
+        "edit_file",
+        "multi_replace_file_content",
+        "sed_file",
+        "notebook_edit",
+    }
+    target_file = str(
+        args.get("TargetFile")
+        or args.get("target_file")
+        or args.get("Path")
+        or args.get("path")
+        or args.get("FilePath")
+        or args.get("file_path")
+        or args.get("TargetPath")
+        or args.get("NotebookPath")
+        or args.get("notebook_path")
+        or ""
+    ).strip()
     if not target_file:
         return {"decision": "allow"} if tool_name in file_mutation_tools else None
 
-    if not os.path.isabs(target_file) and workspace_paths and workspace_paths[0]:
-        target_file = os.path.join(workspace_paths[0], target_file)
+    if not os.path.isabs(target_file):
+        base_dir = workspace_paths[0] if workspace_paths and workspace_paths[0] else repo_dir
+        if base_dir:
+            target_file = os.path.join(base_dir, target_file)
 
     target_norm = os.path.normpath(target_file.strip())
     if os.path.basename(target_norm).startswith(".integrity_snapshot") or any(
@@ -436,6 +476,12 @@ def evaluate_gate_a(
 
     if is_host_script_target(target_file):
         return {"decision": "deny", "reason": REASON_HOST_SCRIPT}
+    if (
+        target_norm == ".agents/plugins/bug-fixer"
+        or target_norm.startswith(".agents/plugins/bug-fixer/")
+        or "/.agents/plugins/bug-fixer/" in (target_norm + "/")
+    ):
+        return {"decision": "deny", "reason": REASON_PROTECTED_FILE}
     if spec_file_path and is_path_match(target_file, spec_file_path, repo_dir):
         return {"decision": "deny", "reason": REASON_SPEC_IMMUTABLE}
     all_protected = list(protected_files) + sorted(SCANNER_PROTECTED_FILES)
@@ -961,11 +1007,20 @@ class _ProtectedPaths:
         for pf in protected_files:
             add(str(pf), distinctive_name=True)
         host_scripts: set[str] = set()
-        for script in HOST_SECURITY_SCRIPTS:
-            real = os.path.normpath(str(_SCRIPTS_DIR / script))
-            abs_paths.add(real)
-            host_scripts.add(real)
-            names.add(script)
+        script_dirs = [_SCRIPTS_DIR]
+        daemon_dir = _find_daemon_dir(_SCRIPTS_DIR)
+        if daemon_dir:
+            daemon_scripts = daemon_dir / "workspace-plugin" / "bug-fixer" / "scripts"
+            if daemon_scripts != _SCRIPTS_DIR:
+                script_dirs.append(daemon_scripts)
+        for sdir in script_dirs:
+            for script in HOST_SECURITY_SCRIPTS:
+                raw_path = os.path.normpath(str(sdir / script))
+                real_path = os.path.normpath(os.path.realpath(raw_path))
+                for p in (raw_path, real_path):
+                    abs_paths.add(p)
+                    host_scripts.add(p)
+                names.add(script)
 
         alternatives = sorted(names | abs_paths, key=len, reverse=True)
         regex = None
@@ -2104,9 +2159,96 @@ def _classify_manage_invocation(
                     f"Config key '{key}' cannot be modified via manage.py config --set.",
                 )
         return ("mutate", f"config {' '.join(sub_args)}".strip())
+    if sub == "doctor":
+        if "--fix" in sub_args:
+            return ("mutate", f"doctor {' '.join(sub_args)}".strip())
+        return ("allow", "")
     if sub in _MANAGE_MUTABLE_SUBCOMMANDS:
         return ("mutate", f"{sub} {' '.join(sub_args)}".strip())
     return ("deny", "Unknown manage.py subcommand.")
+
+
+_LIFECYCLE_SCRIPT_NAMES = frozenset({
+    "install.sh",
+    "uninstall.sh",
+    "enroll.sh",
+    "unenroll.sh",
+})
+_SHELL_RUNNER_NAMES = frozenset({"bash", "sh", "zsh"})
+
+
+def _is_canonical_plugin_repo_root(repo_root: Path) -> bool:
+    """True when repo_root holds the canonical bug-fixer daemon and workspace plugin."""
+    manifest = repo_root / "daemon" / "plugin.json"
+    manage_py = repo_root / "daemon" / "scripts" / "manage.py"
+    ws_manifest = repo_root / "daemon" / "workspace-plugin" / "bug-fixer" / "plugin.json"
+    if not (manifest.is_file() and manage_py.is_file() and ws_manifest.is_file()):
+        return False
+    try:
+        data = json.loads(manifest.read_text())
+        return data.get("name") == "bug-fixer-daemon"
+    except (json.JSONDecodeError, OSError):
+        return False
+
+
+def _classify_lifecycle_script_invocation(
+    seg: Segment, cwd: str | None
+) -> tuple[str, str] | None:
+    """Classify canonical scripts/{install,uninstall,enroll,unenroll}.sh invocations."""
+    prog, args, split_string = _unwrap(seg.argv)
+    if prog is None or prog.dynamic or split_string is not None:
+        return None
+
+    candidate_token: str | None = None
+    if Path(prog.text).name in _LIFECYCLE_SCRIPT_NAMES:
+        candidate_token = prog.text
+    elif Path(prog.text).name in _SHELL_RUNNER_NAMES:
+        for w in args:
+            if w.dynamic:
+                return None
+            if w.text.startswith("-"):
+                continue
+            if Path(w.text).name in _LIFECYCLE_SCRIPT_NAMES:
+                candidate_token = w.text
+            break
+
+    if candidate_token is None:
+        return None
+
+    candidate_path = _resolve_manage_candidate(candidate_token, cwd)
+    if candidate_path is None or candidate_path.parent.name != "scripts":
+        return None
+    if not _is_canonical_plugin_repo_root(candidate_path.parent.parent):
+        return None
+
+    if seg.assignments or seg.redirects_out or seg.piped_from is not None:
+        return (
+            "deny",
+            "Unsafe lifecycle script invocation: environment overrides, shell flags, "
+            "or redirects are not permitted.",
+        )
+
+    argv = seg.argv
+    if not argv or any(not w.literal or w.globbed for w in argv) or argv[0].text != prog.text:
+        return (
+            "deny",
+            "Unsafe lifecycle script invocation: environment overrides, shell flags, "
+            "or dynamic arguments are not permitted.",
+        )
+
+    idx = 0
+    if Path(argv[idx].text).name in _SHELL_RUNNER_NAMES:
+        idx += 1
+        if idx < len(argv) and argv[idx].text.startswith("-"):
+            return (
+                "deny",
+                "Unsafe lifecycle script invocation: shell flags are not permitted.",
+            )
+    if idx >= len(argv):
+        return ("deny", "Unsafe lifecycle script invocation: missing script path.")
+    idx += 1
+    rest = [w.text for w in argv[idx:]]
+    return ("mutate", f"{candidate_path.name} {' '.join(rest)}".strip())
 
 
 def _check_safe_ingest_and_trust_env(
@@ -2174,6 +2316,25 @@ def _check_segment(
                 {
                     "decision": "force_ask",
                     "reason": f"Confirm Bug Fixer management change: {detail}",
+                },
+                cwd,
+            )
+
+    lifecycle_class = _classify_lifecycle_script_invocation(seg, cwd)
+    if lifecycle_class is not None:
+        kind, detail = lifecycle_class
+        if kind == "deny":
+            return _deny(detail), cwd
+        if kind == "mutate":
+            if _is_autonomous_session(ctx.conversation_id):
+                return (
+                    _deny("Autonomous bug-fixer sessions cannot execute lifecycle mutations."),
+                    cwd,
+                )
+            return (
+                {
+                    "decision": "force_ask",
+                    "reason": f"Confirm Bug Fixer lifecycle change: {detail}",
                 },
                 cwd,
             )
@@ -2500,10 +2661,13 @@ def _check_command_text(
     for seg in parsed.segments:
         before = current
         manage_class = _classify_manage_invocation(seg, current)
-        if manage_class is not None and manage_class[0] == "mutate":
+        lifecycle_class = _classify_lifecycle_script_invocation(seg, current)
+        mut_class = manage_class or lifecycle_class
+        if mut_class is not None and mut_class[0] == "mutate":
             if len(active_segments) > 1 or parsed.substitutions or depth > 0:
+                label = "Management" if manage_class is not None else "Lifecycle script"
                 return _deny(
-                    "Management mutations must be run as a standalone command "
+                    f"{label} mutations must be run as a standalone command "
                     "without shell chaining or substitutions."
                 )
         denied, current = _check_segment(seg, ctx, current, depth)
@@ -2662,8 +2826,12 @@ def evaluate_pretool_call(payload: dict[str, Any], config: dict[str, Any]) -> di
     # Ensure SCANNER_PROTECTED_FILES matches the loaded config
     global SCANNER_PROTECTED_FILES
     loaded_from = config.get("_loaded_from") if config else None
-    if loaded_from:
-        SCANNER_PROTECTED_FILES = _derive_workspace_paths(Path(loaded_from))
+    repo_dir_cfg = str(config.get("repo_dir", "")).strip() or None if config else None
+    if loaded_from or repo_dir_cfg:
+        SCANNER_PROTECTED_FILES = _derive_workspace_paths(
+            Path(loaded_from) if loaded_from else None,
+            repo_dir=repo_dir_cfg,
+        )
 
     tool_name = ""
     args: dict[str, Any] = {}
@@ -2683,7 +2851,9 @@ def evaluate_pretool_call(payload: dict[str, Any], config: dict[str, Any]) -> di
     spec_file_path = str(config.get("spec_file_path", "")).strip()
     protected_files = list(config.get("protected_files", []))
     repo_dir = str(config.get("repo_dir", "")).strip() or None
-    conversation_id = str(payload.get("conversationId") or "").strip()
+    conversation_id = str(
+        payload.get("conversationId") or payload.get("conversation_id") or ""
+    ).strip()
 
     workspace_paths = (
         payload.get("workspacePaths") if isinstance(payload.get("workspacePaths"), list) else []
@@ -2772,6 +2942,18 @@ class ScanBackend(Protocol):
     def config_hash(self) -> str: ...  # SHA-256 of the active ruleset/config
 
 
+def _normalise_rel_scan_path(path: str, repo_dir: str | None = None) -> str:
+    cleaned = path.strip()
+    if repo_dir and os.path.isabs(cleaned):
+        try:
+            cleaned = os.path.relpath(cleaned, repo_dir)
+        except ValueError:
+            pass
+    while cleaned.startswith("./"):
+        cleaned = cleaned.removeprefix("./")
+    return cleaned.lstrip("/")
+
+
 class RegexBackend:
     name: str = "regex"
     version: str = "builtin"
@@ -2786,7 +2968,11 @@ class RegexBackend:
         content = "\n".join(sorted(valid_patterns))
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-    DEFAULT_REGEX_EXCLUDE_PATHS = ["tests/", ".agents/skills/principal-architect-workspace/"]
+    DEFAULT_REGEX_EXCLUDE_PATHS = [
+        "tests/",
+        ".agents/skills/principal-architect-workspace/",
+        ".agents/plugins/bug-fixer/",
+    ]
 
     def scan(
         self,
@@ -2794,10 +2980,11 @@ class RegexBackend:
         scope: ScanScope,
         exclude_paths: list[str] | None = None,
     ) -> list[ScanViolation]:
-        if not exclude_paths:
-            exclude_paths = self.DEFAULT_REGEX_EXCLUDE_PATHS
-        else:
-            exclude_paths = [p for p in exclude_paths if p and p != "/"]
+        raw_excludes = exclude_paths if exclude_paths else self.DEFAULT_REGEX_EXCLUDE_PATHS
+        norm_excludes = [
+            _normalise_rel_scan_path(p) for p in raw_excludes if p and p != "/"
+        ]
+        norm_excludes = [p for p in norm_excludes if p]
         if isinstance(scope, str):
             scope = ScanScope(scope)
 
@@ -2836,10 +3023,13 @@ class RegexBackend:
         files = sorted(set(raw_files))
 
         for rel_path in files:
-            if not rel_path or rel_path.startswith(".git/") or rel_path.startswith("_agents/"):
+            norm_rel = _normalise_rel_scan_path(rel_path, repo_dir)
+            if not norm_rel or norm_rel.startswith(".git/") or norm_rel.startswith("_agents/"):
                 continue
 
-            if exclude_paths and any(rel_path.startswith(ep) for ep in exclude_paths):
+            if norm_rel.startswith(".agents/plugins/bug-fixer/") or (
+                norm_excludes and any(norm_rel.startswith(ep) for ep in norm_excludes)
+            ):
                 self.excluded_count += 1
                 continue
             full_path = os.path.join(repo_dir, rel_path)
@@ -3045,23 +3235,22 @@ class BetterleaksBackend:
             else:
                 redacted_match = finding.get("Match", "REDACTED")
 
-            if not path or path.startswith(".git/") or path.startswith("_agents/"):
+            norm_path = _normalise_rel_scan_path(path, repo_dir)
+            if not norm_path or norm_path.startswith(".git/") or norm_path.startswith("_agents/"):
                 continue
 
-            # Betterleaks dir scans return absolute paths; make them relative
-            if os.path.isabs(path):
-                try:
-                    path = os.path.relpath(path, repo_dir)
-                except ValueError:
-                    pass
-
-            if exclude_paths and any(path.startswith(ep) for ep in exclude_paths):
+            norm_excludes = [
+                _normalise_rel_scan_path(ep) for ep in (exclude_paths or []) if ep and ep != "/"
+            ]
+            if norm_path.startswith(".agents/plugins/bug-fixer/") or (
+                norm_excludes and any(norm_path.startswith(ep) for ep in norm_excludes)
+            ):
                 self.excluded_count += 1
                 continue
 
             violations.append(
                 ScanViolation(
-                    path=path,
+                    path=norm_path,
                     line=line,
                     rule=rule,
                     redacted_match=redacted_match,
@@ -3328,8 +3517,14 @@ def main() -> int:
         # Re-derive protected paths from the config that was loaded
         global SCANNER_PROTECTED_FILES
         config_loaded_from = config.get("_loaded_from")
+        repo_dir_cfg = str(config.get("repo_dir", "")).strip() or None
+        if config_loaded_from or repo_dir_cfg:
+            SCANNER_PROTECTED_FILES = _derive_workspace_paths(
+                Path(config_loaded_from) if config_loaded_from else None,
+                repo_dir=repo_dir_cfg,
+            )
         if config_loaded_from:
-            SCANNER_PROTECTED_FILES = _derive_workspace_paths(Path(config_loaded_from))
+            os.environ.setdefault("BUG_FIXER_CONFIG", str(config_loaded_from))
     except Exception as exc:
         sys.stderr.write(f"Config loading error: {exc} — enforcing with defaults\n")
         config = {

@@ -119,13 +119,86 @@ echo "  Target: $INSTALL_DIR/"
 # Create target (sidecars/ persists per-repo data)
 mkdir -p "$INSTALL_DIR/sidecars"
 
-# Sync daemon structure, preserving sidecars/
-rsync -a --delete --exclude='sidecars/' "$SOURCE_DIR/" "$INSTALL_DIR/"
+# Sync daemon structure, preserving sidecars/ and excluding cache/legacy workspace files
+rsync -a --delete \
+    --exclude='sidecars/' \
+    --exclude='bug-fixer-loop-workspace/' \
+    --exclude='__pycache__/' \
+    --exclude='*.pyc' \
+    --exclude='*.pyo' \
+    --exclude='*.egg-info' \
+    --exclude='.DS_Store' \
+    "$SOURCE_DIR/" "$INSTALL_DIR/"
 
-# Refresh existing sidecars (updates paths, preserves per-repo values like project ID)
+# Remove legacy global hooks.json if present (hooks live on staged workspace plugin)
+rm -f "$INSTALL_DIR/hooks.json"
+
+# Clean stray cache files and ensure scripts are executable
+find "$INSTALL_DIR" \( -name '__pycache__' -o -name '*.egg-info' \) -type d -prune -exec rm -rf {} + 2>/dev/null || true
+find "$INSTALL_DIR" \( -name '*.pyc' -o -name '*.pyo' -o -name '.DS_Store' \) -type f -delete 2>/dev/null || true
+chmod +x "$INSTALL_DIR"/scripts/*.py 2>/dev/null || true
+chmod +x "$INSTALL_DIR"/workspace-plugin/bug-fixer/scripts/*.py 2>/dev/null || true
+
+# Resolve and stamp matching semantic version onto both manifests
+RAW_VERSION=""
+if [[ -n "$FROM_RELEASE" && "$FROM_RELEASE" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9._-]+)?)$ ]]; then
+    RAW_VERSION="${BASH_REMATCH[1]}"
+fi
+GIT_SHORT_SHA=""
+if [[ -d "$REPO_DIR/.git" ]] && command -v git &>/dev/null; then
+    GIT_SHORT_SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
+fi
+python3 - "$INSTALL_DIR" "$RAW_VERSION" "$GIT_SHORT_SHA" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+install_dir = Path(sys.argv[1])
+raw_version = sys.argv[2].strip()
+git_sha = sys.argv[3].strip()
+semver_re = re.compile(r"^v?(\d+\.\d+\.\d+(?:[+-][A-Za-z0-9._-]+)?)$")
+
+manifests = [
+    install_dir / "plugin.json",
+    install_dir / "workspace-plugin" / "bug-fixer" / "plugin.json",
+]
+
+version = ""
+if raw_version:
+    m = semver_re.match(raw_version)
+    if m:
+        version = m.group(1)
+
+if not version:
+    for mf in manifests:
+        if mf.is_file():
+            try:
+                cur = str(json.loads(mf.read_text(encoding="utf-8")).get("version") or "").strip()
+                m = semver_re.match(cur)
+                if m:
+                    version = m.group(1)
+                    break
+            except (json.JSONDecodeError, OSError):
+                pass
+
+if not version:
+    version = f"0.2.0+{git_sha}" if git_sha else "0.2.0"
+
+for mf in manifests:
+    if mf.is_file():
+        data = json.loads(mf.read_text(encoding="utf-8"))
+        if data.get("version") != version:
+            data["version"] = version
+            mf.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+PY
+
+# Refresh existing sidecars and stage/repair consumer workspace plugins
 if command -v python3 &>/dev/null && [[ -d "$INSTALL_DIR/sidecars" && -f "$INSTALL_DIR/scripts/manage.py" ]]; then
     echo "  Refreshing existing sidecars..."
     python3 "$INSTALL_DIR/scripts/manage.py" refresh-sidecars 2>&1 | sed 's/^/  /'
+    echo "  Running doctor --fix..."
+    python3 "$INSTALL_DIR/scripts/manage.py" doctor --fix 2>&1 | sed 's/^/  /'
 fi
 
 # Enable the plugin
