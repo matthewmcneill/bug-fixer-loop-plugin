@@ -160,26 +160,26 @@ Rewrite `skills/bug-fixer-tick/EVAL.md` with scenarios covering the new features
 5. `rules/AGENTS.md` contains rules 13, 14, 15
 6. EVAL.md has 11 scenarios
 
-## Completion Report Template
-```markdown
 ## Completion Report — WO9: Tick Enhancements
 
-**Status:** PASS | FAIL
+**Status:** PASS
 **Branch:** bug-fixer-plugin/wo9-tick-enhancements
 
 ### Files Modified
-- [ ] skills/bug-fixer-tick/SKILL.md
-- [ ] skills/bug-fixer-tick/EVAL.md
-- [ ] rules/AGENTS.md
+- [x] skills/bug-fixer-tick/SKILL.md
+- [x] skills/bug-fixer-tick/EVAL.md
+- [x] rules/AGENTS.md
 
 ### Verification
-- T1-only filtering: PASS/FAIL
-- Milestone ordering: PASS/FAIL
-- Step 3.5 approach check: PASS/FAIL
-- bug-fixer label on PR: PASS/FAIL
-- 3 new rules: PASS/FAIL
-- 11 eval scenarios: PASS/FAIL
+- T1-only filtering: PASS
+- Milestone ordering: PASS
+- Step 3.5 approach check: PASS
+- bug-fixer label on PR: PASS
+- 3 new rules: PASS
+- 11 eval scenarios: PASS
 
 ### Decisions Made
-(list any)
-```
+- Added Step 3.5 explicitly as a pre-selection step to promote maintainer-approved approach reviews from T2 to T1 `auto-fixable`.
+- Implemented 3-level milestone ordering in Step 4: active milestone first, then other milestones with due dates ascending, then non-milestone issues.
+- Updated Step 11 to set `bug-fixer` label via `gh pr edit`, carry over milestone, and record classification tier, milestone, and `bug-fixer` label in the PR body.
+- Added Rules 13, 14, and 15 to `rules/AGENTS.md` to formally encode these requirements across all agent executions.
